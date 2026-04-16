@@ -18,7 +18,9 @@ workflows:
           update_pcu: false
           filters:
             branches:
-              ignore: [main, /pull\/[0-9]+/]
+              ignore:
+                - main
+                - /pull\/[0-9]+/
       - toolkit/verify_commit_signatures:
           name: verify_commit_signatures_forked
           post_comment: false
@@ -45,18 +47,24 @@ workflows:
           sonarcloud: false
           filters:
             branches:
-              only: [main, /pull\/[0-9]+/]
+              only:
+                - main
+                - /pull\/[0-9]+/
       - toolkit/security:
           name: security with sonarcloud
           context: SonarCloud
           filters:
             branches:
-              ignore: [/pull\/[0-9]+/, main]
+              ignore:
+                - /pull\/[0-9]+/
+                - main
       - toolkit/code_coverage:
           min_rust_version: << pipeline.parameters.min_rust_version >>
           package: gen-circleci-orb
           filters:
             branches:
-              ignore: [/pull\/[0-9]+/, main]
+              ignore:
+                - /pull\/[0-9]+/
+                - main
           requires:
             - security with sonarcloud
