@@ -1,0 +1,35 @@
+[package]
+name = "gen-circleci-orb"
+version = "0.1.0"
+description = "Generate a CircleCI orb to provide the facilities offered by a CLI program"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "README.md"
+
+[dependencies]
+clap.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+trycmd.workspace = true
+
+[[bin]]
+name = "gen-circleci-orb"
+path = "src/main.rs"
+
+[lib]
+name = "gen_circleci_orb"
+path = "src/lib.rs"
+
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/gen-circleci-orb-v{ version }/gen-circleci-orb-{ target }.tar.gz"
+pkg-fmt = "tgz"
+bin-dir = "{ bin }{ binary-ext }"

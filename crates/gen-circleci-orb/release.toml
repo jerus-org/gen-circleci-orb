@@ -1,0 +1,4 @@
+pre-release-commit-message = "chore: Release gen-circleci-orb"
+tag-message = "{{tag_name}}"
+tag-name = "gen-circleci-orb-v{{version}}"
+pre-release-replacements = []

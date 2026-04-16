@@ -1,0 +1,5 @@
+sign-tag = true
+sign-commit = true
+consolidate-commits = true
+allow-branch = ["main"]
+pre-release-replacements = []

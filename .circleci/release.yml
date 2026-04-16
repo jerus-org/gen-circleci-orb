@@ -1,0 +1,49 @@
+version: 2.1
+
+parameters:
+  gen_circleci_orb_version:
+    type: string
+    default: ""
+    description: "Override crate version (empty = nextsv auto-detect)"
+  workspace_version:
+    type: string
+    default: ""
+    description: "Override workspace v* version (empty = nextsv auto-detect)"
+
+orbs:
+  toolkit: jerus-org/circleci-toolkit@6.1.4
+
+workflows:
+  release:
+    jobs:
+      - toolkit/calculate_versions:
+          name: calculate-versions
+          crates: "gen-circleci-orb:gen-circleci-orb-v"
+          crate_version_overrides: "gen-circleci-orb:<< pipeline.parameters.gen_circleci_orb_version >>"
+          workspace_version_override: << pipeline.parameters.workspace_version >>
+
+      - approve-release:
+          type: approval
+          requires:
+            - calculate-versions
+
+      - toolkit/release_crate:
+          name: release-gen-circleci-orb
+          requires:
+            - approve-release
+          context:
+            - release
+            - bot-check
+            - pcu-app
+          package: gen-circleci-orb
+          crate_tag_prefix: gen-circleci-orb-v
+          build_binary: true
+          binary_name: gen-circleci-orb
+
+      - toolkit/release_prlog:
+          requires:
+            - release-gen-circleci-orb
+          context:
+            - release
+            - bot-check
+            - pcu-app
