@@ -10,5 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - chore-init standard Rust workspace framework(pr [#2])
+- chore-set initial crate version to 0.0.0(pr [#5])
 
 [#2]: https://github.com/jerus-org/gen-circleci-orb/pull/2
+[#5]: https://github.com/jerus-org/gen-circleci-orb/pull/5
