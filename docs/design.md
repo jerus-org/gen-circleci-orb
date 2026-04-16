@@ -1,6 +1,6 @@
 # gen-circleci-orb — Design Document
 
-> Status: **DRAFT** — open questions listed at end; answers required before architecture is finalised.
+> Status: **DRAFT** — design decisions recorded; roadmap items deferred.
 
 ---
 
@@ -14,11 +14,10 @@ The generated output includes:
 
 | Artifact | Description |
 |----------|-------------|
-| CircleCI orb | An orb following CircleCI's standard template structure, with one job and one command per CLI subcommand |
-| Docker container | A minimal execution environment image pre-installing the CLI binary, used as the orb executor |
-| Orb CI pipeline | CircleCI config (3-file model) wiring the orb into its own test/publish release cycle |
-| CLI release hook | Integration that triggers orb regeneration and republication on each new CLI release |
-| MCP server | Invocation of `gen-orb-mcp` during the orb release to produce an MCP server that gives AI agents current orb knowledge and version-transition guidance |
+| CircleCI orb | An orb following CircleCI's standard template structure, with jobs and commands derived from the CLI's subcommand tree |
+| Docker container | A minimal execution environment image pre-installing the CLI binary, embedded in the orb repo |
+| Orb CI pipeline | CircleCI config (3-file model) wiring the full release chain |
+| MCP server | Post-publish invocation of `gen-orb-mcp` producing an MCP server for AI agent integration |
 
 The goal is that a developer with a working CLI tool can run `gen-circleci-orb` once and receive a
 fully wired, production-ready CircleCI orb — including its container, CI pipeline, and AI agent
@@ -53,23 +52,19 @@ flowchart TD
     CLI["CLI binary\n(any language)"]
     GCO["gen-circleci-orb"]
     ORB["CircleCI orb\nsrc/@orb.yml\ncommands/ jobs/\nexecutors/ examples/"]
-    DOCKER["Dockerfile\n+ container CI"]
+    DOCKER["Dockerfile\n(embedded in orb repo)"]
     ORBCI[".circleci/\nconfig.yml\nrelease.yml\nupdate_prlog.yml"]
-    HOOK["CLI release hook\n(pre-release-hook.sh)"]
-    MCP["gen-orb-mcp\n→ MCP server repo"]
-    REGISTRY["CircleCI orb registry"]
+    MCP["gen-orb-mcp\n→ MCP server binary\n→ GitHub release asset"]
+    REGISTRY["CircleCI orb registry\n(one or more namespaces)"]
     AGENTS["AI coding agents\n(Claude, Cursor, etc.)"]
 
     CLI -->|"--help parsing"| GCO
     GCO --> ORB
     GCO --> DOCKER
     GCO --> ORBCI
-    GCO --> HOOK
-
-    HOOK -->|"CLI release triggers\norb regeneration"| GCO
 
     ORB --> ORBCI
-    ORBCI -->|"orb-tools publish"| REGISTRY
+    ORBCI -->|"build CLI → crates.io\nbuild container → docker.io\norb-tools publish"| REGISTRY
     ORBCI -->|"post-publish"| MCP
     MCP --> AGENTS
 ```
@@ -96,6 +91,7 @@ A developer wanting to expose `gen-orb-mcp` via CircleCI runs:
 gen-circleci-orb generate \
   --binary gen-orb-mcp \
   --namespace jerus-org \
+  --namespace digital-prstv \
   --output ./gen-orb-mcp-orb
 ```
 
@@ -130,7 +126,7 @@ executors:
 
 ### 4.2 Generated orb command (example: `generate`)
 
-Derived from `gen-orb-mcp generate --help` output:
+Derived from `gen-orb-mcp generate --help` output. All leaf-level subcommands become commands.
 
 ```yaml
 # gen-orb-mcp-orb/src/commands/generate.yml
@@ -189,6 +185,8 @@ steps:
 
 ### 4.3 Generated orb job (example: `generate`)
 
+All commands have a corresponding job one level up that wraps checkout + the command.
+
 ```yaml
 # gen-orb-mcp-orb/src/jobs/generate.yml
 description: Run gen-orb-mcp generate in a dedicated job.
@@ -220,24 +218,48 @@ parameters:
     default: latest
 ```
 
-### 4.5 Generated Dockerfile
+### 4.5 Generated Dockerfile (embedded in orb repo)
 
 ```dockerfile
 FROM ubuntu:24.04
-# Install gen-orb-mcp — install method selected at generation time (see §6.3)
 RUN cargo binstall --no-confirm gen-orb-mcp
 ```
 
-### 4.6 Orb release chain
+### 4.6 Full release pipeline (generated `.circleci/release.yml`)
+
+The generated release workflow orchestrates the complete chain from CLI build to MCP publication:
 
 ```
-gen-orb-mcp release (cargo-release)
-  └─ release-hook.sh
-       └─ gen-circleci-orb generate --binary gen-orb-mcp (regenerate orb)
-            └─ gen-orb-mcp-orb CI pipeline
-                 └─ orb-tools publish → jerus-org/gen-orb-mcp in CircleCI registry
-                      └─ gen-orb-mcp prime + generate → MCP server updated
+1. build-cli       → cargo build --release
+2. publish-crate   → cargo publish → crates.io          (Rust tools)
+3. build-container → docker build → docker.io
+4. publish-orb     → orb-tools publish → CircleCI registry (one job per namespace)
+5. build-mcp       → gen-orb-mcp prime + generate + compile → GitHub release asset
 ```
+
+```mermaid
+flowchart LR
+    BC["build-cli"] --> PC["publish-crate\n(crates.io)"]
+    PC --> CONT["build-container\n(docker.io)"]
+    CONT --> PO1["publish-orb\njerus-org"]
+    CONT --> PO2["publish-orb\ndigital-prstv"]
+    PO1 & PO2 --> MCP["build-mcp\n(GitHub release)"]
+```
+
+### 4.7 Dogfooding: gen-circleci-orb generating its own orb
+
+The primary validation target is gen-circleci-orb itself. Once the tool has a `generate`
+subcommand, it generates its own orb:
+
+```bash
+gen-circleci-orb generate \
+  --binary gen-circleci-orb \
+  --namespace jerus-org \
+  --output ./gen-circleci-orb-orb
+```
+
+This creates a reference implementation demonstrating what the tool produces and serves as a
+continuous integration test: the orb must stay consistent with the CLI's actual `--help` output.
 
 ---
 
@@ -247,21 +269,20 @@ gen-orb-mcp release (cargo-release)
 flowchart LR
     subgraph "gen-circleci-orb binary"
         INTROSPECT["Help parser\n(--help execution\n+ output parsing)"]
-        MODEL["CommandModel\n(language-agnostic\nIR)"]
-        RENDER["Template\nrenderer"]
-        OUTPUT["Output\nwriter"]
+        MODEL["CommandModel\n(language-agnostic IR)"]
+        RENDER["Template renderer\n(diff-aware)"]
+        OUTPUT["Output writer"]
     end
 
     subgraph "Inputs"
         BIN["CLI binary\n(any language)"]
-        FLAGS["gen-circleci-orb\nCLI flags\n(namespace, install-method, etc.)"]
+        FLAGS["CLI flags\n--namespace (repeatable)\n--install-method\n--orb-tools-version\n--output\n--dry-run"]
     end
 
     subgraph "Output artefacts"
-        OA["orb src/"]
+        OA["orb src/\n(commands/ jobs/\nexecutors/ examples/)"]
         OB["Dockerfile"]
-        OC[".circleci/"]
-        OD["release-hook snippet"]
+        OC[".circleci/\n(3-file model)"]
     end
 
     BIN -->|"binary --help\nbinary <sub> --help"| INTROSPECT
@@ -269,159 +290,185 @@ flowchart LR
     INTROSPECT --> MODEL
     MODEL --> RENDER
     RENDER --> OUTPUT
-    OUTPUT --> OA & OB & OC & OD
+    OUTPUT --> OA & OB & OC
 ```
 
 ### 5.1 Help parser
 
 Executes the target binary with `--help` to obtain the top-level command list and description,
-then executes `<binary> <subcommand> --help` for each discovered subcommand to collect parameters.
-Produces a normalised `CommandModel` regardless of the source CLI's language or build system.
+then executes `<binary> <subcommand> --help` for each discovered subcommand, recursively. Produces
+a normalised `CommandModel` regardless of the source CLI's language or build system. MVP targets
+clap's help output format; best-effort mode applies to non-clap CLIs (see §6.2).
 
 ### 5.2 CommandModel
 
-A language-agnostic intermediate representation capturing:
+A language-agnostic intermediate representation:
 
-- Binary name and top-level description
-- Subcommands: name, description, aliases
-- Per-subcommand parameters: long flag name, short alias, type hint, default value,
-  required/optional, possible values (for enum inference), description text
-- Nesting: subcommands that themselves have subcommands
+```
+CommandModel
+├── binary_name: String
+├── description: String
+└── commands: Vec<Command>
+    ├── name: String
+    ├── description: String
+    ├── is_leaf: bool          // true = generates command; false = generates job only
+    ├── parameters: Vec<Parameter>
+    │   ├── long_name: String  // e.g. "orb-path" → parameter name "orb_path"
+    │   ├── short: Option<char>
+    │   ├── param_type: ParamType  // String | Boolean | Enum(Vec<String>) | Integer
+    │   ├── default: Option<String>
+    │   ├── required: bool
+    │   └── description: String
+    └── subcommands: Vec<Command>   // recursive
+```
 
-### 5.3 Template renderer
+### 5.3 Subcommand → orb element mapping
 
-Walks the `CommandModel` and renders:
+| CLI level | Orb element generated | Rationale |
+|-----------|----------------------|-----------|
+| Leaf subcommand (no children) | `commands/<name>.yml` | Maximum flexibility for composing custom jobs |
+| Parent of leaf subcommands | `jobs/<name>.yml` (wraps its leaf commands) | Jobs provide the checkout + environment; leaf commands provide the steps |
+| Top-level binary | `executors/default.yml`, `@orb.yml` | One executor per tool |
 
-- `src/commands/<name>.yml` — one per subcommand
-- `src/jobs/<name>.yml` — one per subcommand
-- `src/executors/default.yml`
-- `src/@orb.yml` entry point
-- `src/examples/` stubs
-- `Dockerfile` (install method determined by CLI flag, see §6.3)
-- `.circleci/config.yml`, `release.yml`, `update_prlog.yml`
-- Release hook snippet
+For a flat CLI (all subcommands are leaves, e.g. `gen-orb-mcp`), every subcommand gets both a
+command and a job.
 
-### 5.4 Output writer
+For a nested CLI (e.g. `tool server start`, `tool server stop`):
+- `start` and `stop` → `commands/server_start.yml`, `commands/server_stop.yml`
+- `server` → `jobs/server.yml` (with `action` enum parameter: `[start, stop]`)
 
-Writes files to the target directory. Supports `--dry-run` (print without writing) and
-diff-aware mode (skip files whose rendered content is unchanged, to avoid noisy commits).
+*Future:* A custom job specification feature will allow users to define jobs that combine multiple
+commands or add custom steps not derivable from the CLI structure.
 
----
+### 5.4 Parameter type inference
 
-## 6. Detailed Design — Open Options
+Inferred from clap's structured help output:
 
-### 6.1 Parameter type inference
+| Signal in `--help` text | Inferred CircleCI type |
+|------------------------|----------------------|
+| `[possible values: a, b, ...]` | `enum` with listed values |
+| Flag has no `<VALUE>` metavar (boolean presence flag) | `boolean` |
+| `[default: <value>]` present | type inferred from default; adds `default:` to parameter |
+| Metavar `<PATH>`, `<DIR>`, `<FILE>`, `<OUTPUT>` | `string` |
+| All other cases | `string` (safe fallback) |
 
-When parsing `--flag <VALUE>` from help output, how is the CircleCI parameter type determined?
+### 5.5 Template renderer
 
-| Signal | Inferred type | Example |
-|--------|--------------|---------|
-| `[possible values: a, b]` present in help | `enum` | `--format <FORMAT>` with `[possible values: binary, source]` |
-| Flag has no value (presence-only) | `boolean` | `--dry-run`, `--force` |
-| Metavar is `<PATH>`, `<DIR>`, `<FILE>` | `string` | `--output <OUTPUT>` |
-| Metavar is `<N>` or contains "count" | `integer` | (if present) |
-| All others | `string` | default safe fallback |
+Walks the `CommandModel` and renders all output files. Diff-aware: files are only written if their
+rendered content differs from the existing file, minimising noisy commits on regeneration runs.
+`--dry-run` prints the diff without writing.
 
-Clap's standard `--help` output reliably includes `[possible values: ...]` for enums and omits
-value metavars for boolean flags, making these inferences stable.
+### 5.6 Output writer
 
-### 6.2 Nested subcommands
-
-Some CLIs have subcommands nested more than one level deep (e.g. `gen-orb-mcp` itself is flat,
-but a tool might have `tool server start`). Options:
-
-| Option | Orb name | Example |
-|--------|----------|---------|
-| **A — Flat with separator** | `parent_child` | `server_start` |
-| **B — Depth limit 1** | Only top-level subcommands exposed; nested levels become parameters | `server` with `action: enum [start, stop]` |
-| **C — Recursive** | Full nesting represented as separate jobs/commands | `server`, `server_start`, `server_stop` |
-
-Option A is simplest and consistent with CircleCI naming conventions.
-
-### 6.3 Container binary installation method
-
-The generated Dockerfile must install the target CLI binary. Since the tool may not be a Rust
-crate, the installation method must be configurable via a `gen-circleci-orb` CLI flag. Three
-primary options:
-
-| Option | CLI flag | Generated Dockerfile snippet | Constraints |
-|--------|----------|------------------------------|-------------|
-| **A — cargo binstall** | `--install-method binstall` | `RUN cargo binstall --no-confirm <name>` | Binary must be on crates.io with binstall metadata |
-| **B — GitHub release download** | `--install-method github-release` | `RUN curl -L <release-url> \| tar xz ...` | Requires knowing asset naming convention; version must be parameterised |
-| **C — User-supplied script** | `--install-script ./install.sh` | `COPY install.sh /tmp/ && RUN /tmp/install.sh` | Maximum flexibility; user responsible for correctness |
-
-A fourth option — **D, auto-detect** — could attempt binstall first, then fall back to GitHub
-releases, then prompt, but this adds complexity and may produce incorrect results silently.
-
-The default recommendation is Option A for first-party Rust tools (the primary expected use case)
-with Option C as the escape hatch for third-party or non-Rust binaries.
-
-**Separately: container scope.** Does gen-circleci-orb generate a full container repo (separate
-GitHub repo + publish CI) or embed the Dockerfile in the orb repo and build it there?
-
-| Scope | Description | Complexity |
-|-------|-------------|------------|
-| **Embedded** | Dockerfile lives in the orb repo; orb CI builds and pushes on each release | Medium |
-| **Separate repo** | gen-circleci-orb scaffolds a dedicated container repo with its own CI | High — two repos to manage |
-| **Runtime install** | No container build at all; orb executor uses a base image and installs at job start | Low — slow jobs |
-
-### 6.4 Release integration depth
-
-| Level | Description |
-|-------|-------------|
-| **1 — Manual** | One-shot scaffold; user re-runs gen-circleci-orb manually when CLI changes |
-| **2 — Snippet** | Tool emits a `release-hook.sh` snippet the user adds to the CLI's hook |
-| **3 — Full wiring** | Tool modifies the CLI's `release.toml` and `release-hook.sh` in-place |
-
-Level 3 requires write access to the source CLI's repo and knowledge of its release tooling
-(cargo-release, etc.). Level 2 is safe and language-agnostic.
-
-### 6.5 MCP server generation placement
-
-| Option | Trigger | Notes |
-|--------|---------|-------|
-| **A — Post orb publish** | After `orb-tools publish` in orb release CI | MCP always reflects latest published version |
-| **B — Pre orb publish** | Orb release pre-release hook; MCP source committed | MCP source versioned alongside orb |
-| **C — Separate pipeline** | Triggered by orb's GitHub release event | Decoupled; independently retriable |
+Writes to `--output <dir>`. Fails on unrecognised existing files unless `--force` is passed.
+On greenfield runs (empty output dir) prompts for `--orb-tools-version` if not supplied.
+On brownfield runs (existing orb dir) reads the version from the existing `.circleci/config.yml`
+unless explicitly overridden.
 
 ---
 
-## 7. Open Questions
+## 6. Detailed Design
 
-1. **Nested subcommand representation** — For CLIs with multi-level nesting, should the orb use
-   flat `parent_child` names (Option A), cap at depth 1 with an action enum (Option B), or
-   generate recursive job/command sets (Option C)?
+### 6.1 Container installation method
 
-2. **Container installation method** — What should the default `--install-method` be, and should
-   auto-detect (try binstall, fall back to GitHub release) be attempted? What is the expected
-   primary use case: first-party Rust tools or arbitrary third-party binaries?
+Controlled by `--install-method <method>`:
 
-3. **Container scope** — Should the Dockerfile be embedded in the orb repo (simpler, one repo)
-   or scaffolded into a separate dedicated container repo (matches the pattern used by
-   `ci-container` and `zola-container`)?
+| Method | Generated Dockerfile snippet | When to use |
+|--------|------------------------------|-------------|
+| `binstall` (default) | `RUN cargo binstall --no-confirm <name>` | Rust tool published to crates.io with binstall metadata |
+| `apt` | `RUN apt-get install -y <name>` | Binary available in apt package repository |
 
-4. **Release integration depth** — Level 2 (snippet) is safe and language-agnostic. Is Level 3
-   (full in-place wiring) desired for the first-party case, or is manual integration of the
-   snippet acceptable?
+Both methods install into a base image selected by `--base-image` (default: `ubuntu:24.04`).
+The Dockerfile is embedded directly in the orb repo alongside the orb source; no separate
+container repository is generated.
 
-5. **MCP server placement** — Option A (post orb publish in CI) keeps the MCP current but
-   requires the orb release CI to have credentials for the MCP repo. Option B commits the MCP
-   source alongside the orb, making it reviewable but adding pre-release complexity. Preference?
+Additional install methods (GitHub release download, Homebrew, etc.) are deferred to the roadmap.
 
-6. **Orb namespace** — Should the namespace default to the GitHub org of the repository where
-   gen-circleci-orb is run (auto-detected from `git remote`), or always require an explicit
-   `--namespace` flag?
+### 6.2 Help format handling
 
-7. **Regeneration granularity** — All-or-nothing (overwrite all files each run) or diff-aware
-   (only write files whose content has changed)? Diff-aware reduces noise but increases
-   complexity.
+The parser targets clap's `--help` output format as the MVP baseline. Clap produces stable,
+structured output including `[possible values: ...]` annotations, consistent flag/argument
+formatting, and grouped sections.
 
-8. **orb-tools version** — Which version of `circleci/orb-tools` should the generated CI
-   pipeline target? Should it be hardcoded or passed as a parameter to gen-circleci-orb?
+For non-clap CLIs, a best-effort parser applies: it extracts subcommands and flags using
+heuristics (indentation, leading `--`, presence of description text) but may miss type
+information. In best-effort mode all parameters default to `type: string`.
 
-9. **Help format portability** — The parser is designed around clap's `--help` output format
-   (which is stable and well-structured). Should a best-effort mode exist for non-clap CLIs
-   with less structured help, or is clap-compatible output a hard prerequisite?
+### 6.3 Namespace publishing
 
-10. **First validation target** — Is `gen-circleci-orb` itself (dogfooding on its own `generate`
-    subcommand) or `gen-orb-mcp` the primary validation case for the first implementation?
+`--namespace` is required and repeatable. Each namespace produces a separate `publish-orb-<ns>`
+job in the generated release workflow. The orb name is always `<namespace>/<binary-name>`.
+
+```bash
+# Single namespace
+gen-circleci-orb generate --binary gen-orb-mcp --namespace jerus-org --output ./out
+
+# Multiple namespaces (parallel publish jobs)
+gen-circleci-orb generate --binary gen-orb-mcp \
+  --namespace jerus-org \
+  --namespace digital-prstv \
+  --output ./out
+```
+
+### 6.4 Diff-aware regeneration
+
+On each run the renderer compares generated content against existing files:
+
+1. Files with changed content → overwritten
+2. Files with identical content → skipped (no write, no git change)
+3. Files present in output but not in the new render → flagged as stale (not deleted by default;
+   `--prune` removes them)
+
+This keeps regeneration commits minimal and reviewable.
+
+### 6.5 orb-tools version
+
+Exposed as `--orb-tools-version <version>`. Behaviour:
+
+- **Greenfield** (no existing `.circleci/`): required; prompted interactively if not supplied
+- **Brownfield** (existing `.circleci/`): read from the current config and preserved unless
+  explicitly overridden with `--orb-tools-version`
+
+The version is embedded in the generated `.circleci/config.yml` as a pipeline parameter with a
+default value, making future upgrades a one-line change.
+
+### 6.6 MCP server generation (post-publish)
+
+The generated `release.yml` includes a `build-mcp` job that runs after all `publish-orb-*` jobs
+complete. It mirrors the `toolkit/build_mcp_server` job pattern:
+
+1. `gen-orb-mcp prime` — populate `prior-versions/` and `migrations/` from git tag history
+2. `gen-orb-mcp generate --format binary` — compile the MCP server binary
+3. Upload binary to the GitHub release as an asset
+
+This is the same pattern currently used by the `circleci-toolkit` orb itself.
+
+---
+
+## 7. Design Decisions
+
+| # | Question | Decision |
+|---|----------|----------|
+| 1 | Subcommand → orb mapping | Leaf subcommands → commands; parents of leaves → jobs. Future: custom job specification feature. |
+| 2 | Container install method | `cargo binstall` default; `apt` option. Others deferred to roadmap. |
+| 3 | Container scope | Dockerfile embedded in the orb repo. No separate container repository. |
+| 4 | Release pipeline | Full chain: CLI build → crates.io → docker.io → CircleCI registry (per namespace) → GitHub release (MCP binary). MVP targets these four registries/repositories. |
+| 5 | MCP server placement | Post orb publish in CI (Option A). Mirrors `toolkit/build_mcp_server` pattern. |
+| 6 | Namespace | `--namespace` flag, required, repeatable. Generates one publish job per namespace. |
+| 7 | Regeneration | Diff-aware. Only changed files are written; `--prune` removes stale files. |
+| 8 | orb-tools version | Exposed as `--orb-tools-version`. Prompted on greenfield; preserved from existing config on brownfield. |
+| 9 | Help format | MVP targets Rust/clap. Best-effort mode for non-clap CLIs (all params default to `string`). |
+| 10 | First validation target | gen-circleci-orb dogfoods itself. The generated orb for the `generate` subcommand is the reference implementation and continuous integration test. |
+
+---
+
+## 8. Roadmap (Deferred Items)
+
+| Item | Notes |
+|------|-------|
+| Additional install methods | GitHub release download, Homebrew, custom install script |
+| Alternative registries | npm, PyPI, Homebrew tap as orb executor sources |
+| Custom job specification | Allow users to define jobs combining multiple commands or adding custom steps not derivable from CLI structure |
+| Non-crates.io publishing | For non-Rust CLIs the crates.io step is skipped; future support for language-specific registries (npm, PyPI, etc.) |
+| Separate container repo scaffolding | Option to generate a dedicated container repo (ci-container / zola-container pattern) for teams that prefer the separation |
+| orb-tools version auto-update | Renovate-style automation to keep the pinned orb-tools version current in generated configs |
