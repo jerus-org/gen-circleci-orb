@@ -31,12 +31,10 @@ workflows:
       - toolkit/required_builds:
           min_rust_version: << pipeline.parameters.min_rust_version >>
       - toolkit/optional_builds:
-          min_rust_version: << pipeline.parameters.min_rust_version >>
           filters:
             branches:
               ignore: main
       - toolkit/idiomatic_rust:
-          min_rust_version: << pipeline.parameters.min_rust_version >>
           filters:
             branches:
               ignore: main
@@ -59,7 +57,6 @@ workflows:
                 - /pull\/[0-9]+/
                 - main
       - toolkit/code_coverage:
-          min_rust_version: << pipeline.parameters.min_rust_version >>
           package: gen-circleci-orb
           filters:
             branches:
