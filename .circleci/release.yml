@@ -21,11 +21,17 @@ workflows:
           crates: "gen-circleci-orb:gen-circleci-orb-v"
           crate_version_overrides: "gen-circleci-orb:<< pipeline.parameters.gen_circleci_orb_version >>"
           workspace_version_override: << pipeline.parameters.workspace_version >>
+          filters:
+            branches:
+              only: main
 
       - approve-release:
           type: approval
           requires:
             - calculate-versions
+          filters:
+            branches:
+              only: main
 
       - toolkit/release_crate:
           name: release-gen-circleci-orb
@@ -39,6 +45,9 @@ workflows:
           crate_tag_prefix: gen-circleci-orb-v
           build_binary: true
           binary_name: gen-circleci-orb
+          filters:
+            branches:
+              only: main
 
       - toolkit/release_prlog:
           requires:
@@ -47,3 +56,6 @@ workflows:
             - release
             - bot-check
             - pcu-app
+          filters:
+            branches:
+              only: main
