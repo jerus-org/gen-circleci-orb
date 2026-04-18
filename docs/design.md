@@ -10,22 +10,32 @@
 full suite of CircleCI infrastructure needed to expose that application's commands as reusable
 CircleCI orb jobs and commands.
 
-The generated output includes:
+The generated output targets a dedicated orb repository (separate from the CLI tool's source
+repository). gen-circleci-orb is invoked from the CLI tool's own CI pipeline — or by a developer
+locally — and writes its output to an `--output <dir>` that becomes (or updates) the orb repo.
 
 | Artifact | Description |
 |----------|-------------|
-| CircleCI orb | An orb following CircleCI's standard template structure, with jobs and commands derived from the CLI's subcommand tree |
-| Docker container | A minimal execution environment image pre-installing the CLI binary, embedded in the orb repo |
-| Orb CI pipeline | CircleCI config (3-file model) wiring the full release chain |
+| CircleCI orb | An orb following CircleCI's standard template structure, with jobs, commands, and a default executor derived from the CLI's subcommand tree |
+| Executor | A default executor referencing the tool's Docker image; callers may substitute a custom executor provided it has the same CLI version installed |
+| Docker container | A Dockerfile co-located in the generated orb repository alongside the orb source; built and published to docker.io as part of the orb's own release pipeline |
+| Orb CI pipeline | Reusable workflow fragments (build, test, release) for the orb repo itself (3-file model), plus integration guidance for wiring these into an existing consumer CI configuration |
 | MCP server | Post-publish invocation of `gen-orb-mcp` producing an MCP server for AI agent integration |
 
-The goal is that a developer with a working CLI tool can run `gen-circleci-orb` once and receive a
-fully wired, production-ready CircleCI orb — including its container, CI pipeline, and AI agent
-integration — with no manual CircleCI authoring required.
+The primary usage model is CI-integrated: `gen-circleci-orb` runs as part of the CLI tool's
+release pipeline each time a new version ships. This keeps the generated orb in sync with the
+CLI's current `--help` output without manual authoring. A one-shot developer invocation is also
+supported for initial setup.
 
 The tool makes no assumptions about the source language or build system of the target CLI. Its
 only requirement is a runnable binary. It is equally suited to first-party tools (run as part of
 the tool's own build pipeline) and third-party tools (where only a binary is available).
+
+> **Bootstrapping note:** The MCP server artifact in the generated release pipeline depends on
+> `gen-orb-mcp` being available as an orb. gen-circleci-orb's own first release therefore has a
+> sequencing dependency: the gen-orb-mcp orb must be generated and published first (using
+> gen-circleci-orb on gen-orb-mcp), before gen-circleci-orb's own release pipeline can invoke
+> it for MCP generation. See §7 decision #5 and the bootstrapping sequence in §4.7.
 
 ---
 
@@ -205,6 +215,14 @@ steps:
       output: << parameters.output >>
 ```
 
+**Relationship to circleci-toolkit jobs:** The generated jobs are intentionally minimal —
+`checkout` + command invocation only. The `circleci-toolkit` jobs for complex Rust builds layer
+additional scaffolding on top: GPG key loading, git config, build caching, SSH deploy keys, and
+Rust-specific steps (clippy, fmt, audit). A consumer repo that already uses `circleci-toolkit`
+would typically invoke the generated orb's *commands* from within a toolkit job, rather than
+replacing toolkit jobs with generated jobs wholesale. The generated job structure is the correct
+baseline for tools that don't require that scaffolding (e.g. a read-only code analysis tool).
+
 ### 4.4 Generated executor
 
 ```yaml
@@ -260,6 +278,20 @@ gen-circleci-orb generate \
 
 This creates a reference implementation demonstrating what the tool produces and serves as a
 continuous integration test: the orb must stay consistent with the CLI's actual `--help` output.
+
+**Bootstrapping sequence for the first release:**
+
+The generated release pipeline for gen-circleci-orb invokes `gen-orb-mcp` to build the MCP
+server. For this to work, `gen-orb-mcp` must already be available as a published orb. The
+required sequence is:
+
+1. Build and release gen-circleci-orb v0.x (initial release, MCP step omitted or manual)
+2. Use gen-circleci-orb to generate the gen-orb-mcp orb → publish it
+3. Wire the gen-orb-mcp orb into gen-circleci-orb's own release pipeline
+4. Subsequent gen-circleci-orb releases use the fully automated chain
+
+This mirrors the current situation where pcu (the "mega-tool") provides release-pipeline
+services that gen-circleci-orb will eventually replace or encapsulate via generated orbs.
 
 ---
 
