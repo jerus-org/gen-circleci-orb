@@ -6,36 +6,45 @@
 
 ## 1. Purpose
 
-`gen-circleci-orb` is a CLI tool that takes an existing CLI application as input and generates the
-full suite of CircleCI infrastructure needed to expose that application's commands as reusable
-CircleCI orb jobs and commands.
+`gen-circleci-orb` eliminates the repetitive work of packaging a CLI tool as a CircleCI orb.
+It introspects the CLI's `--help` output and generates the full suite of orb artefacts: jobs,
+commands, executor, Dockerfile, and CI pipeline — then wires those artefacts into the CLI tool's
+existing CI configuration so they are regenerated and published automatically on every release.
 
-The generated output targets a dedicated orb repository (separate from the CLI tool's source
-repository). gen-circleci-orb is invoked from the CLI tool's own CI pipeline — or by a developer
-locally — and writes its output to an `--output <dir>` that becomes (or updates) the orb repo.
+### 1.1 Two operational modes
+
+| Mode | How gen-circleci-orb is consumed | Primary interface |
+|------|----------------------------------|-------------------|
+| **Orb-only** | Consumer references the published orb directly in their `.circleci/config.yml` | Help text in the orb jobs/commands guides the consumer through manual wiring |
+| **CLI + Orb** | Consumer installs the CLI and runs `init` once | `init` command rewrites the consumer's CI config automatically; subsequent runs happen in CI |
+
+The CLI mode is the preferred path for first-party tools (where the developer controls the source
+repo). The orb-only mode covers third-party tools or consumers who cannot or prefer not to install
+the CLI.
+
+### 1.2 Generated artefacts
 
 | Artifact | Description |
 |----------|-------------|
-| CircleCI orb | An orb following CircleCI's standard template structure, with jobs, commands, and a default executor derived from the CLI's subcommand tree |
-| Executor | A default executor referencing the tool's Docker image; callers may substitute a custom executor provided it has the same CLI version installed |
-| Docker container | A Dockerfile co-located in the generated orb repository alongside the orb source; built and published to docker.io as part of the orb's own release pipeline |
-| Orb CI pipeline | Reusable workflow fragments (build, test, release) for the orb repo itself (3-file model), plus integration guidance for wiring these into an existing consumer CI configuration |
-| MCP server | Post-publish invocation of `gen-orb-mcp` producing an MCP server for AI agent integration |
+| CircleCI orb | Jobs, commands, and a default executor derived from the CLI's subcommand tree, stored in `orb/src/` within the CLI tool's own repository |
+| Executor | Default executor referencing the tool's Docker image; can be substituted with a custom executor provided it has the same CLI version installed |
+| Docker container | A Dockerfile co-located with the orb source; built and published to docker.io as part of the release pipeline |
+| CI workflow fragments | Build/test and release/deploy jobs added to the consumer's existing `.circleci/` config (not a replacement — additive wiring only) |
+| MCP server | Post-publish invocation of `gen-orb-mcp` producing an MCP server for AI agent integration (optional, enabled by `--mcp` flag on `init`) |
 
-The primary usage model is CI-integrated: `gen-circleci-orb` runs as part of the CLI tool's
-release pipeline each time a new version ships. This keeps the generated orb in sync with the
-CLI's current `--help` output without manual authoring. A one-shot developer invocation is also
-supported for initial setup.
+### 1.3 Primary usage model
+
+`gen-circleci-orb` runs as part of the CLI tool's release pipeline. Each release regenerates the
+orb from the current `--help` output, rebuilds the container, and republishes to the CircleCI
+registry. The `init` command wires this up once; the developer never needs to author CI YAML for
+the orb directly.
 
 The tool makes no assumptions about the source language or build system of the target CLI. Its
-only requirement is a runnable binary. It is equally suited to first-party tools (run as part of
-the tool's own build pipeline) and third-party tools (where only a binary is available).
+only requirement is a runnable binary.
 
-> **Bootstrapping note:** The MCP server artifact in the generated release pipeline depends on
-> `gen-orb-mcp` being available as an orb. gen-circleci-orb's own first release therefore has a
-> sequencing dependency: the gen-orb-mcp orb must be generated and published first (using
-> gen-circleci-orb on gen-orb-mcp), before gen-circleci-orb's own release pipeline can invoke
-> it for MCP generation. See §7 decision #5 and the bootstrapping sequence in §4.7.
+> **Bootstrapping note:** The MCP server step depends on `gen-orb-mcp` being available as a
+> published orb. For gen-circleci-orb's own first release this creates a sequencing dependency —
+> the gen-orb-mcp orb must be published first. See §4.8 for the bootstrapping sequence.
 
 ---
 
@@ -57,27 +66,27 @@ first-class agent support from the first release.
 
 ## 3. High-Level Flow
 
+### 3.1 CLI mode (init + CI)
+
 ```mermaid
 flowchart TD
-    CLI["CLI binary\n(any language)"]
-    GCO["gen-circleci-orb"]
-    ORB["CircleCI orb\nsrc/@orb.yml\ncommands/ jobs/\nexecutors/ examples/"]
-    DOCKER["Dockerfile\n(embedded in orb repo)"]
-    ORBCI[".circleci/\nconfig.yml\nrelease.yml\nupdate_prlog.yml"]
-    MCP["gen-orb-mcp\n→ MCP server binary\n→ GitHub release asset"]
-    REGISTRY["CircleCI orb registry\n(one or more namespaces)"]
-    AGENTS["AI coding agents\n(Claude, Cursor, etc.)"]
+    DEV["Developer\n(one time)"]
+    INIT["gen-circleci-orb init\n--binary my-tool\n--namespace my-ns\n--build-workflow build\n--release-workflow release"]
+    REPO["Consumer repo\n.circleci/ patched\norb/src/ added"]
+    CI_BUILD["CI: build/test workflow\ngen-circleci-orb generate\n→ regenerate orb/src/\n→ cargo binstall + orb-tools validate"]
+    CI_RELEASE["CI: release/deploy workflow\ngen-circleci-orb generate\n→ docker build → docker.io\n→ orb-tools publish → CircleCI registry\n→ gen-orb-mcp → GitHub release (MCP)"]
 
-    CLI -->|"--help parsing"| GCO
-    GCO --> ORB
-    GCO --> DOCKER
-    GCO --> ORBCI
-
-    ORB --> ORBCI
-    ORBCI -->|"build CLI → crates.io\nbuild container → docker.io\norb-tools publish"| REGISTRY
-    ORBCI -->|"post-publish"| MCP
-    MCP --> AGENTS
+    DEV -->|"run once in CLI repo"| INIT
+    INIT --> REPO
+    REPO -->|"push PR"| CI_BUILD
+    CI_BUILD -->|"approve release"| CI_RELEASE
 ```
+
+### 3.2 Orb-only mode
+
+Consumer references the published orb and wires jobs manually. The orb's job descriptions
+include integration guidance explaining which jobs to add to which workflows and what contexts
+are required.
 
 ---
 
@@ -293,6 +302,69 @@ required sequence is:
 This mirrors the current situation where pcu (the "mega-tool") provides release-pipeline
 services that gen-circleci-orb will eventually replace or encapsulate via generated orbs.
 
+### 4.8 User workflow (CLI mode, step by step)
+
+```
+1. Install gen-circleci-orb CLI
+   cargo binstall gen-circleci-orb
+
+2. Run init once in the CLI tool's repository
+   gen-circleci-orb init \
+     --binary my-tool \
+     --namespace my-org \
+     --build-workflow build \
+     --release-workflow release \
+     --mcp                        # optional: wire in MCP generation
+   
+   init:
+   - Adds orb/src/ scaffold to the repo
+   - Adds a Dockerfile alongside orb/src/
+   - Patches .circleci/config.yml to add build+test jobs (generate, validate)
+   - Patches .circleci/release.yml (or equivalent) to add release jobs
+     (generate, docker build/push, orb publish, optional MCP build)
+
+3. Push changes as a PR
+   The revised CI script is reviewed and merged via the normal PR workflow.
+
+4. CI (build workflow) runs on the merged PR branch
+   - gen-circleci-orb generate regenerates orb/src/ from --help output
+   - orb-tools validate confirms the orb is well-formed
+   - Changes are committed back to the branch (diff-aware: no commit if nothing changed)
+
+5. Trigger release/deploy workflow
+   - gen-circleci-orb generate (regenerate to ensure freshness)
+   - docker build → push to docker.io
+   - orb-tools publish → CircleCI registry (one job per namespace)
+   - gen-orb-mcp → MCP server binary → uploaded to GitHub release (if --mcp was set)
+
+6. Artefacts published
+   - Container image: docker.io/<org>/<binary>:<version>
+   - Orb: circleci.com/developer/orbs/orb/<namespace>/<binary>
+   - MCP server: GitHub release asset on the CLI tool's repo
+```
+
+### 4.9 Environment requirements for initial release
+
+The following external services must be configured before the generated CI pipeline can run
+successfully. All credentials are expected as CircleCI context environment variables.
+
+| Service | Purpose | Required credentials |
+|---------|---------|---------------------|
+| **GitHub** | Source control, GitHub releases (MCP asset upload), API access for pcu push | `GITHUB_TOKEN` or GitHub App credentials (`APP_ID`, `APP_PRIVATE_KEY`) |
+| **docker.io** | Container image registry | `DOCKER_USERNAME`, `DOCKER_PASSWORD` (or equivalent) |
+| **CircleCI orb registry** | Orb publishing (public or private namespace) | `CIRCLE_TOKEN` with orb publish scope |
+| **crates.io** | Binary publishing (Rust CLIs only) | `CARGO_REGISTRY_TOKEN` |
+
+**Access visibility:**
+- Orbs can be published as **public** (visible at circleci.com/developer/orbs) or **private**
+  (visible only within the CircleCI organisation). The `--private` flag on `init` controls this.
+- The generated container image on docker.io is public by default. Private registries are a
+  roadmap item.
+
+**Minimum viable environment (MVP):**
+GitHub + CircleCI orb registry. docker.io and crates.io are required only if the consumer uses
+the container executor and publishes to crates.io respectively.
+
 ---
 
 ## 5. Architecture Overview
@@ -300,29 +372,40 @@ services that gen-circleci-orb will eventually replace or encapsulate via genera
 ```mermaid
 flowchart LR
     subgraph "gen-circleci-orb binary"
-        INTROSPECT["Help parser\n(--help execution\n+ output parsing)"]
-        MODEL["CommandModel\n(language-agnostic IR)"]
-        RENDER["Template renderer\n(diff-aware)"]
-        OUTPUT["Output writer"]
+        subgraph "init subcommand"
+            INIT_PATCH["CI config patcher\n(adds jobs to existing\n.circleci/ workflows)"]
+        end
+        subgraph "generate subcommand"
+            INTROSPECT["Help parser\n(--help execution\n+ output parsing)"]
+            MODEL["CommandModel\n(language-agnostic IR)"]
+            RENDER["Template renderer\n(diff-aware)"]
+            OUTPUT["Output writer"]
+        end
     end
 
     subgraph "Inputs"
         BIN["CLI binary\n(any language)"]
-        FLAGS["CLI flags\n--namespace (repeatable)\n--install-method\n--orb-tools-version\n--output\n--dry-run"]
+        FLAGS["CLI flags\n--namespace (repeatable)\n--install-method\n--orb-tools-version\n--build-workflow\n--release-workflow\n--mcp\n--private\n--dry-run"]
+        EXISTING[".circleci/\n(existing consumer CI)"]
     end
 
     subgraph "Output artefacts"
-        OA["orb src/\n(commands/ jobs/\nexecutors/ examples/)"]
-        OB["Dockerfile"]
-        OC[".circleci/\n(3-file model)"]
+        OA["orb/src/\n(commands/ jobs/\nexecutors/ examples/)"]
+        OB["orb/Dockerfile"]
+        OC[".circleci/ patched\n(new jobs added to\nexisting workflows)"]
     end
 
-    BIN -->|"binary --help\nbinary <sub> --help"| INTROSPECT
+    BIN -->|"init: --help parsing"| INIT_PATCH
+    FLAGS --> INIT_PATCH
+    EXISTING --> INIT_PATCH
+    INIT_PATCH --> OA & OB & OC
+
+    BIN -->|"generate: --help parsing"| INTROSPECT
     FLAGS --> INTROSPECT
     INTROSPECT --> MODEL
     MODEL --> RENDER
     RENDER --> OUTPUT
-    OUTPUT --> OA & OB & OC
+    OUTPUT --> OA & OB
 ```
 
 ### 5.1 Help parser
@@ -483,14 +566,19 @@ This is the same pattern currently used by the `circleci-toolkit` orb itself.
 |---|----------|----------|
 | 1 | Subcommand → orb mapping | Leaf subcommands → commands; parents of leaves → jobs. Future: custom job specification feature. |
 | 2 | Container install method | `cargo binstall` default; `apt` option. Others deferred to roadmap. |
-| 3 | Container scope | Dockerfile embedded in the orb repo. No separate container repository. |
+| 3 | Container scope | Dockerfile embedded in the consumer's repo alongside `orb/src/`. No separate container repository. |
 | 4 | Release pipeline | Full chain: CLI build → crates.io → docker.io → CircleCI registry (per namespace) → GitHub release (MCP binary). MVP targets these four registries/repositories. |
-| 5 | MCP server placement | Post orb publish in CI (Option A). Mirrors `toolkit/build_mcp_server` pattern. |
+| 5 | MCP server placement | Post orb publish in CI (Option A). Mirrors `toolkit/build_mcp_server` pattern. Optional at `init` time via `--mcp`. |
 | 6 | Namespace | `--namespace` flag, required, repeatable. Generates one publish job per namespace. |
 | 7 | Regeneration | Diff-aware. Only changed files are written; `--prune` removes stale files. |
 | 8 | orb-tools version | Exposed as `--orb-tools-version`. Prompted on greenfield; preserved from existing config on brownfield. |
 | 9 | Help format | MVP targets Rust/clap. Best-effort mode for non-clap CLIs (all params default to `string`). |
 | 10 | First validation target | gen-circleci-orb dogfoods itself. The generated orb for the `generate` subcommand is the reference implementation and continuous integration test. |
+| 11 | Primary interface | `init` subcommand for one-time wiring into existing consumer CI; `generate` subcommand for subsequent CI-driven regeneration. Orb-only mode (no CLI install) provides guidance via job descriptions. |
+| 12 | Orb source location | Generated orb source lives in `orb/src/` within the CLI tool's own repo. CI commits regenerated files back to the branch (diff-aware: no commit if unchanged). No separate orb repository is created. |
+| 13 | CI config modification strategy | `init` patches the consumer's existing `.circleci/` files additively — it adds new jobs to named workflows but does not replace or restructure existing CI. The consumer specifies which workflows receive build/test jobs and which receive release/deploy jobs. |
+| 14 | Orb visibility | `--private` flag on `init` controls whether the published orb is public (default) or private to the CircleCI organisation. |
+| 15 | Environment requirements | MVP targets: GitHub (source + releases), docker.io (container), CircleCI registry (orb). crates.io optional (Rust CLIs). All credentials supplied via CircleCI contexts. |
 
 ---
 
