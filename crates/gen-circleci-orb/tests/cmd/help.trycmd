@@ -1,0 +1,16 @@
+```
+$ gen-circleci-orb --help
+Generate a CircleCI orb to provide the facilities offered by a CLI program
+
+Usage: gen-circleci-orb <COMMAND>
+
+Commands:
+  generate  Generate orb source files from a CLI binary's --help output
+  init      Wire orb generation into an existing repo's CI configuration
+  help      Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help     Print help
+  -V, --version  Print version
+
+```
