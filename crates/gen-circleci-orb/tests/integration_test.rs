@@ -24,14 +24,15 @@ fn generate_gen_orb_mcp_orb() {
 
     assert!(status.success(), "generate command failed: {status}");
 
-    // Verify file structure
-    let src = out.path().join("src");
+    // Files are written to <output>/orb/ (the default --orb-dir)
+    let orb_root = out.path().join("orb");
+    let src = orb_root.join("src");
     assert!(src.join("@orb.yml").exists(), "missing @orb.yml");
     assert!(
         src.join("executors/default.yml").exists(),
         "missing executors/default.yml"
     );
-    assert!(out.path().join("Dockerfile").exists(), "missing Dockerfile");
+    assert!(orb_root.join("Dockerfile").exists(), "missing Dockerfile");
 
     for name in &["generate", "validate", "diff", "migrate", "prime"] {
         assert!(
