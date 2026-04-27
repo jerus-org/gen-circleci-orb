@@ -12,6 +12,9 @@
 Use `generate` for a one-off or to inspect the output before committing.
 Use `init` once per project to wire everything into CI.
 
+Both commands are run from the project root. Orb source is always written into a dedicated
+subdirectory (`orb/` by default) so it cannot be confused with existing project source.
+
 ## How the help parser works
 
 `generate` runs `<binary> --help` to find the top-level description and subcommand list,
@@ -28,17 +31,23 @@ The built-in `help` subcommand is automatically excluded from the generated outp
 
 ## Generated file structure
 
+Orb source is always placed under `<output>/<orb-dir>/` (defaults: `.` and `orb`).
+If `<output>/<orb-dir>/` already exists but does not contain `src/@orb.yml`, `generate`
+refuses to write and exits with an error — this prevents accidentally overwriting an existing
+`src/` directory or other project source.
+
 ```
 <output>/
-├── src/
-│   ├── @orb.yml                  # Orb metadata only (version: 2.1, description, display)
-│   ├── executors/
-│   │   └── default.yml           # Docker executor with << parameters.tag >>
-│   ├── commands/
-│   │   └── <subcommand>.yml      # One per leaf subcommand
-│   └── jobs/
-│       └── <subcommand>.yml      # One per leaf subcommand
-└── Dockerfile
+└── <orb-dir>/          # default: orb/
+    ├── src/
+    │   ├── @orb.yml                  # Orb metadata only (version: 2.1, description, display)
+    │   ├── executors/
+    │   │   └── default.yml           # Docker executor with << parameters.tag >>
+    │   ├── commands/
+    │   │   └── <subcommand>.yml      # One per leaf subcommand
+    │   └── jobs/
+    │       └── <subcommand>.yml      # One per leaf subcommand
+    └── Dockerfile
 ```
 
 ### @orb.yml
@@ -136,7 +145,7 @@ regenerate-orb:
           gen-circleci-orb generate \
             --binary <binary> \
             --namespace <namespace> \
-            --output <orb-dir>
+            --orb-dir <orb-dir>
 ```
 
 Added to the build workflow:

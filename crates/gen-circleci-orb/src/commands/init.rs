@@ -68,11 +68,12 @@ impl Init {
         let namespace = self.namespaces.first().cloned().unwrap_or_default();
 
         // Step 1: generate orb source files
-        tracing::info!("Generating orb source into {}", self.orb_dir);
+        tracing::info!("Generating orb source into ./{}", self.orb_dir);
         let gen = Generate {
             binary: self.binary.clone(),
             namespaces: self.namespaces.clone(),
-            output: PathBuf::from(&self.orb_dir),
+            output: PathBuf::from("."),
+            orb_dir: self.orb_dir.clone(),
             install_method: crate::commands::generate::InstallMethod::Binstall,
             base_image: "ubuntu:24.04".to_string(),
             home_url: None,

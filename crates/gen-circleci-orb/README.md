@@ -22,21 +22,24 @@ cargo install gen-circleci-orb
 
 ## Quick start
 
-**Step 1 — generate orb source for your binary:**
+**Step 1 — generate orb source for your binary (run from project root):**
 
 ```bash
 gen-circleci-orb generate \
   --binary my-tool \
-  --namespace my-org \
-  --output orb
+  --namespace my-org
 ```
 
-This writes:
+This writes orb source into an `orb/` subdirectory (the default `--orb-dir`):
 - `orb/src/@orb.yml` — orb metadata (version, description)
 - `orb/src/commands/<subcommand>.yml` — one per leaf subcommand
 - `orb/src/jobs/<subcommand>.yml` — one per leaf subcommand
 - `orb/src/executors/default.yml` — Docker executor with a `tag` parameter
 - `orb/Dockerfile` — image that pre-installs your binary
+
+The orb source is always isolated in its own subdirectory so it cannot be confused
+with existing project source. If the target directory already exists but doesn't
+contain a CircleCI orb, an error is raised.
 
 **Step 2 — wire orb generation into CI:**
 
@@ -64,7 +67,8 @@ gen-circleci-orb generate [OPTIONS] --binary <BINARY> --namespace <NAMESPACE>
 Options:
   --binary <BINARY>               Binary to introspect (must be on PATH)
   --namespace <NAMESPACE>         CircleCI namespace (repeatable)
-  --output <DIR>                  Output directory [default: ./out]
+  --output <DIR>                  Project root directory [default: .]
+  --orb-dir <DIR>                 Orb subdirectory within --output [default: orb]
   --install-method <METHOD>       binstall | apt [default: binstall]
   --base-image <IMAGE>            Docker base image [default: ubuntu:24.04]
   --home-url <URL>                Home URL for orb registry display

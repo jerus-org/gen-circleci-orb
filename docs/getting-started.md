@@ -17,17 +17,16 @@ cargo install gen-circleci-orb
 
 ## Generate an orb
 
-Point `generate` at any binary on your `PATH`:
+Run from your project root, pointing `generate` at any binary on your `PATH`:
 
 ```bash
 gen-circleci-orb generate \
   --binary my-tool \
-  --namespace my-org \
-  --output orb
+  --namespace my-org
 ```
 
 The tool runs `my-tool --help` and `my-tool <subcommand> --help` for each subcommand, then
-writes the full unpacked orb to `orb/`:
+writes the full unpacked orb into an `orb/` subdirectory (the default `--orb-dir`):
 
 ```
 orb/
@@ -43,6 +42,10 @@ orb/
 │       └── subcommand-b.yml
 └── Dockerfile
 ```
+
+The orb source is always isolated in `<output>/<orb-dir>/` so it cannot be mixed with
+existing project source (e.g. a Rust `src/`). If the target directory exists but does not
+look like a CircleCI orb, the command refuses to write and reports an error.
 
 Verify the orb locally:
 

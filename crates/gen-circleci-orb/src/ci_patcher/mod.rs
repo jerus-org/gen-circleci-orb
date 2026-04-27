@@ -262,7 +262,7 @@ fn regenerate_orb_job(opts: &PatchOpts) -> Vec<String> {
         "            gen-circleci-orb generate \\".to_string(),
         format!("              --binary {binary} \\"),
         format!("              --namespace {namespace} \\"),
-        format!("              --output {orb_dir}"),
+        format!("              --orb-dir {orb_dir}"),
     ]
 }
 
