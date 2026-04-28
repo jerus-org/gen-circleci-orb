@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 
 use crate::{help_parser, orb_generator, output_writer};
 
+pub const DEFAULT_BASE_IMAGE: &str = "debian:12-slim";
+
 #[derive(Debug, Clone, ValueEnum)]
 pub enum InstallMethod {
     Binstall,
@@ -30,7 +32,7 @@ pub struct Generate {
     pub install_method: InstallMethod,
 
     /// Base Docker image for the generated executor.
-    #[arg(long, default_value = "debian:12-slim")]
+    #[arg(long, default_value = DEFAULT_BASE_IMAGE)]
     pub base_image: String,
 
     /// Home URL for the orb registry display section.
