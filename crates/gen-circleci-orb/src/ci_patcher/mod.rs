@@ -3,6 +3,7 @@ use anyhow::Result;
 pub struct PatchOpts {
     pub binary: String,
     pub namespace: String,
+    pub docker_namespace: String,
     pub orb_dir: String,
     pub build_workflow: String,
     pub release_workflow: String,
@@ -295,6 +296,7 @@ fn pack_validate_steps(opts: &PatchOpts) -> Vec<String> {
 
 fn build_container_job(opts: &PatchOpts) -> Vec<String> {
     let binary = &opts.binary;
+    let docker_ns = &opts.docker_namespace;
     let orb_dir = &opts.orb_dir;
     vec![
         "  build-container:".to_string(),
@@ -306,11 +308,11 @@ fn build_container_job(opts: &PatchOpts) -> Vec<String> {
         "      - run:".to_string(),
         "          name: Build Docker image".to_string(),
         "          command: |".to_string(),
-        format!("            docker build -t jerusdp/{binary}:${{CIRCLE_TAG}} {orb_dir}"),
+        format!("            docker build -t {docker_ns}/{binary}:${{CIRCLE_TAG}} {orb_dir}"),
         "      - run:".to_string(),
         "          name: Push Docker image".to_string(),
         "          command: |".to_string(),
-        format!("            docker push jerusdp/{binary}:${{CIRCLE_TAG}}"),
+        format!("            docker push {docker_ns}/{binary}:${{CIRCLE_TAG}}"),
     ]
 }
 
@@ -359,6 +361,7 @@ mod tests {
         PatchOpts {
             binary: "mytool".to_string(),
             namespace: "my-org".to_string(),
+            docker_namespace: "my-docker-org".to_string(),
             orb_dir: "orb".to_string(),
             build_workflow: "validation".to_string(),
             release_workflow: "release".to_string(),
@@ -585,6 +588,24 @@ workflows:
         assert!(
             output.contains("docker push"),
             "missing docker push step:\n{output}"
+        );
+    }
+
+    #[test]
+    fn patch_release_uses_docker_namespace_not_orb_namespace() {
+        let (output, _) = patch_release(RELEASE_FIXTURE, &make_opts());
+        // Docker build/push must use docker_namespace, not the orb namespace
+        assert!(
+            output.contains("docker build -t my-docker-org/mytool"),
+            "docker build must use docker_namespace:\n{output}"
+        );
+        assert!(
+            output.contains("docker push my-docker-org/mytool"),
+            "docker push must use docker_namespace:\n{output}"
+        );
+        assert!(
+            !output.contains("docker build -t my-org/"),
+            "docker build must NOT use orb namespace:\n{output}"
         );
     }
 
