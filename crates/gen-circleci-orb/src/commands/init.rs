@@ -46,6 +46,10 @@ pub struct Init {
     #[arg(long, default_value = "3.2.0")]
     pub docker_orb_version: String,
 
+    /// Docker Hub (or registry) namespace for the built container image.
+    #[arg(long)]
+    pub docker_namespace: String,
+
     /// CircleCI context name holding Docker Hub credentials.
     #[arg(long, default_value = "docker-credentials")]
     pub docker_context: String,
@@ -86,6 +90,7 @@ impl Init {
         let opts = ci_patcher::PatchOpts {
             binary: self.binary.clone(),
             namespace,
+            docker_namespace: self.docker_namespace.clone(),
             orb_dir: self.orb_dir.clone(),
             build_workflow: self.build_workflow.clone(),
             release_workflow: self.release_workflow.clone(),

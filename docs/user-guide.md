@@ -96,7 +96,9 @@ Each job file contains the same parameters as the corresponding command, plus:
 ### Executor
 
 `src/executors/default.yml` defines a Docker executor with a `tag` parameter
-(default: `latest`) pointing to `jerusdp/<binary>:<< parameters.tag >>`.
+(default: `latest`) pointing to `<docker-namespace>/<binary>:<< parameters.tag >>`,
+where `<docker-namespace>` is the value passed to `--docker-namespace` at `init` time
+(or `--namespace` at `generate` time, which defaults to the first namespace value).
 
 ### Dockerfile
 
@@ -154,14 +156,16 @@ Added to the build workflow:
     requires: [<requires-job>]
 - orb-tools/pack:
     name: pack-orb
-    source-dir: <orb-dir>/src
-    destination-orb-path: /tmp/packed.yml
+    source_dir: <orb-dir>/src
     requires: [regenerate-orb]
-- orb-tools/validate:
-    name: validate-orb
-    orb-path: /tmp/packed.yml
+- orb-tools/review:
+    name: review-orb
+    source_dir: <orb-dir>/src
     requires: [pack-orb]
 ```
+
+`orb-tools/pack` (circleci/orb-tools@12) validates the orb during packing and persists
+it to the workspace. `orb-tools/review` checks for orb best-practice violations.
 
 ### release.yml changes
 
@@ -182,25 +186,35 @@ build-container:
     - run:
         name: Build Docker image
         command: |
-          docker build -t jerusdp/<binary>:${CIRCLE_TAG} <orb-dir>
+          docker build -t <docker-namespace>/<binary>:${CIRCLE_TAG} <orb-dir>
     - run:
         name: Push Docker image
         command: |
-          docker push jerusdp/<binary>:${CIRCLE_TAG}
+          docker push <docker-namespace>/<binary>:${CIRCLE_TAG}
 ```
+
+`<docker-namespace>` is the value of `--docker-namespace` — independent of the CircleCI
+orb namespace (`--namespace`).
 
 Added to the release workflow:
 ```yaml
+- orb-tools/pack:
+    name: pack-orb-release
+    source_dir: <orb-dir>/src
+    requires: [<release-after-job>]
 - build-container:
     requires: [<release-after-job>]
     context: [<docker-context>]
 - orb-tools/publish:
     name: publish-orb-<namespace>
-    orb-path: /tmp/packed.yml
-    orb-name: <namespace>/<binary>
-    requires: [build-container]
+    orb_name: <namespace>/<binary>
+    pub_type: production
+    requires: [build-container, pack-orb-release]
     context: [<orb-context>]
 ```
+
+`orb-tools/pack` runs in parallel with `build-container` and provides the packed orb
+to `orb-tools/publish` via workspace persistence.
 
 ### Idempotency
 
@@ -209,8 +223,8 @@ Specific checks:
 - `orb-tools:` in `orbs:` section → skip orb-tools insertion
 - `  docker: circleci/` in `orbs:` section → skip docker orb insertion
 - `regenerate-orb:` at job definition level → skip job insertion
-- `orb-tools/pack:` in content → skip pack/validate workflow steps
-- `      - build-container:` in release workflow → skip release workflow steps
+- `orb-tools/pack:` in content → skip pack/review workflow steps
+- `pack-orb-release` + `build-container:` + `orb-tools/publish:` in release workflow → skip release workflow steps
 
 ### Design principle
 

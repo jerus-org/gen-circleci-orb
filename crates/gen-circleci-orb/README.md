@@ -47,6 +47,7 @@ contain a CircleCI orb, an error is raised.
 gen-circleci-orb init \
   --binary my-tool \
   --namespace my-org \
+  --docker-namespace my-docker-org \
   --build-workflow validation \
   --release-workflow release \
   --requires-job common-tests \
@@ -55,7 +56,7 @@ gen-circleci-orb init \
 
 This patches `.circleci/config.yml` and `.circleci/release.yml` to add:
 - A `regenerate-orb` job that re-runs `generate` on every build
-- `orb-tools/pack` + `orb-tools/validate` steps to verify the generated orb
+- `orb-tools/pack` + `orb-tools/review` steps to verify the generated orb
 - A `build-container` job in the release workflow to publish the Docker image
 - An `orb-tools/publish` step to publish the orb to the CircleCI registry
 
@@ -80,21 +81,25 @@ Options:
 
 ```
 gen-circleci-orb init [OPTIONS] --binary <BINARY> --namespace <NAMESPACE>
+                                 --docker-namespace <NS>
                                  --build-workflow <WF> --release-workflow <WF>
 
+Required:
+  --binary <BINARY>               Binary to introspect (must be on PATH)
+  --namespace <NAMESPACE>         CircleCI orb namespace (repeatable)
+  --docker-namespace <NS>         Docker Hub (or registry) namespace for the container image
+  --build-workflow <WF>           Validation workflow name to patch
+  --release-workflow <WF>         Release workflow name to patch
+
 Options:
-  --binary <BINARY>               Binary to introspect
-  --namespace <NAMESPACE>         CircleCI namespace (repeatable)
-  --build-workflow <WF>           Validation workflow name
-  --release-workflow <WF>         Release workflow name
   --requires-job <JOB>            Job regenerate-orb should require
   --release-after-job <JOB>       Job build-container should require
   --orb-dir <DIR>                 Orb output directory [default: orb]
   --ci-dir <DIR>                  CircleCI config directory [default: .circleci]
   --orb-tools-version <VER>       circleci/orb-tools pin [default: 12.3.3]
   --docker-orb-version <VER>      circleci/docker pin [default: 3.2.0]
-  --docker-context <CTX>          CircleCI context for Docker Hub [default: docker-credentials]
-  --orb-context <CTX>             CircleCI context for orb publish [default: orb-publishing]
+  --docker-context <CTX>          CircleCI context for Docker Hub credentials [default: docker-credentials]
+  --orb-context <CTX>             CircleCI context for orb publish credentials [default: orb-publishing]
   --mcp                           Wire in toolkit/build_mcp_server (jerus-org toolkit only)
   --dry-run                       Print planned changes, write nothing
 ```
