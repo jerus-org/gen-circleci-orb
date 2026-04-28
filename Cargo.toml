@@ -23,5 +23,14 @@ thiserror = "2.0.18"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 
+# Serialisation
+serde = { version = "1.0.228", features = ["derive"] }
+serde_yaml = "0.9.34"
+indexmap = { version = "2.9.0", features = ["serde"] }
+
+# Parsing
+regex = "1.11.1"
+
 # Testing
 trycmd = "1.2.0"
+tempfile = "3.19.1"
