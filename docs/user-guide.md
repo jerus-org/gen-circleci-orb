@@ -103,15 +103,28 @@ where `<docker-namespace>` is the value passed to `--docker-namespace` at `init`
 ### Dockerfile
 
 ```dockerfile
-FROM ubuntu:24.04
-RUN cargo binstall --no-confirm <binary>
+FROM debian:12-slim
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl -L --proto '=https' --tlsv1.2 -sSf \
+       https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash \
+    && cargo-binstall --no-confirm <binary> \
+    && rm -rf /root/.cargo/registry /root/.cargo/git
 ```
 
-Or with `--install-method apt`:
+`debian:12-slim` provides glibc and TLS roots without unnecessary tooling. The
+cargo-binstall bootstrap script downloads a pre-built binstall binary — no Rust toolchain
+is installed in the image. The cargo cache directories are removed after install to
+keep the image small.
+
+With `--install-method apt`:
 
 ```dockerfile
-FROM ubuntu:24.04
-RUN apt-get update && apt-get install -y <binary>
+FROM debian:12-slim
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends <binary> \
+    && rm -rf /var/lib/apt/lists/*
 ```
 
 ## Diff-aware writes

@@ -79,7 +79,7 @@ impl Init {
             output: PathBuf::from("."),
             orb_dir: self.orb_dir.clone(),
             install_method: crate::commands::generate::InstallMethod::Binstall,
-            base_image: "ubuntu:24.04".to_string(),
+            base_image: "debian:12-slim".to_string(),
             home_url: None,
             source_url: None,
             dry_run: self.dry_run,

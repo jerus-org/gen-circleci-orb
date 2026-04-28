@@ -30,7 +30,7 @@ pub struct Generate {
     pub install_method: InstallMethod,
 
     /// Base Docker image for the generated executor.
-    #[arg(long, default_value = "ubuntu:24.04")]
+    #[arg(long, default_value = "debian:12-slim")]
     pub base_image: String,
 
     /// Home URL for the orb registry display section.
