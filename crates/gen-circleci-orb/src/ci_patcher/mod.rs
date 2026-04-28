@@ -376,6 +376,33 @@ workflows:
       - some-job
 ";
 
+    // Typical toolkit 6.0 config: no top-level jobs section, only orbs + workflows.
+    const BUILD_FIXTURE_NO_JOBS: &str = "\
+version: 2.1
+
+parameters:
+  min_rust_version:
+    type: string
+    default: \"1.87\"
+
+orbs:
+  toolkit: jerus-org/circleci-toolkit@6.0.0
+
+workflows:
+  validation:
+    jobs:
+      - toolkit/required_builds:
+          min_rust_version: << pipeline.parameters.min_rust_version >>
+
+      - toolkit/common_tests:
+          min_rust_version: << pipeline.parameters.min_rust_version >>
+
+      - toolkit/idiomatic_rust:
+          filters:
+            branches:
+              ignore: main
+";
+
     const RELEASE_FIXTURE: &str = "\
 version: 2.1
 
@@ -394,6 +421,34 @@ workflows:
     jobs:
       - release-mytool
 ";
+
+    // ── patch_build (no pre-existing jobs section) ───────────────────────────
+
+    #[test]
+    fn patch_build_wires_workflow_steps_when_no_jobs_section() {
+        let (output, report) = patch_build(BUILD_FIXTURE_NO_JOBS, &make_opts());
+        assert!(output.contains("regenerate-orb:"), "missing job def:\n{output}");
+        assert!(
+            output.contains("orb-tools/pack:"),
+            "pack step not wired into workflow:\n{output}"
+        );
+        assert!(
+            output.contains("orb-tools/validate:"),
+            "validate step not wired into workflow:\n{output}"
+        );
+        // Both the job and the workflow steps should be in the report
+        assert!(
+            report
+                .insertions
+                .iter()
+                .any(|s| s.contains("regenerate-orb")),
+            "report missing regenerate-orb"
+        );
+        assert!(
+            report.insertions.iter().any(|s| s.contains("workflow")),
+            "report missing workflow steps"
+        );
+    }
 
     // ── patch_build ───────────────────────────────────────────────────────────
 
