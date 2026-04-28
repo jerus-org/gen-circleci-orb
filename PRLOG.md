@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- implement gen-circleci-orb MVP (generate + init)(pr [#7])
+
 ### Changed
 
 - chore-init standard Rust workspace framework(pr [#2])
@@ -16,3 +20,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#2]: https://github.com/jerus-org/gen-circleci-orb/pull/2
 [#5]: https://github.com/jerus-org/gen-circleci-orb/pull/5
 [#4]: https://github.com/jerus-org/gen-circleci-orb/pull/4
+[#7]: https://github.com/jerus-org/gen-circleci-orb/pull/7
