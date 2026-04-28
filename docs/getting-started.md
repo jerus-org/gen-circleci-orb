@@ -62,18 +62,22 @@ Run `init` once from your repo root:
 gen-circleci-orb init \
   --binary my-tool \
   --namespace my-org \
+  --docker-namespace my-docker-org \
   --build-workflow validation \
   --release-workflow release \
   --requires-job common-tests \
   --release-after-job release-my-tool
 ```
 
+`--docker-namespace` is the Docker Hub (or registry) org for the built container image.
+`--namespace` is the CircleCI orb namespace — these are independent and often differ.
+
 This:
 1. Runs `generate` to write `orb/` (same as the manual step above)
 2. Patches `.circleci/config.yml`:
    - Adds `orb-tools: circleci/orb-tools@12.3.3` to the `orbs:` section
    - Adds a `regenerate-orb` job that re-generates the orb on every CI run
-   - Adds `orb-tools/pack` and `orb-tools/validate` steps to the validation workflow
+   - Adds `orb-tools/pack` and `orb-tools/review` steps to the validation workflow
 3. Patches `.circleci/release.yml`:
    - Adds `docker: circleci/docker@3.2.0` and `orb-tools: circleci/orb-tools@12.3.3`
    - Adds a `build-container` job that builds and pushes the Docker image on release
@@ -90,7 +94,7 @@ gen-circleci-orb init ... --dry-run
 Once the CI changes are merged, your release pipeline will automatically:
 
 1. Build the Docker image tagged with the release version
-2. Push it to `jerusdp/my-tool:<version>` on Docker Hub
+2. Push it to `my-docker-org/my-tool:<version>` on your container registry
 3. Publish the orb to `my-org/my-tool` on the CircleCI registry
 
 From that point on, every build keeps the orb in sync with the binary — no manual
