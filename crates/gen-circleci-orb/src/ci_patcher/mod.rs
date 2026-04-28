@@ -129,8 +129,10 @@ pub fn patch_release(content: &str, opts: &PatchOpts) -> (String, PatchReport) {
     }
 
     // 3. Add release workflow steps
-    // Use workflow-step indentation pattern to distinguish from job definitions
-    if content.contains("      - build-container:") && content.contains("orb-tools/publish:") {
+    if content.contains("pack-orb-release")
+        && content.contains("      - build-container:")
+        && content.contains("orb-tools/publish:")
+    {
         report.skipped.push("release workflow steps".to_string());
     } else {
         let step_block = release_workflow_steps(opts);
@@ -276,17 +278,16 @@ fn pack_validate_steps(opts: &PatchOpts) -> Vec<String> {
         steps.push(format!("          requires: [{req}]"));
     }
 
-    // orb-tools/pack
+    // orb-tools/pack (source_dir + workspace persistence; validates on pack)
     steps.push("      - orb-tools/pack:".to_string());
     steps.push("          name: pack-orb".to_string());
-    steps.push(format!("          source-dir: {orb_dir}/src"));
-    steps.push("          destination-orb-path: /tmp/packed.yml".to_string());
+    steps.push(format!("          source_dir: {orb_dir}/src"));
     steps.push("          requires: [regenerate-orb]".to_string());
 
-    // orb-tools/validate
-    steps.push("      - orb-tools/validate:".to_string());
-    steps.push("          name: validate-orb".to_string());
-    steps.push("          orb-path: /tmp/packed.yml".to_string());
+    // orb-tools/review (best-practice review of packed orb)
+    steps.push("      - orb-tools/review:".to_string());
+    steps.push("          name: review-orb".to_string());
+    steps.push(format!("          source_dir: {orb_dir}/src"));
     steps.push("          requires: [pack-orb]".to_string());
 
     steps
@@ -318,19 +319,33 @@ fn release_workflow_steps(opts: &PatchOpts) -> Vec<String> {
     let namespace = &opts.namespace;
     let docker_ctx = &opts.docker_context;
     let orb_ctx = &opts.orb_context;
+    let orb_dir = &opts.orb_dir;
+    let requires = opts
+        .release_after_job
+        .as_deref()
+        .map(|r| format!("[{r}]"))
+        .unwrap_or_default();
     let mut steps = vec![];
 
+    // Pack orb from committed source (runs in parallel with build-container)
+    steps.push("      - orb-tools/pack:".to_string());
+    steps.push("          name: pack-orb-release".to_string());
+    steps.push(format!("          source_dir: {orb_dir}/src"));
+    if !requires.is_empty() {
+        steps.push(format!("          requires: {requires}"));
+    }
+
     steps.push("      - build-container:".to_string());
-    if let Some(req) = &opts.release_after_job {
-        steps.push(format!("          requires: [{req}]"));
+    if !requires.is_empty() {
+        steps.push(format!("          requires: {requires}"));
     }
     steps.push(format!("          context: [{docker_ctx}]"));
 
     steps.push("      - orb-tools/publish:".to_string());
     steps.push(format!("          name: publish-orb-{namespace}"));
-    steps.push("          orb-path: /tmp/packed.yml".to_string());
-    steps.push(format!("          orb-name: {namespace}/{binary}"));
-    steps.push("          requires: [build-container]".to_string());
+    steps.push(format!("          orb_name: {namespace}/{binary}"));
+    steps.push("          pub_type: production".to_string());
+    steps.push("          requires: [build-container, pack-orb-release]".to_string());
     steps.push(format!("          context: [{orb_ctx}]"));
 
     steps
@@ -427,14 +442,17 @@ workflows:
     #[test]
     fn patch_build_wires_workflow_steps_when_no_jobs_section() {
         let (output, report) = patch_build(BUILD_FIXTURE_NO_JOBS, &make_opts());
-        assert!(output.contains("regenerate-orb:"), "missing job def:\n{output}");
+        assert!(
+            output.contains("regenerate-orb:"),
+            "missing job def:\n{output}"
+        );
         assert!(
             output.contains("orb-tools/pack:"),
             "pack step not wired into workflow:\n{output}"
         );
         assert!(
-            output.contains("orb-tools/validate:"),
-            "validate step not wired into workflow:\n{output}"
+            output.contains("orb-tools/review:"),
+            "review step not wired into workflow:\n{output}"
         );
         // Both the job and the workflow steps should be in the report
         assert!(
@@ -487,8 +505,17 @@ workflows:
             "missing pack step:\n{output}"
         );
         assert!(
-            output.contains("orb-tools/validate:"),
-            "missing validate step:\n{output}"
+            output.contains("orb-tools/review:"),
+            "missing review step:\n{output}"
+        );
+        // Parameters must use snake_case (orb-tools@12 API)
+        assert!(
+            output.contains("source_dir: orb/src"),
+            "pack/review must use source_dir (not source-dir):\n{output}"
+        );
+        assert!(
+            !output.contains("destination-orb-path"),
+            "must not use deprecated destination-orb-path:\n{output}"
         );
     }
 
@@ -564,6 +591,11 @@ workflows:
     #[test]
     fn patch_release_adds_workflow_steps() {
         let (output, _) = patch_release(RELEASE_FIXTURE, &make_opts());
+        // Pack step must appear in release workflow to provide workspace for publish
+        assert!(
+            output.contains("orb-tools/pack:"),
+            "missing pack step in release workflow:\n{output}"
+        );
         assert!(
             output.contains("orb-tools/publish:"),
             "missing publish step:\n{output}"
@@ -571,6 +603,10 @@ workflows:
         assert!(
             output.contains("publish-orb-my-org"),
             "missing publish job name:\n{output}"
+        );
+        assert!(
+            output.contains("pub_type: production"),
+            "publish must set pub_type production:\n{output}"
         );
     }
 
@@ -591,9 +627,14 @@ workflows:
     #[test]
     fn patch_release_includes_namespace_and_binary_in_publish() {
         let (output, _) = patch_release(RELEASE_FIXTURE, &make_opts());
+        // orb-tools@12 uses snake_case orb_name (not hyphenated orb-name)
         assert!(
-            output.contains("orb-name: my-org/mytool"),
-            "missing orb-name:\n{output}"
+            output.contains("orb_name: my-org/mytool"),
+            "missing orb_name (underscore):\n{output}"
+        );
+        assert!(
+            !output.contains("orb-path:"),
+            "must not use deprecated orb-path:\n{output}"
         );
     }
 }
