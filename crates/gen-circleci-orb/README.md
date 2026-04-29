@@ -71,7 +71,7 @@ Options:
   --output <DIR>                  Project root directory [default: .]
   --orb-dir <DIR>                 Orb subdirectory within --output [default: orb]
   --install-method <METHOD>       binstall | apt [default: binstall]
-  --base-image <IMAGE>            Docker base image [default: ubuntu:24.04]
+  --base-image <IMAGE>            Docker base image [default: debian:12-slim]
   --home-url <URL>                Home URL for orb registry display
   --source-url <URL>              Source URL for orb registry display
   --dry-run                       Print planned files, write nothing

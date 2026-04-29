@@ -119,11 +119,21 @@ fn render_executor(binary_name: &str) -> String {
 }
 
 fn render_dockerfile(binary: &str, method: &InstallMethod, base_image: &str) -> String {
-    let install_line = match method {
-        InstallMethod::Binstall => format!("RUN cargo binstall --no-confirm {binary}"),
-        InstallMethod::Apt => format!("RUN apt-get update && apt-get install -y {binary}"),
+    let install_block = match method {
+        InstallMethod::Binstall => format!(
+            r#"RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl -L --proto '=https' --tlsv1.2 -sSf \
+       https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash \
+    && cargo-binstall --no-confirm {binary} \
+    && rm -rf /root/.cargo/registry /root/.cargo/git"#
+        ),
+        InstallMethod::Apt => format!(
+            "RUN apt-get update \\\n    && apt-get install -y --no-install-recommends {binary} \\\n    && rm -rf /var/lib/apt/lists/*"
+        ),
     };
-    format!("FROM {base_image}\n{install_line}\n")
+    format!("FROM {base_image}\n{install_block}\n")
 }
 
 fn build_orb_parameters(sub: &SubCommand) -> IndexMap<String, OrbParameter> {
@@ -248,7 +258,7 @@ mod tests {
         GenerateOpts {
             namespaces: vec!["my-org".to_string()],
             install_method: InstallMethod::Binstall,
-            base_image: "ubuntu:24.04".to_string(),
+            base_image: "debian:12-slim".to_string(),
             home_url: None,
             source_url: None,
             binary_name: "mytool".to_string(),
@@ -313,12 +323,46 @@ mod tests {
     // ── Dockerfile ──────────────────────────────────────────────────────────
 
     #[test]
-    fn dockerfile_binstall() {
+    fn dockerfile_binstall_uses_slim_base_and_bootstrap() {
         let cli = make_cli("mytool", vec![]);
         let files = generate(&cli, &default_opts());
         let content = &files[&PathBuf::from("Dockerfile")];
-        assert!(content.contains("FROM ubuntu:24.04"));
-        assert!(content.contains("cargo binstall --no-confirm mytool"));
+        // Correct base image
+        assert!(
+            content.contains("FROM debian:12-slim"),
+            "should use debian:12-slim:\n{content}"
+        );
+        // Bootstrap cargo-binstall (no cargo pre-installed on slim images)
+        assert!(
+            content.contains("cargo-bins/cargo-binstall"),
+            "should bootstrap cargo-binstall:\n{content}"
+        );
+        // Install the binary via cargo-binstall (hyphen form, cargo not required)
+        assert!(
+            content.contains("cargo-binstall --no-confirm mytool"),
+            "should install via cargo-binstall:\n{content}"
+        );
+        // Required runtime deps for TLS binaries
+        assert!(
+            content.contains("ca-certificates"),
+            "should install ca-certificates:\n{content}"
+        );
+        // Clean up apt lists to keep image small
+        assert!(
+            content.contains("rm -rf /var/lib/apt/lists"),
+            "should clean apt lists:\n{content}"
+        );
+    }
+
+    #[test]
+    fn dockerfile_binstall_cleans_cargo_cache() {
+        let cli = make_cli("mytool", vec![]);
+        let files = generate(&cli, &default_opts());
+        let content = &files[&PathBuf::from("Dockerfile")];
+        assert!(
+            content.contains(".cargo/registry") || content.contains(".cargo/git"),
+            "should clean cargo cache:\n{content}"
+        );
     }
 
     #[test]
@@ -330,7 +374,22 @@ mod tests {
         };
         let files = generate(&cli, &opts);
         let content = &files[&PathBuf::from("Dockerfile")];
-        assert!(content.contains("apt-get install -y mytool"));
+        assert!(
+            content.contains("apt-get install -y"),
+            "missing apt-get install:\n{content}"
+        );
+        assert!(
+            content.contains("mytool"),
+            "missing binary name:\n{content}"
+        );
+        assert!(
+            content.contains("--no-install-recommends"),
+            "apt should use --no-install-recommends:\n{content}"
+        );
+        assert!(
+            content.contains("rm -rf /var/lib/apt/lists"),
+            "apt should clean lists:\n{content}"
+        );
     }
 
     // ── command files ───────────────────────────────────────────────────────
