@@ -26,6 +26,9 @@ help text but works on any tool that follows the same conventions:
 - Boolean flags have no `<VALUE>` metavar
 - Enum flags are followed by an indented `Possible values:` block
 - Defaults appear as `[default: value]` in the description text
+- Required vs optional is read from the `Usage:` line: a flag listed **outside** any
+  `[...]` bracket group is required; a flag inside `[OPTIONS]` or another `[...]` group
+  is optional, even if it carries no default value
 
 The built-in `help` subcommand is automatically excluded from the generated output.
 
@@ -72,19 +75,41 @@ Parameter types map as follows:
 | `--count <VALUE>` (integer context) | `integer` |
 | `--fmt <VALUE>` with `Possible values:` | `enum` |
 
-Boolean flags use CircleCI mustache conditionals in the run step:
+### Required vs optional parameters
+
+Whether a parameter is required in the generated orb mirrors whether it is required by
+the CLI itself — determined by reading the `Usage:` line, not by whether a default is present.
+
+| Usage line | Has CLI default | Orb `default:` | Run step | Consumer must supply? |
+|-----------|----------------|----------------|----------|-----------------------|
+| Outside `[...]` | no | _(none)_ | unconditional | **yes** |
+| Inside `[OPTIONS]` | yes (`[default: x]`) | `x` | mustache conditional | no |
+| Inside `[OPTIONS]` | no | `""` (string) or `false` (boolean) | mustache conditional | no |
+
+**Required parameters** appear on the `Usage:` line outside any bracket group (e.g.
+`Usage: tool cmd [OPTIONS] --binary <BINARY>`). The orb parameter has no `default:` key,
+CircleCI enforces that the consumer supplies a value, and the run step passes the flag
+unconditionally:
 ```
-<<# parameters.force >>--force<</ parameters.force >>
+--binary "<< parameters.binary >>"
 ```
 
-Optional string parameters:
+**Optional parameters with a CLI default** have a `default:` in the orb matching the
+CLI default. The run step uses a mustache conditional so an empty value does not forward
+a blank flag to the binary:
 ```
 <<# parameters.output >>--output "<< parameters.output >>"<</ parameters.output >>
 ```
 
-Required string parameters (no conditional):
+**Optional parameters without a CLI default** (inside `[OPTIONS]` but no `[default: …]`
+annotation) receive `default: ""` (strings) or `default: false` (booleans) in the orb.
+This makes the parameter optional for orb consumers — they can omit it. The mustache
+conditional in the run step ensures the flag is not forwarded when the value is empty or false:
 ```
---orb-path "<< parameters.orb_path >>"
+<<# parameters.name >>--name "<< parameters.name >>"<</ parameters.name >>
+```
+```
+<<# parameters.force >>--force<</ parameters.force >>
 ```
 
 ### Jobs

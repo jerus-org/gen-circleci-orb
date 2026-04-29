@@ -114,6 +114,20 @@ Options:
 | `src/jobs/<name>.yml` | Job wrapping the command: checkout + delegate |
 | `Dockerfile` | `FROM <base-image>` + install step (binstall or apt) |
 
+### Parameter required vs optional
+
+A parameter is required in the generated orb only if the CLI itself requires it — read
+from the `Usage:` line: flags outside any `[...]` group are required; flags inside
+`[OPTIONS]` are optional.
+
+Optional parameters always have a `default:` so orb consumers can omit them:
+- boolean flags default to `false`
+- string/enum flags with a CLI default use that value
+- string flags with no CLI default use `""` (empty string)
+
+The run step uses CircleCI mustache conditionals for optional parameters so blank or false
+values are not forwarded as empty flags to the binary.
+
 ## Environment requirements
 
 | Tool | Purpose |

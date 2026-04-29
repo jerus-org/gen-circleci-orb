@@ -145,13 +145,24 @@ fn build_orb_parameters(sub: &SubCommand) -> IndexMap<String, OrbParameter> {
             ParamType::Integer => ("integer".to_string(), None),
             ParamType::Enum(vals) => ("enum".to_string(), Some(vals.clone())),
         };
-        let default = p.default.as_ref().map(|d| {
-            if type_str == "boolean" {
-                serde_yaml::Value::Bool(d == "true")
-            } else {
-                serde_yaml::Value::String(d.clone())
+        let default = match &p.param_type {
+            ParamType::Boolean => {
+                // Clap booleans default to false but never emit [default: false] in help
+                // text. Always supply default: false so orb consumers can omit the param.
+                let val = p.default.as_ref().map(|d| d == "true").unwrap_or(false);
+                Some(serde_yaml::Value::Bool(val))
             }
-        });
+            _ if !p.required && p.default.is_none() => {
+                // Optional CLI flag with no default: use empty string so consumers can
+                // omit the param. The run step uses a mustache conditional, so "" means
+                // the flag is not forwarded to the binary.
+                Some(serde_yaml::Value::String(String::new()))
+            }
+            _ => p
+                .default
+                .as_ref()
+                .map(|d| serde_yaml::Value::String(d.clone())),
+        };
         params.insert(
             p.long_name.clone(),
             OrbParameter {
@@ -483,6 +494,73 @@ mod tests {
         assert!(
             content.contains("source"),
             "enum missing value 'source':\n{content}"
+        );
+    }
+
+    // ── orb parameter defaults ─────────────────────────────────────────────
+
+    #[test]
+    fn boolean_orb_parameter_has_false_default() {
+        // Clap boolean flags never emit [default: false] in help text, so p.default is None.
+        // The orb must supply default: false so consumers can omit the parameter.
+        let params = vec![Parameter {
+            long_name: "force".to_string(),
+            short: None,
+            param_type: ParamType::Boolean,
+            default: None,
+            required: false,
+            description: "Force overwrite.".to_string(),
+        }];
+        let sub = make_leaf("cmd", params);
+        let files = generate(&make_cli("mytool", vec![sub]), &default_opts());
+        let content = &files[&PathBuf::from("src/commands/cmd.yml")];
+        assert!(
+            content.contains("default: false"),
+            "boolean param must have default: false so it is optional for orb consumers:\n{content}"
+        );
+    }
+
+    #[test]
+    fn optional_string_no_default_has_empty_string_default() {
+        // Optional CLI flag (inside [OPTIONS], no [default:]) must get default: "" so
+        // the orb consumer does not have to supply it.  The mustache conditional ensures
+        // the flag is not forwarded to the binary when the value is empty.
+        let params = vec![Parameter {
+            long_name: "output".to_string(),
+            short: None,
+            param_type: ParamType::String,
+            default: None,
+            required: false,
+            description: "Output path.".to_string(),
+        }];
+        let sub = make_leaf("cmd", params);
+        let files = generate(&make_cli("mytool", vec![sub]), &default_opts());
+        let content = &files[&PathBuf::from("src/commands/cmd.yml")];
+        // serde_yaml serialises an empty string as ''
+        assert!(
+            content.contains("default: ''"),
+            "optional no-default string param must have default: '' so consumers can omit it:\n{content}"
+        );
+    }
+
+    #[test]
+    fn required_string_no_default_has_no_default_key() {
+        // Truly required params (listed outside [OPTIONS] on the Usage line) must NOT
+        // have a default: key — CircleCI will then enforce that the consumer supplies them.
+        let params = vec![Parameter {
+            long_name: "orb_path".to_string(),
+            short: None,
+            param_type: ParamType::String,
+            default: None,
+            required: true,
+            description: "Path to orb.".to_string(),
+        }];
+        let sub = make_leaf("cmd", params);
+        let files = generate(&make_cli("mytool", vec![sub]), &default_opts());
+        let content = &files[&PathBuf::from("src/commands/cmd.yml")];
+        assert!(
+            !content.contains("default:"),
+            "required param must not have a default key:\n{content}"
         );
     }
 
