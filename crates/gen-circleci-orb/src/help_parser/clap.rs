@@ -527,7 +527,10 @@ Options:
 "#;
         let params = parse_parameters(help);
         let p = params.iter().find(|p| p.long_name == "orb_path").unwrap();
-        assert!(!p.required, "param inside [OPTIONS] with no default must not be required");
+        assert!(
+            !p.required,
+            "param inside [OPTIONS] with no default must not be required"
+        );
         assert_eq!(p.default, None);
     }
 
@@ -552,7 +555,10 @@ Options:
         let orb_path = params.iter().find(|p| p.long_name == "orb_path").unwrap();
         let name = params.iter().find(|p| p.long_name == "name").unwrap();
         assert!(orb_path.required, "flag in usage line must be required");
-        assert!(!name.required, "flag only in [OPTIONS] must not be required");
+        assert!(
+            !name.required,
+            "flag only in [OPTIONS] must not be required"
+        );
     }
 
     #[test]
