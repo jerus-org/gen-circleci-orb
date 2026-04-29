@@ -160,10 +160,20 @@ pub fn parse_parameters(text: &str) -> Vec<Parameter> {
             continue;
         }
 
-        // Skip -h/--help and -V/--version built-ins
-        if trimmed.contains("--help") || trimmed.contains("--version") {
+        // Skip -h/--help built-in and the clap -V/--version built-in.
+        // The clap built-in --version has no <VALUE> metavar; application flags
+        // also named --version that accept a value (e.g. --version <VERSION>) must
+        // NOT be excluded — check for a metavar to tell them apart.
+        if trimmed.contains("--help") {
             i += 1;
             continue;
+        }
+        if let Some(pos) = trimmed.find("--version") {
+            let after = trimmed[pos + "--version".len()..].trim_start();
+            if !after.starts_with('<') && !after.starts_with('[') {
+                i += 1;
+                continue;
+            }
         }
 
         // Determine indentation of this flag line so we can collect its
@@ -602,6 +612,51 @@ Options:
         let params = parse_parameters(help);
         assert!(!params.iter().any(|p| p.long_name == "help"));
         assert!(!params.iter().any(|p| p.long_name == "version"));
+    }
+
+    #[test]
+    fn app_version_flag_with_metavar_is_included() {
+        // Some tools use --version as an application-level flag (e.g. "version string
+        // to embed in output"). This has a <VALUE> metavar and must NOT be excluded —
+        // only the clap built-in (no metavar, "Print version") should be skipped.
+        let help = r#"Generate something
+
+Usage: tool generate [OPTIONS]
+
+Options:
+  -V, --version <VERSION>
+          Version string to embed in the generated output (e.g. "1.0.0")
+
+  -h, --help
+          Print help
+
+  --other-flag
+          A boolean flag for comparison
+"#;
+        let params = parse_parameters(help);
+        assert!(
+            params.iter().any(|p| p.long_name == "version"),
+            "app --version <VALUE> flag must be included, got: {:?}",
+            params.iter().map(|p| &p.long_name).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn clap_builtin_version_without_metavar_is_excluded() {
+        // The clap built-in -V / --version has no <VALUE> metavar and prints the
+        // binary version.  It must be excluded from generated orb parameters.
+        let help = r#"Usage: tool cmd [OPTIONS]
+
+Options:
+  -p, --flag <FLAG>  Some flag
+  -h, --help         Print help
+  -V, --version      Print version
+"#;
+        let params = parse_parameters(help);
+        assert!(
+            !params.iter().any(|p| p.long_name == "version"),
+            "clap built-in --version must be excluded"
+        );
     }
 
     #[test]
