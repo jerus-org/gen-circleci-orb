@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use super::run_help;
 use super::types::{CliDefinition, ParamType, Parameter, SubCommand};
 use anyhow::Result;
@@ -108,8 +110,36 @@ pub fn extract_subcommand_names(text: &str) -> Vec<String> {
     names
 }
 
+/// Parse the Usage line to find flags listed outside any `[...]` group.
+/// Those flags are truly required (clap will reject invocations that omit them).
+fn extract_required_flags(text: &str) -> HashSet<String> {
+    let usage_line = match text.lines().find(|l| l.trim().starts_with("Usage:")) {
+        Some(l) => l.to_string(),
+        None => return HashSet::new(),
+    };
+
+    // Remove all [...] groups (optional items) iteratively to handle nesting.
+    let re_brackets = regex::Regex::new(r"\[[^\[\]]*\]").unwrap();
+    let mut cleaned = usage_line;
+    loop {
+        let next = re_brackets.replace_all(&cleaned, "").to_string();
+        if next == cleaned {
+            break;
+        }
+        cleaned = next;
+    }
+
+    // Every --flag remaining after bracket removal is required.
+    let re_flags = regex::Regex::new(r"--([a-zA-Z][a-zA-Z0-9-]*)").unwrap();
+    re_flags
+        .captures_iter(&cleaned)
+        .map(|cap| cap[1].to_string())
+        .collect()
+}
+
 /// Parse the `Options:` / `Arguments:` sections to build `Parameter` list.
 pub fn parse_parameters(text: &str) -> Vec<Parameter> {
+    let required_flags = extract_required_flags(text);
     let lines: Vec<&str> = text.lines().collect();
     let mut params = Vec::new();
     let mut i = 0;
@@ -192,7 +222,7 @@ pub fn parse_parameters(text: &str) -> Vec<Parameter> {
         // Extract possible values from within the block text
         let possible_values = extract_possible_values_from_block(&block);
 
-        if let Some(param) = parse_option_block(&block, possible_values) {
+        if let Some(param) = parse_option_block(&block, possible_values, &required_flags) {
             params.push(param);
         }
 
@@ -238,7 +268,11 @@ fn extract_possible_values_from_block(block: &str) -> Vec<String> {
 }
 
 /// Parse a single collected option block string into a `Parameter`.
-fn parse_option_block(block: &str, possible_values: Vec<String>) -> Option<Parameter> {
+fn parse_option_block(
+    block: &str,
+    possible_values: Vec<String>,
+    required_flags: &HashSet<String>,
+) -> Option<Parameter> {
     // Extract long flag: look for --word
     let long_flag = extract_long_flag(block)?;
     let short = extract_short_flag(block);
@@ -255,7 +289,8 @@ fn parse_option_block(block: &str, possible_values: Vec<String>) -> Option<Param
     };
 
     let default = extract_default(block);
-    let required = !is_boolean && default.is_none();
+    // A flag is required only if the Usage line lists it outside any [...] group.
+    let required = !is_boolean && required_flags.contains(&long_flag);
 
     // Description: everything after the flags portion
     let description = extract_param_description(block);
@@ -476,7 +511,9 @@ Options:
     }
 
     #[test]
-    fn required_param_detected_when_no_default() {
+    fn optional_no_default_is_not_required() {
+        // A param inside [OPTIONS] with no default is optional — the CLI accepts omitting it.
+        // The orb must use a mustache conditional, not pass an empty string.
         let help = r#"Validate something
 
 Usage: tool validate [OPTIONS]
@@ -490,8 +527,32 @@ Options:
 "#;
         let params = parse_parameters(help);
         let p = params.iter().find(|p| p.long_name == "orb_path").unwrap();
-        assert!(p.required);
+        assert!(!p.required, "param inside [OPTIONS] with no default must not be required");
         assert_eq!(p.default, None);
+    }
+
+    #[test]
+    fn truly_required_detected_from_usage_line() {
+        // A param listed in the Usage line outside [OPTIONS] is truly required.
+        let help = r#"Generate something
+
+Usage: tool generate [OPTIONS] --orb-path <ORB_PATH>
+
+Options:
+  -p, --orb-path <ORB_PATH>
+          Path to the orb YAML file
+
+      --name <NAME>
+          Optional name
+
+  -h, --help
+          Print help
+"#;
+        let params = parse_parameters(help);
+        let orb_path = params.iter().find(|p| p.long_name == "orb_path").unwrap();
+        let name = params.iter().find(|p| p.long_name == "name").unwrap();
+        assert!(orb_path.required, "flag in usage line must be required");
+        assert!(!name.required, "flag only in [OPTIONS] must not be required");
     }
 
     #[test]
