@@ -128,6 +128,18 @@ Optional parameters always have a `default:` so orb consumers can omit them:
 The run step uses CircleCI mustache conditionals for optional parameters so blank or false
 values are not forwarded as empty flags to the binary.
 
+### Excluded flags
+
+Two flags are always excluded from the generated output:
+- `-h/--help` — clap built-in
+- `-V/--version` **with no `<VALUE>` metavar** — clap built-in (prints binary version)
+
+An application flag named `--version` that accepts a value (e.g. `--version <VERSION>`)
+is **not** excluded. However, reusing the `-V/--version` name for application purposes
+is discouraged: it conflicts with the widely-understood convention and requires
+special-case handling in any tool that parses `--help` output. Prefer an explicit name
+such as `--crate-version` or `--output-version` instead.
+
 ## Environment requirements
 
 | Tool | Purpose |
