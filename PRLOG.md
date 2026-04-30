@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - use cimg/base:stable + binstall bootstrap in regenerate-orb(pr [#13])
+- export ~/.cargo/bin to PATH after binstall bootstrap(pr [#14])
 
 ## [0.0.5] - 2026-04-30
 
@@ -56,6 +57,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#10]: https://github.com/jerus-org/gen-circleci-orb/pull/10
 [#11]: https://github.com/jerus-org/gen-circleci-orb/pull/11
 [#13]: https://github.com/jerus-org/gen-circleci-orb/pull/13
+[#14]: https://github.com/jerus-org/gen-circleci-orb/pull/14
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.5...HEAD
 [0.0.5]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.4...v0.0.5
 [0.0.4]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.3...v0.0.4
