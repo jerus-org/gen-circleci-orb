@@ -73,9 +73,22 @@ fn render_subcommand(sub: &SubCommand, binary: &str, files: &mut HashMap<PathBuf
     }
 }
 
+/// CircleCI job parameter names that are reserved by the platform and cannot be
+/// used as user-defined parameters. Commands have no such restriction.
+const RESERVED_JOB_PARAMS: &[&str] = &[
+    "name",
+    "type",
+    "filters",
+    "matrix",
+    "requires",
+    "context",
+    "pre_steps",
+    "post_steps",
+];
+
 fn render_command(sub: &SubCommand, binary: &str) -> String {
-    let parameters = build_orb_parameters(sub);
-    let step = build_run_step(sub, binary);
+    let parameters = build_orb_parameters(sub, &[]);
+    let step = build_run_step(sub, binary, &[]);
     let cmd = OrbCommand {
         description: sub.description.clone(),
         parameters,
@@ -85,9 +98,9 @@ fn render_command(sub: &SubCommand, binary: &str) -> String {
 }
 
 fn render_job(sub: &SubCommand) -> String {
-    let parameters = build_orb_parameters(sub);
+    let parameters = build_orb_parameters(sub, RESERVED_JOB_PARAMS);
     let checkout_step: serde_yaml::Value = serde_yaml::Value::String("checkout".to_string());
-    let invoke_step = build_invoke_step(sub);
+    let invoke_step = build_invoke_step(sub, RESERVED_JOB_PARAMS);
     let job = OrbJob {
         description: format!("Run {} {} in a dedicated job.", sub.name, "command"),
         executor: "default".to_string(),
@@ -136,9 +149,12 @@ fn render_dockerfile(binary: &str, method: &InstallMethod, base_image: &str) -> 
     format!("FROM {base_image}\n{install_block}\n")
 }
 
-fn build_orb_parameters(sub: &SubCommand) -> IndexMap<String, OrbParameter> {
+fn build_orb_parameters(sub: &SubCommand, skip: &[&str]) -> IndexMap<String, OrbParameter> {
     let mut params = IndexMap::new();
     for p in &sub.parameters {
+        if skip.contains(&p.long_name.as_str()) {
+            continue;
+        }
         let (type_str, enum_vals) = match &p.param_type {
             ParamType::String => ("string".to_string(), None),
             ParamType::Boolean => ("boolean".to_string(), None),
@@ -177,10 +193,13 @@ fn build_orb_parameters(sub: &SubCommand) -> IndexMap<String, OrbParameter> {
 }
 
 /// Build the `run:` step for a command, interpolating all parameters.
-fn build_run_step(sub: &SubCommand, binary: &str) -> serde_yaml::Value {
+fn build_run_step(sub: &SubCommand, binary: &str, skip: &[&str]) -> serde_yaml::Value {
     let mut cmd_parts: Vec<String> = vec![format!("{} {}", binary, sub.name.replace('_', "-"))];
 
     for p in &sub.parameters {
+        if skip.contains(&p.long_name.as_str()) {
+            continue;
+        }
         let flag = format!("--{}", p.long_name.replace('_', "-"));
         match &p.param_type {
             ParamType::Boolean => {
@@ -224,9 +243,12 @@ fn build_run_step(sub: &SubCommand, binary: &str) -> serde_yaml::Value {
 }
 
 /// Build the command invocation step for a job.
-fn build_invoke_step(sub: &SubCommand) -> serde_yaml::Value {
+fn build_invoke_step(sub: &SubCommand, skip: &[&str]) -> serde_yaml::Value {
     let mut invoke_map = serde_yaml::Mapping::new();
     for p in &sub.parameters {
+        if skip.contains(&p.long_name.as_str()) {
+            continue;
+        }
         invoke_map.insert(
             serde_yaml::Value::String(p.long_name.clone()),
             serde_yaml::Value::String(format!("<< parameters.{} >>", p.long_name)),
@@ -587,6 +609,55 @@ mod tests {
         assert!(
             content.contains("checkout"),
             "job missing checkout step:\n{content}"
+        );
+    }
+
+    #[test]
+    fn job_excludes_reserved_circleci_parameter_names() {
+        // CircleCI reserves "name" (and others) as job-level parameters.
+        // The generator must omit reserved names from job files so orb pack
+        // does not reject the output with "Reserved job parameter name: 'name'".
+        // The command file is NOT affected — commands have no such restriction.
+        let params = vec![
+            Parameter {
+                long_name: "name".to_string(),
+                short: Some('n'),
+                param_type: ParamType::String,
+                default: None,
+                required: false,
+                description: "Name for the output.".to_string(),
+            },
+            Parameter {
+                long_name: "output".to_string(),
+                short: Some('o'),
+                param_type: ParamType::String,
+                default: Some("./dist".to_string()),
+                required: false,
+                description: "Output dir.".to_string(),
+            },
+        ];
+        let sub = make_leaf("generate", params);
+        let cli = make_cli("mytool", vec![sub]);
+        let files = generate(&cli, &default_opts());
+
+        // Job must NOT contain `name:` as a parameter key
+        let job = &files[&PathBuf::from("src/jobs/generate.yml")];
+        assert!(
+            !job.contains("name:\n") && !job.contains("  name:"),
+            "job must not contain reserved parameter 'name':\n{job}"
+        );
+
+        // Command may still contain `name:` — no restriction applies there
+        let cmd = &files[&PathBuf::from("src/commands/generate.yml")];
+        assert!(
+            cmd.contains("name:"),
+            "command should still expose the 'name' parameter:\n{cmd}"
+        );
+
+        // Non-reserved param must still appear in the job
+        assert!(
+            job.contains("output:"),
+            "job must still contain non-reserved parameter 'output':\n{job}"
         );
     }
 

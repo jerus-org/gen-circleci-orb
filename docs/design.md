@@ -592,3 +592,4 @@ This is the same pattern currently used by the `circleci-toolkit` orb itself.
 | Non-crates.io publishing | For non-Rust CLIs the crates.io step is skipped; future support for language-specific registries (npm, PyPI, etc.) |
 | Separate container repo scaffolding | Option to generate a dedicated container repo (ci-container / zola-container pattern) for teams that prefer the separation |
 | orb-tools version auto-update | Renovate-style automation to keep the pinned orb-tools version current in generated configs |
+| Wire `regenerate-orb` into an existing build job | MVP generates a dedicated `build-binary` job. A future `--build-job <name>` option would instead add a `persist_to_workspace` post-step to a user-specified existing build job in the workflow, attaching that workspace to `regenerate-orb`. This avoids a redundant build when the project already compiles the binary as part of its normal CI test suite. |
