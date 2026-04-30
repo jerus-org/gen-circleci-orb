@@ -30,7 +30,32 @@ help text but works on any tool that follows the same conventions:
   `[...]` bracket group is required; a flag inside `[OPTIONS]` or another `[...]` group
   is optional, even if it carries no default value
 
-The built-in `help` subcommand is automatically excluded from the generated output.
+Two built-in flags are automatically excluded from the generated output:
+
+- The `help` subcommand and `-h/--help` flag
+- The `-V/--version` flag **when it has no `<VALUE>` metavar** — this is the clap
+  built-in that prints the binary version and exits
+
+An application flag that happens to be named `--version` but carries a `<VALUE>` metavar
+(e.g. `--version <VERSION>`) is **not** excluded — it is treated as a regular string
+parameter.
+
+### Best practice: avoid reusing reserved flag names
+
+The flags `-h/--help` and `-V/--version` have widely-understood, tool-agnostic meanings
+established by POSIX convention and reinforced by clap's defaults. Using them for
+application-level purposes creates ambiguity:
+
+- Tools and scripts that parse `--help` output (including `gen-circleci-orb`) must
+  special-case the flag to distinguish built-in from application use.
+- Users who type `--version` expecting a version string are surprised when the flag
+  instead accepts a value.
+- Third-party documentation generators, shell completions, and other tooling may
+  misinterpret the flag.
+
+If a subcommand needs to accept a version string, prefer an explicit name that describes
+what the version is for — for example `--crate-version`, `--server-version`, or
+`--output-version`.
 
 ## Generated file structure
 
