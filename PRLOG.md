@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - use cimg/base:stable + binstall bootstrap in regenerate-orb(pr [#13])
 - export ~/.cargo/bin to PATH after binstall bootstrap(pr [#14])
 - use ubuntu:24.04 for regenerate-orb (GLIBC 2.39)(pr [#15])
+- skip reserved CircleCI job parameter names(pr [#16])
 
 ## [0.0.5] - 2026-04-30
 
@@ -60,6 +61,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#13]: https://github.com/jerus-org/gen-circleci-orb/pull/13
 [#14]: https://github.com/jerus-org/gen-circleci-orb/pull/14
 [#15]: https://github.com/jerus-org/gen-circleci-orb/pull/15
+[#16]: https://github.com/jerus-org/gen-circleci-orb/pull/16
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.5...HEAD
 [0.0.5]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.4...v0.0.5
 [0.0.4]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.3...v0.0.4
