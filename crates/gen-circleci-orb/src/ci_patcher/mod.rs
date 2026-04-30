@@ -253,12 +253,13 @@ fn regenerate_orb_job(opts: &PatchOpts) -> Vec<String> {
     vec![
         "  regenerate-orb:".to_string(),
         "    docker:".to_string(),
-        "      - image: cimg/base:stable".to_string(),
+        "      - image: debian:12-slim".to_string(),
         "    steps:".to_string(),
         "      - checkout".to_string(),
         "      - run:".to_string(),
         "          name: Install gen-circleci-orb".to_string(),
         "          command: |".to_string(),
+        "            apt-get update -qq && apt-get install -y --no-install-recommends curl ca-certificates".to_string(),
         "            curl -L --proto '=https' --tlsv1.2 -sSf \\".to_string(),
         "              https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash".to_string(),
         "            echo 'export PATH=\"$HOME/.cargo/bin:$PATH\"' >> \"$BASH_ENV\"".to_string(),
@@ -508,14 +509,26 @@ workflows:
     #[test]
     fn regenerate_orb_job_uses_base_image_with_binstall_bootstrap() {
         let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
-        // Must use cimg/base:stable — cimg/rust:stable does not exist as a valid Docker tag
+        // Must use debian:12-slim — consistent with the ci-container build environment
+        // (rust:1.94.1 = debian:bookworm, GLIBC 2.36). cimg/base:stable is Ubuntu 20.04
+        // (GLIBC 2.31) which cannot run binaries compiled on Debian 12.
         assert!(
-            output.contains("image: cimg/base:stable"),
-            "regenerate-orb job must use cimg/base:stable:\n{output}"
+            output.contains("image: debian:12-slim"),
+            "regenerate-orb job must use debian:12-slim (GLIBC 2.36, matches build env):\n{output}"
         );
+        // The regenerate-orb job block specifically must not use cimg/base:stable
+        let regen_block = output
+            .split("  regenerate-orb:")
+            .nth(1)
+            .expect("no regenerate-orb job in output");
         assert!(
-            !output.contains("image: cimg/rust:stable"),
-            "regenerate-orb job must NOT use cimg/rust:stable (tag does not exist):\n{output}"
+            !regen_block.contains("cimg/base:stable"),
+            "regenerate-orb job must NOT use cimg/base:stable (Ubuntu 20.04, GLIBC 2.31):\n{regen_block}"
+        );
+        // ubuntu:24.04 is minimal — curl must be installed before the binstall bootstrap
+        assert!(
+            output.contains("apt-get install"),
+            "must install curl before binstall bootstrap on ubuntu:24.04:\n{output}"
         );
         // Must bootstrap binstall before using cargo-binstall
         assert!(

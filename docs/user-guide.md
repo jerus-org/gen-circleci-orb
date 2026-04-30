@@ -198,12 +198,13 @@ Added to `jobs:`:
 ```yaml
 regenerate-orb:
   docker:
-    - image: cimg/base:stable
+    - image: debian:12-slim
   steps:
     - checkout
     - run:
         name: Install gen-circleci-orb
         command: |
+          apt-get update -qq && apt-get install -y --no-install-recommends curl ca-certificates
           curl -L --proto '=https' --tlsv1.2 -sSf \
             https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
           echo 'export PATH="$HOME/.cargo/bin:$PATH"' >> "$BASH_ENV"
@@ -218,10 +219,12 @@ regenerate-orb:
             --orb-dir <orb-dir>
 ```
 
-`cimg/base:stable` is used because `gen-circleci-orb` ships pre-built binaries via
-cargo-binstall — no Rust toolchain is required. The binstall bootstrap script downloads
-a pre-built `cargo-binstall` binary; the second command installs `gen-circleci-orb` from
-its published release.
+`debian:12-slim` is used because `gen-circleci-orb` is compiled in the same Debian 12
+environment (GLIBC 2.36) as the rest of the CI toolchain (`rust:1.94.1` = `debian:bookworm`).
+`cimg/base:stable` (Ubuntu 20.04, GLIBC 2.31) is too old to run the binary. `curl` and
+`ca-certificates` are installed first since `debian:12-slim` is a minimal image. The
+binstall bootstrap script downloads a pre-built `cargo-binstall` binary; no Rust toolchain
+is required.
 
 Added to the build workflow:
 ```yaml
