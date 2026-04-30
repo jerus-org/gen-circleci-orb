@@ -39,27 +39,43 @@ pub fn patch_build(content: &str, opts: &PatchOpts) -> (String, PatchReport) {
         report.insertions.push("orb-tools orb".to_string());
     }
 
-    // 2. Add jobs section if missing, then add regenerate-orb job
-    if content.contains("regenerate-orb:") {
-        report.skipped.push("regenerate-orb job".to_string());
+    // 2. Add jobs section if missing, then add build-binary + regenerate-orb jobs
+    let jobs_present = content.contains("build-binary:") && content.contains("regenerate-orb:");
+    if jobs_present {
+        report
+            .skipped
+            .push("build-binary and regenerate-orb jobs".to_string());
     } else {
-        let job_block = regenerate_orb_job(opts);
+        let build_block = build_binary_job(opts);
+        let regen_block = regenerate_orb_job(opts);
         if let Some(pos) = find_section_end(&lines, "jobs:") {
-            for (i, l) in job_block.iter().enumerate() {
+            for (i, l) in build_block.iter().enumerate() {
                 lines.insert(pos + i, l.clone());
+            }
+            let after_build = pos + build_block.len();
+            for (i, l) in regen_block.iter().enumerate() {
+                lines.insert(after_build + i, l.clone());
             }
         } else {
             // No jobs section — insert before workflows:
             if let Some(wf_pos) = find_top_level(&lines, "workflows:") {
                 lines.insert(wf_pos, String::new());
                 lines.insert(wf_pos, String::new());
-                for (i, _) in job_block.iter().rev().enumerate() {
-                    lines.insert(wf_pos, job_block[job_block.len() - 1 - i].clone());
+                // Insert regen block first (it goes last in jobs), then build block before it
+                let regen_len = regen_block.len();
+                for (i, _) in regen_block.iter().rev().enumerate() {
+                    lines.insert(wf_pos, regen_block[regen_len - 1 - i].clone());
+                }
+                let build_len = build_block.len();
+                for (i, _) in build_block.iter().rev().enumerate() {
+                    lines.insert(wf_pos, build_block[build_len - 1 - i].clone());
                 }
                 lines.insert(wf_pos, "jobs:".to_string());
             }
         }
-        report.insertions.push("regenerate-orb job".to_string());
+        report
+            .insertions
+            .push("build-binary and regenerate-orb jobs".to_string());
     }
 
     // 3. Add workflow steps (regenerate-orb, orb-tools/pack, orb-tools/validate)
@@ -246,6 +262,23 @@ fn find_workflow_jobs_end(lines: &[String], workflow: &str) -> Option<usize> {
     Some(lines.len())
 }
 
+fn build_binary_job(opts: &PatchOpts) -> Vec<String> {
+    let binary = &opts.binary;
+    vec![
+        "  build-binary:".to_string(),
+        "    docker:".to_string(),
+        "      - image: jerusdp/ci-rust:rolling-6mo".to_string(),
+        "    steps:".to_string(),
+        "      - checkout".to_string(),
+        "      - run:".to_string(),
+        "          name: Build binary".to_string(),
+        "          command: cargo build --release".to_string(),
+        "      - persist_to_workspace:".to_string(),
+        "          root: target/release".to_string(),
+        format!("          paths: [{binary}]"),
+    ]
+}
+
 fn regenerate_orb_job(opts: &PatchOpts) -> Vec<String> {
     let binary = &opts.binary;
     let namespace = &opts.namespace;
@@ -253,21 +286,18 @@ fn regenerate_orb_job(opts: &PatchOpts) -> Vec<String> {
     vec![
         "  regenerate-orb:".to_string(),
         "    docker:".to_string(),
-        "      - image: debian:12-slim".to_string(),
+        "      - image: jerusdp/ci-rust:rolling-6mo".to_string(),
         "    steps:".to_string(),
         "      - checkout".to_string(),
+        "      - attach_workspace:".to_string(),
+        "          at: /tmp/bin".to_string(),
         "      - run:".to_string(),
         "          name: Install gen-circleci-orb".to_string(),
-        "          command: |".to_string(),
-        "            apt-get update -qq && apt-get install -y --no-install-recommends curl ca-certificates".to_string(),
-        "            curl -L --proto '=https' --tlsv1.2 -sSf \\".to_string(),
-        "              https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash".to_string(),
-        "            echo 'export PATH=\"$HOME/.cargo/bin:$PATH\"' >> \"$BASH_ENV\"".to_string(),
-        "            source \"$BASH_ENV\"".to_string(),
-        "            cargo-binstall --no-confirm gen-circleci-orb".to_string(),
+        "          command: cargo binstall --no-confirm gen-circleci-orb".to_string(),
         "      - run:".to_string(),
         "          name: Regenerate orb source".to_string(),
         "          command: |".to_string(),
+        "            export PATH=\"/tmp/bin:$PATH\"".to_string(),
         "            gen-circleci-orb generate \\".to_string(),
         format!("              --binary {binary} \\"),
         format!("              --namespace {namespace} \\"),
@@ -279,11 +309,15 @@ fn pack_validate_steps(opts: &PatchOpts) -> Vec<String> {
     let orb_dir = &opts.orb_dir;
     let mut steps = vec![];
 
-    // regenerate-orb workflow step
-    steps.push("      - regenerate-orb:".to_string());
+    // build-binary workflow step — compiles the binary and persists to workspace
+    steps.push("      - build-binary:".to_string());
     if let Some(req) = &opts.requires_job {
         steps.push(format!("          requires: [{req}]"));
     }
+
+    // regenerate-orb workflow step — attaches workspace, installs gen-circleci-orb, runs generate
+    steps.push("      - regenerate-orb:".to_string());
+    steps.push("          requires: [build-binary]".to_string());
 
     // orb-tools/pack (source_dir + workspace persistence; validates on pack)
     steps.push("      - orb-tools/pack:".to_string());
@@ -493,12 +527,75 @@ workflows:
     }
 
     #[test]
+    fn patch_build_adds_build_binary_job() {
+        let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
+        assert!(
+            output.contains("  build-binary:"),
+            "missing build-binary job:\n{output}"
+        );
+    }
+
+    /// Collect lines belonging to a top-level job block (2-space indented header).
+    /// Returns the content lines (not the header itself) as a single string.
+    fn job_block(output: &str, job_name: &str) -> String {
+        let header = format!("  {job_name}:");
+        let mut in_block = false;
+        let mut result = String::new();
+        for line in output.lines() {
+            if line.trim_end() == header.trim_end() {
+                in_block = true;
+                continue;
+            }
+            if in_block {
+                // A non-empty line starting with ≤2 spaces that isn't the header means a new
+                // top-level section or job; the block is done.
+                if !line.is_empty() && !line.starts_with("   ") && !line.starts_with('\t') {
+                    break;
+                }
+                result.push_str(line);
+                result.push('\n');
+            }
+        }
+        result
+    }
+
+    #[test]
+    fn build_binary_uses_ci_rust_image() {
+        let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
+        let block = job_block(&output, "build-binary");
+        assert!(
+            block.contains("jerusdp/ci-rust:rolling-6mo"),
+            "build-binary must use ci-rust image:\n{block}"
+        );
+    }
+
+    #[test]
+    fn build_binary_runs_cargo_build_release() {
+        let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
+        let block = job_block(&output, "build-binary");
+        assert!(
+            block.contains("cargo build --release"),
+            "build-binary must run cargo build --release:\n{block}"
+        );
+    }
+
+    #[test]
+    fn build_binary_persists_to_workspace() {
+        let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
+        let block = job_block(&output, "build-binary");
+        assert!(
+            block.contains("persist_to_workspace"),
+            "build-binary must persist binary to workspace:\n{block}"
+        );
+    }
+
+    #[test]
     fn patch_build_adds_regenerate_orb_job() {
         let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
         assert!(output.contains("regenerate-orb:"), "missing job:\n{output}");
         assert!(
-            output.contains("cargo-binstall --no-confirm gen-circleci-orb"),
-            "missing install step (must use cargo-binstall binary, not cargo binstall subcommand):\n{output}"
+            output.contains("cargo binstall --no-confirm gen-circleci-orb"),
+            "missing install step:\n{output}"
         );
         assert!(
             output.contains("gen-circleci-orb generate"),
@@ -507,39 +604,65 @@ workflows:
     }
 
     #[test]
-    fn regenerate_orb_job_uses_base_image_with_binstall_bootstrap() {
+    fn regenerate_orb_uses_ci_rust_image_and_attaches_workspace() {
         let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
-        // Must use debian:12-slim — consistent with the ci-container build environment
-        // (rust:1.94.1 = debian:bookworm, GLIBC 2.36). cimg/base:stable is Ubuntu 20.04
-        // (GLIBC 2.31) which cannot run binaries compiled on Debian 12.
+        let block = job_block(&output, "regenerate-orb");
         assert!(
-            output.contains("image: debian:12-slim"),
-            "regenerate-orb job must use debian:12-slim (GLIBC 2.36, matches build env):\n{output}"
+            block.contains("jerusdp/ci-rust:rolling-6mo"),
+            "regenerate-orb must use ci-rust image:\n{block}"
         );
-        // The regenerate-orb job block specifically must not use cimg/base:stable
-        let regen_block = output
-            .split("  regenerate-orb:")
+        assert!(
+            block.contains("attach_workspace"),
+            "regenerate-orb must attach workspace to get the binary:\n{block}"
+        );
+        // Binary is available from workspace; no binstall of target binary
+        assert!(
+            !block.contains("cargo binstall --no-confirm mytool"),
+            "regenerate-orb must NOT binstall the target binary — it comes from the workspace:\n{block}"
+        );
+    }
+
+    #[test]
+    fn workflow_build_binary_precedes_regenerate_orb() {
+        let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
+        let bb_pos = output
+            .find("      - build-binary:")
+            .expect("no build-binary workflow step");
+        let regen_pos = output
+            .find("      - regenerate-orb:")
+            .expect("no regenerate-orb workflow step");
+        assert!(
+            bb_pos < regen_pos,
+            "build-binary must appear before regenerate-orb in the workflow"
+        );
+    }
+
+    #[test]
+    fn build_binary_workflow_step_requires_configured_job() {
+        let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
+        // The build-binary workflow step must require the user-configured prerequisite
+        let after_bb = output
+            .split("      - build-binary:")
             .nth(1)
-            .expect("no regenerate-orb job in output");
+            .expect("no build-binary workflow step");
+        let step_block = after_bb.split("      - ").next().unwrap_or(after_bb);
         assert!(
-            !regen_block.contains("cimg/base:stable"),
-            "regenerate-orb job must NOT use cimg/base:stable (Ubuntu 20.04, GLIBC 2.31):\n{regen_block}"
+            step_block.contains("requires: [common-tests]"),
+            "build-binary workflow step must require the configured job:\n{step_block}"
         );
-        // ubuntu:24.04 is minimal — curl must be installed before the binstall bootstrap
+    }
+
+    #[test]
+    fn regenerate_orb_workflow_step_requires_build_binary() {
+        let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
+        let after_regen = output
+            .split("      - regenerate-orb:")
+            .nth(1)
+            .expect("no regenerate-orb workflow step");
+        let step_block = after_regen.split("      - ").next().unwrap_or(after_regen);
         assert!(
-            output.contains("apt-get install"),
-            "must install curl before binstall bootstrap on ubuntu:24.04:\n{output}"
-        );
-        // Must bootstrap binstall before using cargo-binstall
-        assert!(
-            output.contains("cargo-bins/cargo-binstall"),
-            "missing binstall bootstrap URL:\n{output}"
-        );
-        // Must export ~/.cargo/bin onto PATH and persist to $BASH_ENV so the
-        // generate step in the next run: block can find gen-circleci-orb
-        assert!(
-            output.contains("BASH_ENV"),
-            "must persist ~/.cargo/bin to BASH_ENV for subsequent steps:\n{output}"
+            step_block.contains("requires: [build-binary]"),
+            "regenerate-orb workflow step must require build-binary:\n{step_block}"
         );
     }
 
@@ -584,8 +707,8 @@ workflows:
             second_report
                 .skipped
                 .iter()
-                .any(|s| s.contains("regenerate-orb")),
-            "expected regenerate-orb skipped on second run"
+                .any(|s| s.contains("build-binary")),
+            "expected build-binary and regenerate-orb skipped on second run"
         );
     }
 

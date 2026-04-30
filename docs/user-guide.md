@@ -196,40 +196,53 @@ orb-tools: circleci/orb-tools@<version>
 
 Added to `jobs:`:
 ```yaml
-regenerate-orb:
+build-binary:
   docker:
-    - image: debian:12-slim
+    - image: jerusdp/ci-rust:rolling-6mo
   steps:
     - checkout
     - run:
+        name: Build binary
+        command: cargo build --release
+    - persist_to_workspace:
+        root: target/release
+        paths: [<binary>]
+
+regenerate-orb:
+  docker:
+    - image: jerusdp/ci-rust:rolling-6mo
+  steps:
+    - checkout
+    - attach_workspace:
+        at: /tmp/bin
+    - run:
         name: Install gen-circleci-orb
-        command: |
-          apt-get update -qq && apt-get install -y --no-install-recommends curl ca-certificates
-          curl -L --proto '=https' --tlsv1.2 -sSf \
-            https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
-          echo 'export PATH="$HOME/.cargo/bin:$PATH"' >> "$BASH_ENV"
-          source "$BASH_ENV"
-          cargo-binstall --no-confirm gen-circleci-orb
+        command: cargo binstall --no-confirm gen-circleci-orb
     - run:
         name: Regenerate orb source
         command: |
+          export PATH="/tmp/bin:$PATH"
           gen-circleci-orb generate \
             --binary <binary> \
             --namespace <namespace> \
             --orb-dir <orb-dir>
 ```
 
-`debian:12-slim` is used because `gen-circleci-orb` is compiled in the same Debian 12
-environment (GLIBC 2.36) as the rest of the CI toolchain (`rust:1.94.1` = `debian:bookworm`).
-`cimg/base:stable` (Ubuntu 20.04, GLIBC 2.31) is too old to run the binary. `curl` and
-`ca-certificates` are installed first since `debian:12-slim` is a minimal image. The
-binstall bootstrap script downloads a pre-built `cargo-binstall` binary; no Rust toolchain
-is required.
+`build-binary` compiles the binary from the current source and persists it to the CircleCI
+workspace. This ensures `regenerate-orb` always introspects the binary that matches the
+current commit, not a previously published release. Both jobs use `jerusdp/ci-rust:rolling-6mo`,
+which provides the Rust toolchain and has `cargo-binstall` pre-installed.
+
+`regenerate-orb` attaches the workspace at `/tmp/bin`, installs `gen-circleci-orb` via
+`cargo binstall` (no bootstrap needed — `cargo-binstall` is already in the ci-rust image),
+then adds `/tmp/bin` to `$PATH` so the binary is discoverable by name.
 
 Added to the build workflow:
 ```yaml
-- regenerate-orb:
+- build-binary:
     requires: [<requires-job>]
+- regenerate-orb:
+    requires: [build-binary]
 - orb-tools/pack:
     name: pack-orb
     source_dir: <orb-dir>/src
@@ -240,8 +253,10 @@ Added to the build workflow:
     requires: [pack-orb]
 ```
 
-`orb-tools/pack` (circleci/orb-tools@12) validates the orb during packing and persists
-it to the workspace. `orb-tools/review` checks for orb best-practice violations.
+`build-binary` depends on the user-configured prerequisite job (e.g. `toolkit/common_tests`)
+so the binary is only built after the test suite passes. `orb-tools/pack` validates the orb
+during packing and persists it to the workspace. `orb-tools/review` checks for orb
+best-practice violations.
 
 ### release.yml changes
 
