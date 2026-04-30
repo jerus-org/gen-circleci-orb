@@ -253,12 +253,15 @@ fn regenerate_orb_job(opts: &PatchOpts) -> Vec<String> {
     vec![
         "  regenerate-orb:".to_string(),
         "    docker:".to_string(),
-        "      - image: cimg/rust:stable".to_string(),
+        "      - image: cimg/base:stable".to_string(),
         "    steps:".to_string(),
         "      - checkout".to_string(),
         "      - run:".to_string(),
         "          name: Install gen-circleci-orb".to_string(),
-        "          command: cargo binstall --no-confirm gen-circleci-orb".to_string(),
+        "          command: |".to_string(),
+        "            curl -L --proto '=https' --tlsv1.2 -sSf \\".to_string(),
+        "              https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash".to_string(),
+        "            cargo-binstall --no-confirm gen-circleci-orb".to_string(),
         "      - run:".to_string(),
         "          name: Regenerate orb source".to_string(),
         "          command: |".to_string(),
@@ -491,12 +494,31 @@ workflows:
         let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
         assert!(output.contains("regenerate-orb:"), "missing job:\n{output}");
         assert!(
-            output.contains("cargo binstall --no-confirm gen-circleci-orb"),
-            "missing install step:\n{output}"
+            output.contains("cargo-binstall --no-confirm gen-circleci-orb"),
+            "missing install step (must use cargo-binstall binary, not cargo binstall subcommand):\n{output}"
         );
         assert!(
             output.contains("gen-circleci-orb generate"),
             "missing generate step:\n{output}"
+        );
+    }
+
+    #[test]
+    fn regenerate_orb_job_uses_base_image_with_binstall_bootstrap() {
+        let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
+        // Must use cimg/base:stable — cimg/rust:stable does not exist as a valid Docker tag
+        assert!(
+            output.contains("image: cimg/base:stable"),
+            "regenerate-orb job must use cimg/base:stable:\n{output}"
+        );
+        assert!(
+            !output.contains("image: cimg/rust:stable"),
+            "regenerate-orb job must NOT use cimg/rust:stable (tag does not exist):\n{output}"
+        );
+        // Must bootstrap binstall before using cargo-binstall
+        assert!(
+            output.contains("cargo-bins/cargo-binstall"),
+            "missing binstall bootstrap URL:\n{output}"
         );
     }
 
