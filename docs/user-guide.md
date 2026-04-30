@@ -198,12 +198,15 @@ Added to `jobs:`:
 ```yaml
 regenerate-orb:
   docker:
-    - image: cimg/rust:stable
+    - image: cimg/base:stable
   steps:
     - checkout
     - run:
         name: Install gen-circleci-orb
-        command: cargo binstall --no-confirm gen-circleci-orb
+        command: |
+          curl -L --proto '=https' --tlsv1.2 -sSf \
+            https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
+          cargo-binstall --no-confirm gen-circleci-orb
     - run:
         name: Regenerate orb source
         command: |
@@ -212,6 +215,11 @@ regenerate-orb:
             --namespace <namespace> \
             --orb-dir <orb-dir>
 ```
+
+`cimg/base:stable` is used because `gen-circleci-orb` ships pre-built binaries via
+cargo-binstall — no Rust toolchain is required. The binstall bootstrap script downloads
+a pre-built `cargo-binstall` binary; the second command installs `gen-circleci-orb` from
+its published release.
 
 Added to the build workflow:
 ```yaml
