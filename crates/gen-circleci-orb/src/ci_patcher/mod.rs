@@ -261,6 +261,8 @@ fn regenerate_orb_job(opts: &PatchOpts) -> Vec<String> {
         "          command: |".to_string(),
         "            curl -L --proto '=https' --tlsv1.2 -sSf \\".to_string(),
         "              https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash".to_string(),
+        "            echo 'export PATH=\"$HOME/.cargo/bin:$PATH\"' >> \"$BASH_ENV\"".to_string(),
+        "            source \"$BASH_ENV\"".to_string(),
         "            cargo-binstall --no-confirm gen-circleci-orb".to_string(),
         "      - run:".to_string(),
         "          name: Regenerate orb source".to_string(),
@@ -519,6 +521,12 @@ workflows:
         assert!(
             output.contains("cargo-bins/cargo-binstall"),
             "missing binstall bootstrap URL:\n{output}"
+        );
+        // Must export ~/.cargo/bin onto PATH and persist to $BASH_ENV so the
+        // generate step in the next run: block can find gen-circleci-orb
+        assert!(
+            output.contains("BASH_ENV"),
+            "must persist ~/.cargo/bin to BASH_ENV for subsequent steps:\n{output}"
         );
     }
 

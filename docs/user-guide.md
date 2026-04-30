@@ -206,6 +206,8 @@ regenerate-orb:
         command: |
           curl -L --proto '=https' --tlsv1.2 -sSf \
             https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
+          echo 'export PATH="$HOME/.cargo/bin:$PATH"' >> "$BASH_ENV"
+          source "$BASH_ENV"
           cargo-binstall --no-confirm gen-circleci-orb
     - run:
         name: Regenerate orb source
