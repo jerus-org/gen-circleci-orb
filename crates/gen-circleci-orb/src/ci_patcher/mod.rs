@@ -141,6 +141,15 @@ pub fn patch_release(content: &str, opts: &PatchOpts) -> (String, PatchReport) {
             for (i, l) in job_block.iter().enumerate() {
                 lines.insert(pos + i, l.clone());
             }
+        } else if let Some(wf_pos) = find_top_level(&lines, "workflows:") {
+            // No top-level jobs section — create one before workflows:
+            lines.insert(wf_pos, String::new());
+            lines.insert(wf_pos, String::new());
+            let job_len = job_block.len();
+            for (i, _) in job_block.iter().rev().enumerate() {
+                lines.insert(wf_pos, job_block[job_len - 1 - i].clone());
+            }
+            lines.insert(wf_pos, "jobs:".to_string());
         }
         report.insertions.push("build-container job".to_string());
     }
@@ -267,7 +276,7 @@ fn build_binary_job(opts: &PatchOpts) -> Vec<String> {
     vec![
         "  build-binary:".to_string(),
         "    docker:".to_string(),
-        "      - image: jerusdp/ci-rust:rolling-6mo".to_string(),
+        "      - image: rust:latest".to_string(),
         "    steps:".to_string(),
         "      - checkout".to_string(),
         "      - run:".to_string(),
@@ -283,17 +292,16 @@ fn regenerate_orb_job(opts: &PatchOpts) -> Vec<String> {
     let binary = &opts.binary;
     let namespace = &opts.namespace;
     let orb_dir = &opts.orb_dir;
+    // gen-circleci-orb is pre-installed in its own Docker image (jerusdp/gen-circleci-orb).
+    // The target binary is attached from the build-binary workspace — no runtime installs needed.
     vec![
         "  regenerate-orb:".to_string(),
         "    docker:".to_string(),
-        "      - image: jerusdp/ci-rust:rolling-6mo".to_string(),
+        "      - image: jerusdp/gen-circleci-orb:latest".to_string(),
         "    steps:".to_string(),
         "      - checkout".to_string(),
         "      - attach_workspace:".to_string(),
         "          at: /tmp/bin".to_string(),
-        "      - run:".to_string(),
-        "          name: Install gen-circleci-orb".to_string(),
-        "          command: cargo-binstall --no-confirm gen-circleci-orb".to_string(),
         "      - run:".to_string(),
         "          name: Regenerate orb source".to_string(),
         "          command: |".to_string(),
@@ -480,6 +488,25 @@ workflows:
       - release-mytool
 ";
 
+    // Toolkit-style release.yml: no top-level jobs section, only orbs + workflows.
+    // This is the common case for projects using only toolkit jobs.
+    const RELEASE_FIXTURE_NO_JOBS: &str = "\
+version: 2.1
+
+orbs:
+  toolkit: jerus-org/circleci-toolkit@6.0.0
+
+workflows:
+  release:
+    jobs:
+      - toolkit/release_crate:
+          name: release-mytool
+          context: [release]
+      - toolkit/release_prlog:
+          requires: [release-mytool]
+          context: [release]
+";
+
     // ── patch_build (no pre-existing jobs section) ───────────────────────────
 
     #[test]
@@ -560,12 +587,12 @@ workflows:
     }
 
     #[test]
-    fn build_binary_uses_ci_rust_image() {
+    fn build_binary_uses_public_rust_image() {
         let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
         let block = job_block(&output, "build-binary");
         assert!(
-            block.contains("jerusdp/ci-rust:rolling-6mo"),
-            "build-binary must use ci-rust image:\n{block}"
+            block.contains("rust:latest"),
+            "build-binary must use the public rust:latest image, not a private CI image:\n{block}"
         );
     }
 
@@ -593,9 +620,14 @@ workflows:
     fn patch_build_adds_regenerate_orb_job() {
         let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
         assert!(output.contains("regenerate-orb:"), "missing job:\n{output}");
+        // gen-circleci-orb is pre-installed in its own image; no install step needed
         assert!(
-            output.contains("cargo-binstall --no-confirm gen-circleci-orb"),
-            "missing install step:\n{output}"
+            !output.contains("install-from-binstall-release.sh"),
+            "regenerate-orb must not bootstrap cargo-binstall — use the gen-circleci-orb image:\n{output}"
+        );
+        assert!(
+            !output.contains("cargo-binstall --no-confirm gen-circleci-orb"),
+            "regenerate-orb must not install gen-circleci-orb at runtime:\n{output}"
         );
         assert!(
             output.contains("gen-circleci-orb generate"),
@@ -604,21 +636,20 @@ workflows:
     }
 
     #[test]
-    fn regenerate_orb_uses_ci_rust_image_and_attaches_workspace() {
+    fn regenerate_orb_uses_gen_circleci_orb_image_and_attaches_workspace() {
         let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
         let block = job_block(&output, "regenerate-orb");
         assert!(
-            block.contains("jerusdp/ci-rust:rolling-6mo"),
-            "regenerate-orb must use ci-rust image:\n{block}"
+            block.contains("jerusdp/gen-circleci-orb:latest"),
+            "regenerate-orb must use the gen-circleci-orb Docker image (gen-circleci-orb is pre-installed):\n{block}"
         );
         assert!(
             block.contains("attach_workspace"),
-            "regenerate-orb must attach workspace to get the binary:\n{block}"
+            "regenerate-orb must attach workspace to get the target binary:\n{block}"
         );
-        // Binary is available from workspace; no binstall of target binary
         assert!(
-            !block.contains("cargo binstall --no-confirm mytool"),
-            "regenerate-orb must NOT binstall the target binary — it comes from the workspace:\n{block}"
+            !block.contains("cargo-binstall"),
+            "regenerate-orb must not install anything — gen-circleci-orb is in the image:\n{block}"
         );
     }
 
@@ -822,6 +853,27 @@ workflows:
         assert!(
             !output.contains("orb-path:"),
             "must not use deprecated orb-path:\n{output}"
+        );
+    }
+
+    #[test]
+    fn patch_release_adds_build_container_job_when_no_jobs_section() {
+        // release.yml with only toolkit jobs (no top-level jobs: section) is the
+        // common case. patch_release must create the jobs: section and insert
+        // build-container, not silently skip it.
+        let (output, _) = patch_release(RELEASE_FIXTURE_NO_JOBS, &make_opts());
+        assert!(
+            output.contains("build-container:"),
+            "build-container job definition missing when no pre-existing jobs section:\n{output}"
+        );
+        let jobs_pos = output.find("\njobs:").expect("jobs: section not created");
+        let workflows_pos = output.find("\nworkflows:").expect("no workflows: section");
+        let job_def_pos = output
+            .find("  build-container:")
+            .expect("no build-container job definition");
+        assert!(
+            job_def_pos > jobs_pos && job_def_pos < workflows_pos,
+            "build-container definition must be in jobs: section, not workflows:\n{output}"
         );
     }
 }

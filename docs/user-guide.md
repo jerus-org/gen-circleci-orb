@@ -155,7 +155,7 @@ where `<docker-namespace>` is the value passed to `--docker-namespace` at `init`
 ```dockerfile
 FROM debian:12-slim
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && apt-get install -y --no-install-recommends ca-certificates curl git \
     && rm -rf /var/lib/apt/lists/* \
     && curl -L --proto '=https' --tlsv1.2 -sSf \
        https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash \
@@ -163,7 +163,8 @@ RUN apt-get update \
     && rm -rf /root/.cargo/registry /root/.cargo/git
 ```
 
-`debian:12-slim` provides glibc and TLS roots without unnecessary tooling. The
+`debian:12-slim` provides glibc and TLS roots without unnecessary tooling. `git` is
+included because CircleCI's `checkout` step requires it. The
 cargo-binstall bootstrap script downloads a pre-built binstall binary — no Rust toolchain
 is installed in the image. The cargo cache directories are removed after install to
 keep the image small.
@@ -173,7 +174,7 @@ With `--install-method apt`:
 ```dockerfile
 FROM debian:12-slim
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends <binary> \
+    && apt-get install -y --no-install-recommends git <binary> \
     && rm -rf /var/lib/apt/lists/*
 ```
 
@@ -198,7 +199,7 @@ Added to `jobs:`:
 ```yaml
 build-binary:
   docker:
-    - image: jerusdp/ci-rust:rolling-6mo
+    - image: rust:latest
   steps:
     - checkout
     - run:
@@ -210,14 +211,11 @@ build-binary:
 
 regenerate-orb:
   docker:
-    - image: jerusdp/ci-rust:rolling-6mo
+    - image: jerusdp/gen-circleci-orb:latest
   steps:
     - checkout
     - attach_workspace:
         at: /tmp/bin
-    - run:
-        name: Install gen-circleci-orb
-        command: cargo binstall --no-confirm gen-circleci-orb
     - run:
         name: Regenerate orb source
         command: |
@@ -228,14 +226,14 @@ regenerate-orb:
             --orb-dir <orb-dir>
 ```
 
-`build-binary` compiles the binary from the current source and persists it to the CircleCI
-workspace. This ensures `regenerate-orb` always introspects the binary that matches the
-current commit, not a previously published release. Both jobs use `jerusdp/ci-rust:rolling-6mo`,
-which provides the Rust toolchain and has `cargo-binstall` pre-installed.
+`build-binary` compiles the binary from the current source using the official public
+`rust:latest` image and persists it to the CircleCI workspace. This ensures `regenerate-orb`
+always introspects the binary that matches the current commit, not a previously published
+release.
 
-`regenerate-orb` attaches the workspace at `/tmp/bin`, installs `gen-circleci-orb` via
-`cargo binstall` (no bootstrap needed — `cargo-binstall` is already in the ci-rust image),
-then adds `/tmp/bin` to `$PATH` so the binary is discoverable by name.
+`regenerate-orb` uses the `jerusdp/gen-circleci-orb` Docker image, which has `gen-circleci-orb`
+pre-installed (`debian:12-slim` base). It attaches the workspace at `/tmp/bin` to get the target
+binary, adds it to `$PATH`, then runs `gen-circleci-orb generate`. No runtime installation needed.
 
 Added to the build workflow:
 ```yaml

@@ -13,6 +13,25 @@ parameters:
 orbs:
   toolkit: jerus-org/circleci-toolkit@6.1.4
 
+  orb-tools: circleci/orb-tools@12.3.3
+  docker: circleci/docker@3.2.0
+jobs:
+  build-container:
+    docker:
+      - image: cimg/base:stable
+    steps:
+      - checkout
+      - setup_remote_docker
+      - run:
+          name: Build Docker image
+          command: |
+            docker build -t jerusdp/gen-circleci-orb:${CIRCLE_TAG} orb
+      - run:
+          name: Push Docker image
+          command: |
+            docker push jerusdp/gen-circleci-orb:${CIRCLE_TAG}
+
+
 workflows:
   release:
     jobs:
@@ -47,3 +66,16 @@ workflows:
             - release
             - bot-check
             - pcu-app
+      - orb-tools/pack:
+          name: pack-orb-release
+          source_dir: orb/src
+          requires: [release-gen-circleci-orb]
+      - build-container:
+          requires: [release-gen-circleci-orb]
+          context: [docker-credentials]
+      - orb-tools/publish:
+          name: publish-orb-jerus-org
+          orb_name: jerus-org/gen-circleci-orb
+          pub_type: production
+          requires: [build-container, pack-orb-release]
+          context: [orb-publishing]
