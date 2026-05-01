@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - bootstrap cargo-binstall before installing gen-circleci-orb(pr [#18])
 - correct circleci/docker orb version to 3.0.1(pr [#19])
+- add vcs_type: github to orb-tools/publish(pr [#20])
 
 ## [0.0.7] - 2026-05-01
 
@@ -78,6 +79,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#17]: https://github.com/jerus-org/gen-circleci-orb/pull/17
 [#18]: https://github.com/jerus-org/gen-circleci-orb/pull/18
 [#19]: https://github.com/jerus-org/gen-circleci-orb/pull/19
+[#20]: https://github.com/jerus-org/gen-circleci-orb/pull/20
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.7...HEAD
 [0.0.7]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.6...v0.0.7
 [0.0.6]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.5...v0.0.6
