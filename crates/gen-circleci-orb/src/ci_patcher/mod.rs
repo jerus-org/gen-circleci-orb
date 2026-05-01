@@ -416,7 +416,7 @@ mod tests {
             requires_job: Some("common-tests".to_string()),
             release_after_job: Some("release-mytool".to_string()),
             orb_tools_version: "12.3.3".to_string(),
-            docker_orb_version: "3.2.0".to_string(),
+            docker_orb_version: "3.0.1".to_string(),
             docker_context: "docker-credentials".to_string(),
             orb_context: "orb-publishing".to_string(),
             mcp: false,
@@ -762,7 +762,7 @@ workflows:
     fn patch_release_adds_docker_and_orb_tools_orbs() {
         let (output, _) = patch_release(RELEASE_FIXTURE, &make_opts());
         assert!(
-            output.contains("docker: circleci/docker@3.2.0"),
+            output.contains("docker: circleci/docker@3.0.1"),
             "missing docker orb:\n{output}"
         );
         assert!(
