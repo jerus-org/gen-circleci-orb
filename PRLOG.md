@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- bootstrap cargo-binstall before installing gen-circleci-orb(pr [#18])
+
 ## [0.0.7] - 2026-05-01
 
 ### Fixed
@@ -69,6 +75,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#15]: https://github.com/jerus-org/gen-circleci-orb/pull/15
 [#16]: https://github.com/jerus-org/gen-circleci-orb/pull/16
 [#17]: https://github.com/jerus-org/gen-circleci-orb/pull/17
+[#18]: https://github.com/jerus-org/gen-circleci-orb/pull/18
+[Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.7...HEAD
 [0.0.7]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.6...v0.0.7
 [0.0.6]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.5...v0.0.6
 [0.0.5]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.4...v0.0.5
