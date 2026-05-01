@@ -23,7 +23,7 @@ jobs:
           paths: [gen-circleci-orb]
   regenerate-orb:
     docker:
-      - image: jerusdp/gen-circleci-orb:latest
+      - image: rust:latest
     steps:
       - checkout
       - attach_workspace:

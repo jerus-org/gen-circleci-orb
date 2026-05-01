@@ -135,7 +135,7 @@ fn render_dockerfile(binary: &str, method: &InstallMethod, base_image: &str) -> 
     let install_block = match method {
         InstallMethod::Binstall => format!(
             r#"RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && apt-get install -y --no-install-recommends ca-certificates curl git \
     && rm -rf /var/lib/apt/lists/* \
     && curl -L --proto '=https' --tlsv1.2 -sSf \
        https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash \
@@ -143,7 +143,7 @@ fn render_dockerfile(binary: &str, method: &InstallMethod, base_image: &str) -> 
     && rm -rf /root/.cargo/registry /root/.cargo/git"#
         ),
         InstallMethod::Apt => format!(
-            "RUN apt-get update \\\n    && apt-get install -y --no-install-recommends {binary} \\\n    && rm -rf /var/lib/apt/lists/*"
+            "RUN apt-get update \\\n    && apt-get install -y --no-install-recommends git {binary} \\\n    && rm -rf /var/lib/apt/lists/*"
         ),
     };
     format!("FROM {base_image}\n{install_block}\n")
@@ -395,6 +395,33 @@ mod tests {
         assert!(
             content.contains(".cargo/registry") || content.contains(".cargo/git"),
             "should clean cargo cache:\n{content}"
+        );
+    }
+
+    #[test]
+    fn dockerfile_binstall_includes_git() {
+        let cli = make_cli("mytool", vec![]);
+        let files = generate(&cli, &default_opts());
+        let content = &files[&PathBuf::from("Dockerfile")];
+        // git must appear as an apt package install, not just in cargo paths
+        assert!(
+            content.contains("apt-get install") && content.contains(" git"),
+            "Dockerfile must install git via apt for CircleCI checkout step:\n{content}"
+        );
+    }
+
+    #[test]
+    fn dockerfile_apt_includes_git() {
+        let cli = make_cli("mytool", vec![]);
+        let opts = GenerateOpts {
+            install_method: InstallMethod::Apt,
+            ..default_opts()
+        };
+        let files = generate(&cli, &opts);
+        let content = &files[&PathBuf::from("Dockerfile")];
+        assert!(
+            content.contains("apt-get install") && content.contains(" git"),
+            "Dockerfile (apt) must install git via apt for CircleCI checkout step:\n{content}"
         );
     }
 

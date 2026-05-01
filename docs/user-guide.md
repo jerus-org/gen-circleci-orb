@@ -155,7 +155,7 @@ where `<docker-namespace>` is the value passed to `--docker-namespace` at `init`
 ```dockerfile
 FROM debian:12-slim
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && apt-get install -y --no-install-recommends ca-certificates curl git \
     && rm -rf /var/lib/apt/lists/* \
     && curl -L --proto '=https' --tlsv1.2 -sSf \
        https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash \
@@ -163,7 +163,8 @@ RUN apt-get update \
     && rm -rf /root/.cargo/registry /root/.cargo/git
 ```
 
-`debian:12-slim` provides glibc and TLS roots without unnecessary tooling. The
+`debian:12-slim` provides glibc and TLS roots without unnecessary tooling. `git` is
+included because CircleCI's `checkout` step requires it. The
 cargo-binstall bootstrap script downloads a pre-built binstall binary — no Rust toolchain
 is installed in the image. The cargo cache directories are removed after install to
 keep the image small.
@@ -173,7 +174,7 @@ With `--install-method apt`:
 ```dockerfile
 FROM debian:12-slim
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends <binary> \
+    && apt-get install -y --no-install-recommends git <binary> \
     && rm -rf /var/lib/apt/lists/*
 ```
 
