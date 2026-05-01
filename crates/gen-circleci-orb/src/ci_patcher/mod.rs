@@ -267,7 +267,7 @@ fn build_binary_job(opts: &PatchOpts) -> Vec<String> {
     vec![
         "  build-binary:".to_string(),
         "    docker:".to_string(),
-        "      - image: jerusdp/ci-rust:rolling-6mo".to_string(),
+        "      - image: rust:latest".to_string(),
         "    steps:".to_string(),
         "      - checkout".to_string(),
         "      - run:".to_string(),
@@ -283,20 +283,16 @@ fn regenerate_orb_job(opts: &PatchOpts) -> Vec<String> {
     let binary = &opts.binary;
     let namespace = &opts.namespace;
     let orb_dir = &opts.orb_dir;
+    // gen-circleci-orb is pre-installed in its own Docker image (jerusdp/gen-circleci-orb).
+    // The target binary is attached from the build-binary workspace — no runtime installs needed.
     vec![
         "  regenerate-orb:".to_string(),
         "    docker:".to_string(),
-        "      - image: jerusdp/ci-rust:rolling-6mo".to_string(),
+        "      - image: jerusdp/gen-circleci-orb:latest".to_string(),
         "    steps:".to_string(),
         "      - checkout".to_string(),
         "      - attach_workspace:".to_string(),
         "          at: /tmp/bin".to_string(),
-        "      - run:".to_string(),
-        "          name: Install gen-circleci-orb".to_string(),
-        "          command: |".to_string(),
-        "            curl -L --proto '=https' --tlsv1.2 -sSf \\".to_string(),
-        "              https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash".to_string(),
-        "            cargo-binstall --no-confirm gen-circleci-orb".to_string(),
         "      - run:".to_string(),
         "          name: Regenerate orb source".to_string(),
         "          command: |".to_string(),
@@ -563,12 +559,12 @@ workflows:
     }
 
     #[test]
-    fn build_binary_uses_ci_rust_image() {
+    fn build_binary_uses_public_rust_image() {
         let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
         let block = job_block(&output, "build-binary");
         assert!(
-            block.contains("jerusdp/ci-rust:rolling-6mo"),
-            "build-binary must use ci-rust image:\n{block}"
+            block.contains("rust:latest"),
+            "build-binary must use the public rust:latest image, not a private CI image:\n{block}"
         );
     }
 
@@ -596,14 +592,14 @@ workflows:
     fn patch_build_adds_regenerate_orb_job() {
         let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
         assert!(output.contains("regenerate-orb:"), "missing job:\n{output}");
-        // cargo-binstall is not pre-installed in ci-rust; bootstrap it first
+        // gen-circleci-orb is pre-installed in its own image; no install step needed
         assert!(
-            output.contains("install-from-binstall-release.sh"),
-            "missing cargo-binstall bootstrap:\n{output}"
+            !output.contains("install-from-binstall-release.sh"),
+            "regenerate-orb must not bootstrap cargo-binstall — use the gen-circleci-orb image:\n{output}"
         );
         assert!(
-            output.contains("cargo-binstall --no-confirm gen-circleci-orb"),
-            "missing install step:\n{output}"
+            !output.contains("cargo-binstall --no-confirm gen-circleci-orb"),
+            "regenerate-orb must not install gen-circleci-orb at runtime:\n{output}"
         );
         assert!(
             output.contains("gen-circleci-orb generate"),
@@ -612,21 +608,20 @@ workflows:
     }
 
     #[test]
-    fn regenerate_orb_uses_ci_rust_image_and_attaches_workspace() {
+    fn regenerate_orb_uses_gen_circleci_orb_image_and_attaches_workspace() {
         let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
         let block = job_block(&output, "regenerate-orb");
         assert!(
-            block.contains("jerusdp/ci-rust:rolling-6mo"),
-            "regenerate-orb must use ci-rust image:\n{block}"
+            block.contains("jerusdp/gen-circleci-orb:latest"),
+            "regenerate-orb must use the gen-circleci-orb Docker image (gen-circleci-orb is pre-installed):\n{block}"
         );
         assert!(
             block.contains("attach_workspace"),
-            "regenerate-orb must attach workspace to get the binary:\n{block}"
+            "regenerate-orb must attach workspace to get the target binary:\n{block}"
         );
-        // Binary is available from workspace; no binstall of target binary
         assert!(
-            !block.contains("cargo binstall --no-confirm mytool"),
-            "regenerate-orb must NOT binstall the target binary — it comes from the workspace:\n{block}"
+            !block.contains("cargo-binstall"),
+            "regenerate-orb must not install anything — gen-circleci-orb is in the image:\n{block}"
         );
     }
 
