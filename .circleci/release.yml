@@ -25,11 +25,17 @@ jobs:
       - run:
           name: Build Docker image
           command: |
-            docker build -t jerusdp/gen-circleci-orb:${CIRCLE_TAG} orb
+            git fetch --tags
+            VERSION=$(git tag --list "gen-circleci-orb-v*" --sort=-version:refname | head -1 | sed 's/gen-circleci-orb-v//')
+            docker build -t jerusdp/gen-circleci-orb:${VERSION} -t jerusdp/gen-circleci-orb:latest orb
       - run:
           name: Push Docker image
           command: |
-            docker push jerusdp/gen-circleci-orb:${CIRCLE_TAG}
+            docker login -u "${DOCKER_LOGIN}" -p "${DOCKER_PASSWORD}"
+            git fetch --tags
+            VERSION=$(git tag --list "gen-circleci-orb-v*" --sort=-version:refname | head -1 | sed 's/gen-circleci-orb-v//')
+            docker push jerusdp/gen-circleci-orb:${VERSION}
+            docker push jerusdp/gen-circleci-orb:latest
 
 
 workflows:

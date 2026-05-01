@@ -346,6 +346,9 @@ fn build_container_job(opts: &PatchOpts) -> Vec<String> {
     let binary = &opts.binary;
     let docker_ns = &opts.docker_namespace;
     let orb_dir = &opts.orb_dir;
+    // CIRCLE_TAG is only set when a pipeline is triggered by a tag push.
+    // The release pipeline is triggered by a merge commit, so CIRCLE_TAG is empty.
+    // Instead, fetch tags and derive the version from the most recent matching tag.
     vec![
         "  build-container:".to_string(),
         "    docker:".to_string(),
@@ -356,11 +359,17 @@ fn build_container_job(opts: &PatchOpts) -> Vec<String> {
         "      - run:".to_string(),
         "          name: Build Docker image".to_string(),
         "          command: |".to_string(),
-        format!("            docker build -t {docker_ns}/{binary}:${{CIRCLE_TAG}} {orb_dir}"),
+        "            git fetch --tags".to_string(),
+        format!("            VERSION=$(git tag --list \"{binary}-v*\" --sort=-version:refname | head -1 | sed 's/{binary}-v//')"),
+        format!("            docker build -t {docker_ns}/{binary}:${{VERSION}} -t {docker_ns}/{binary}:latest {orb_dir}"),
         "      - run:".to_string(),
         "          name: Push Docker image".to_string(),
         "          command: |".to_string(),
-        format!("            docker push {docker_ns}/{binary}:${{CIRCLE_TAG}}"),
+        "            docker login -u \"${DOCKER_LOGIN}\" -p \"${DOCKER_PASSWORD}\"".to_string(),
+        "            git fetch --tags".to_string(),
+        format!("            VERSION=$(git tag --list \"{binary}-v*\" --sort=-version:refname | head -1 | sed 's/{binary}-v//')"),
+        format!("            docker push {docker_ns}/{binary}:${{VERSION}}"),
+        format!("            docker push {docker_ns}/{binary}:latest"),
     ]
 }
 
@@ -786,6 +795,23 @@ workflows:
         assert!(
             output.contains("docker push"),
             "missing docker push step:\n{output}"
+        );
+        // CIRCLE_TAG is empty in merge-triggered pipelines; version must come from git tags
+        assert!(
+            !output.contains("${CIRCLE_TAG}"),
+            "must not use CIRCLE_TAG (empty in merge pipelines):\n{output}"
+        );
+        assert!(
+            output.contains("git fetch --tags"),
+            "must fetch tags to get the just-released version:\n{output}"
+        );
+        assert!(
+            output.contains("docker login"),
+            "must log in to Docker Hub before pushing:\n{output}"
+        );
+        assert!(
+            output.contains(":latest"),
+            "must also push a :latest tag:\n{output}"
         );
     }
 
