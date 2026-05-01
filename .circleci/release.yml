@@ -14,7 +14,7 @@ orbs:
   toolkit: jerus-org/circleci-toolkit@6.1.4
 
   orb-tools: circleci/orb-tools@12.3.3
-  docker: circleci/docker@3.2.0
+  docker: circleci/docker@3.0.1
 jobs:
   build-container:
     docker:
