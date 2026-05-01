@@ -1,1 +1,3 @@
 /target
+# Binary copied into orb build context during release; not for version control
+/orb/gen-circleci-orb
