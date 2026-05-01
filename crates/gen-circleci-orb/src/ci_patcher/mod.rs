@@ -293,7 +293,10 @@ fn regenerate_orb_job(opts: &PatchOpts) -> Vec<String> {
         "          at: /tmp/bin".to_string(),
         "      - run:".to_string(),
         "          name: Install gen-circleci-orb".to_string(),
-        "          command: cargo-binstall --no-confirm gen-circleci-orb".to_string(),
+        "          command: |".to_string(),
+        "            curl -L --proto '=https' --tlsv1.2 -sSf \\".to_string(),
+        "              https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash".to_string(),
+        "            cargo-binstall --no-confirm gen-circleci-orb".to_string(),
         "      - run:".to_string(),
         "          name: Regenerate orb source".to_string(),
         "          command: |".to_string(),
@@ -593,6 +596,11 @@ workflows:
     fn patch_build_adds_regenerate_orb_job() {
         let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
         assert!(output.contains("regenerate-orb:"), "missing job:\n{output}");
+        // cargo-binstall is not pre-installed in ci-rust; bootstrap it first
+        assert!(
+            output.contains("install-from-binstall-release.sh"),
+            "missing cargo-binstall bootstrap:\n{output}"
+        );
         assert!(
             output.contains("cargo-binstall --no-confirm gen-circleci-orb"),
             "missing install step:\n{output}"

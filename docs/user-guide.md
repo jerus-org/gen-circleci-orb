@@ -217,7 +217,10 @@ regenerate-orb:
         at: /tmp/bin
     - run:
         name: Install gen-circleci-orb
-        command: cargo binstall --no-confirm gen-circleci-orb
+        command: |
+          curl -L --proto '=https' --tlsv1.2 -sSf \
+            https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
+          cargo-binstall --no-confirm gen-circleci-orb
     - run:
         name: Regenerate orb source
         command: |
