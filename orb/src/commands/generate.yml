@@ -1,0 +1,53 @@
+description: Generate orb source files from a CLI binary's --help output
+parameters:
+  binary:
+    type: string
+    description: Name of the binary to introspect (must be on PATH)
+  namespace:
+    type: string
+    description: CircleCI namespace(s) to publish the orb under (repeatable)
+  output:
+    type: string
+    description: Project root directory (orb source is written to <output>/<orb-dir>/)
+    default: .
+  install_method:
+    type: enum
+    description: How the binary is installed in the generated Docker image
+    default: binstall
+    enum:
+    - binstall
+    - apt
+  base_image:
+    type: string
+    description: Base Docker image for the generated executor
+    default: debian:12-slim
+  home_url:
+    type: string
+    description: Home URL for the orb registry display section
+    default: ''
+  source_url:
+    type: string
+    description: Source URL for the orb registry display section
+    default: ''
+  orb_dir:
+    type: string
+    description: 'Subdirectory within --output where orb source is written (default: orb)'
+    default: orb
+  dry_run:
+    type: boolean
+    description: Show planned output without writing any files
+    default: false
+steps:
+- run:
+    name: generate
+    command: |-
+      gen-circleci-orb generate \
+        --binary "<< parameters.binary >>" \
+        --namespace "<< parameters.namespace >>" \
+        <<# parameters.output >>--output "<< parameters.output >>"<</ parameters.output >> \
+        <<# parameters.install_method >>--install-method "<< parameters.install_method >>"<</ parameters.install_method >> \
+        <<# parameters.base_image >>--base-image "<< parameters.base_image >>"<</ parameters.base_image >> \
+        <<# parameters.home_url >>--home-url "<< parameters.home_url >>"<</ parameters.home_url >> \
+        <<# parameters.source_url >>--source-url "<< parameters.source_url >>"<</ parameters.source_url >> \
+        <<# parameters.orb_dir >>--orb-dir "<< parameters.orb_dir >>"<</ parameters.orb_dir >> \
+        <<# parameters.dry_run >>--dry-run<</ parameters.dry_run >>

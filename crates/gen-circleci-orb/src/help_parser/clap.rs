@@ -256,11 +256,10 @@ fn peek_next_non_blank<'a>(lines: &[&'a str], from: usize) -> Option<(usize, &'a
 
 /// Extract possible values from within a collected block string.
 fn extract_possible_values_from_block(block: &str) -> Vec<String> {
-    // Find "Possible values:" in the block text
+    // Indented block format:  "Possible values:  - name: description"
     if let Some(pos) = block.find("Possible values:") {
         let after = &block[pos + "Possible values:".len()..];
         let mut values = Vec::new();
-        // Values appear as "- name: description" or "- name"
         for part in after.split("- ") {
             let part = part.trim();
             if part.is_empty() {
@@ -271,10 +270,19 @@ fn extract_possible_values_from_block(block: &str) -> Vec<String> {
                 values.push(val.to_string());
             }
         }
-        values
-    } else {
-        Vec::new()
+        return values;
     }
+    // Inline bracket format:  "[possible values: a, b]"
+    if let Some(pos) = block.find("[possible values:") {
+        let after = &block[pos + "[possible values:".len()..];
+        let content = after.find(']').map_or(after, |end| &after[..end]);
+        return content
+            .split(',')
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+            .collect();
+    }
+    Vec::new()
 }
 
 /// Parse a single collected option block string into a `Parameter`.
@@ -350,34 +358,30 @@ fn extract_default(block: &str) -> Option<String> {
 }
 
 fn extract_param_description(block: &str) -> String {
-    // For multi-line blocks joined with spaces, description comes:
-    // 1. After the closing `>` of a metavar (e.g. `--flag <VALUE>  description`)
-    // 2. After the flag itself for boolean flags (e.g. `--force  description`)
-    // 3. Via double-space separator on single-line help text
-    let candidate = if let Some(pos) = block.rfind('>') {
-        block[pos + 1..].trim().to_string()
+    // Clap metavars are UPPERCASE (e.g. <OUTPUT>, <ORB_PATH>).
+    // Description text may contain lowercase angle-bracket references like
+    // `<output>/<orb-dir>/` — these must NOT truncate the description.
+    // Strategy: find the flag declaration (--flag [<UPPER_METAVAR>]) and take
+    // everything after it as the candidate description.
+    let re_decl = regex::Regex::new(r"--[a-zA-Z][a-zA-Z0-9-]*(?:\s+<[A-Z][A-Z0-9_]*>)?").unwrap();
+    let candidate = if let Some(m) = re_decl.find(block) {
+        block[m.end()..].trim().to_string()
     } else if let Some(pos) = block.find("  ") {
         block[pos..].trim().to_string()
     } else {
-        // Find content after the last flag token
-        let re = regex::Regex::new(r"--[a-zA-Z][a-zA-Z0-9-]*").unwrap();
-        let last_end = re
-            .find_iter(block)
-            .last()
-            .map(|m| m.end())
-            .unwrap_or(block.len());
-        block[last_end..].trim().to_string()
+        block.to_string()
     };
 
-    // Remove [default: ...] annotations from description
-    let re = regex::Regex::new(r"\s*\[default:[^\]]*\]").unwrap();
-    // Also remove "Possible values: ..." section if still present
+    // Strip annotations: [default: ...], [possible values: ...], "Possible values: ..."
+    let re_default = regex::Regex::new(r"\s*\[default:[^\]]*\]").unwrap();
+    let re_pv_inline = regex::Regex::new(r"\s*\[possible values:[^\]]*\]").unwrap();
     let candidate = if let Some(pv) = candidate.find("Possible values:") {
         candidate[..pv].trim().to_string()
     } else {
         candidate
     };
-    re.replace_all(&candidate, "").trim().to_string()
+    let candidate = re_pv_inline.replace_all(&candidate, "").to_string();
+    re_default.replace_all(&candidate, "").trim().to_string()
 }
 
 /// True only for top-level section headers (no leading whitespace).
@@ -639,6 +643,56 @@ Options:
             "app --version <VALUE> flag must be included, got: {:?}",
             params.iter().map(|p| &p.long_name).collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn description_not_truncated_by_lowercase_angle_brackets_in_text() {
+        // Angle brackets in description text (e.g. `<output>/<orb-dir>/`) must not
+        // cause extract_param_description to truncate the description.
+        let help = r#"Do something
+
+Usage: tool cmd [OPTIONS]
+
+Options:
+      --output <OUTPUT>
+          Project root directory (orb source is written to <output>/<orb-dir>/) [default: .]
+
+  -h, --help
+          Print help
+"#;
+        let params = parse_parameters(help);
+        let p = params.iter().find(|p| p.long_name == "output").unwrap();
+        assert!(
+            p.description.contains("Project root directory"),
+            "description truncated to {:?}",
+            p.description
+        );
+    }
+
+    #[test]
+    fn enum_type_detected_from_inline_possible_values() {
+        // clap can render possible values inline: `[possible values: a, b]`
+        let help = r#"Do something
+
+Usage: tool cmd [OPTIONS]
+
+Options:
+      --install-method <INSTALL_METHOD>
+          How the binary is installed [default: binstall] [possible values: binstall, apt]
+
+  -h, --help
+          Print help
+"#;
+        let params = parse_parameters(help);
+        let p = params
+            .iter()
+            .find(|p| p.long_name == "install_method")
+            .unwrap();
+        assert_eq!(
+            p.param_type,
+            ParamType::Enum(vec!["binstall".to_string(), "apt".to_string()])
+        );
+        assert_eq!(p.default, Some("binstall".to_string()));
     }
 
     #[test]
