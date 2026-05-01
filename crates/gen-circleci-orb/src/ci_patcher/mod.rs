@@ -293,7 +293,7 @@ fn regenerate_orb_job(opts: &PatchOpts) -> Vec<String> {
         "          at: /tmp/bin".to_string(),
         "      - run:".to_string(),
         "          name: Install gen-circleci-orb".to_string(),
-        "          command: cargo binstall --no-confirm gen-circleci-orb".to_string(),
+        "          command: cargo-binstall --no-confirm gen-circleci-orb".to_string(),
         "      - run:".to_string(),
         "          name: Regenerate orb source".to_string(),
         "          command: |".to_string(),
@@ -594,7 +594,7 @@ workflows:
         let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
         assert!(output.contains("regenerate-orb:"), "missing job:\n{output}");
         assert!(
-            output.contains("cargo binstall --no-confirm gen-circleci-orb"),
+            output.contains("cargo-binstall --no-confirm gen-circleci-orb"),
             "missing install step:\n{output}"
         );
         assert!(
