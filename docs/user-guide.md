@@ -281,7 +281,7 @@ build-container:
     - run:
         name: Push Docker image
         command: |
-          docker login -u "${DOCKER_LOGIN}" -p "${DOCKER_PASSWORD}"
+          echo "${DOCKERHUB_PASSWORD}" | docker login -u "${DOCKERHUB_USERNAME}" --password-stdin
           git fetch --tags
           VERSION=$(git tag --list "<binary>-v*" --sort=-version:refname | head -1 | sed 's/<binary>-v//')
           docker push <docker-namespace>/<binary>:${VERSION}
@@ -294,7 +294,8 @@ orb namespace (`--namespace`).
 `$CIRCLE_TAG` is only set when a pipeline is triggered by a tag push. Since the release
 pipeline is triggered by an approval gate (merge-triggered), the version is derived by
 fetching tags at runtime. A `:latest` tag is pushed in addition to the versioned tag.
-Docker Hub credentials are read from `${DOCKER_LOGIN}` and `${DOCKER_PASSWORD}`.
+Docker Hub credentials are read from `${DOCKERHUB_USERNAME}` and `${DOCKERHUB_PASSWORD}`
+using `--password-stdin` (the recommended approach — avoids shell history exposure).
 
 Added to the release workflow:
 ```yaml
