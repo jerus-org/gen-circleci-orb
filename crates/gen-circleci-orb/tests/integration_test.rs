@@ -43,7 +43,17 @@ fn generate_gen_orb_mcp_orb() {
             src.join(format!("jobs/{name}.yml")).exists(),
             "missing jobs/{name}.yml"
         );
+        assert!(
+            src.join(format!("scripts/{name}.sh")).exists(),
+            "missing scripts/{name}.sh"
+        );
     }
+
+    // RC003: examples directory with at least one file
+    assert!(
+        src.join("examples/example.yml").exists(),
+        "missing examples/example.yml"
+    );
 
     // Verify @orb.yml has no commands/jobs/executors keys
     let orb_yml = std::fs::read_to_string(src.join("@orb.yml")).unwrap();
@@ -77,11 +87,16 @@ fn generate_gen_orb_mcp_orb() {
         String::from_utf8_lossy(&validate.stderr)
     );
 
-    // Verify run step includes binary name
+    // Verify command file uses script include (RC009) and script has binary name
     let generate_cmd = std::fs::read_to_string(src.join("commands/generate.yml")).unwrap();
     assert!(
-        generate_cmd.contains("gen-orb-mcp generate"),
-        "run step must include binary name:\n{generate_cmd}"
+        generate_cmd.contains("<<include(scripts/generate.sh)>>"),
+        "command YAML must use script include:\n{generate_cmd}"
+    );
+    let generate_script = std::fs::read_to_string(src.join("scripts/generate.sh")).unwrap();
+    assert!(
+        generate_script.contains("gen-orb-mcp generate"),
+        "script must include binary name:\n{generate_script}"
     );
 }
 
