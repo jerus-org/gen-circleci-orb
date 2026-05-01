@@ -39,6 +39,12 @@ pub fn generate(cli: &CliDefinition, opts: &GenerateOpts) -> HashMap<PathBuf, St
         render_dockerfile(&cli.binary_name, &opts.install_method, &opts.base_image),
     );
 
+    // examples/example.yml (RC003)
+    files.insert(
+        PathBuf::from("src/examples/example.yml"),
+        render_example(cli, opts),
+    );
+
     files
 }
 
@@ -66,6 +72,10 @@ fn render_subcommand(sub: &SubCommand, binary: &str, files: &mut HashMap<PathBuf
         files.insert(
             PathBuf::from(format!("src/jobs/{}.yml", sub.name)),
             render_job(sub),
+        );
+        files.insert(
+            PathBuf::from(format!("src/scripts/{}.sh", sub.name)),
+            render_script_content(sub, binary, &[]),
         );
     }
     for child in &sub.subcommands {
@@ -149,6 +159,25 @@ fn render_dockerfile(binary: &str, method: &InstallMethod, base_image: &str) -> 
     format!("FROM {base_image}\n{install_block}\n")
 }
 
+fn render_example(cli: &CliDefinition, opts: &GenerateOpts) -> String {
+    let namespace = opts
+        .namespaces
+        .first()
+        .map(String::as_str)
+        .unwrap_or("my-org");
+    let binary = &cli.binary_name;
+    // Use the first leaf subcommand name for the example job, or the binary name if none.
+    let job_name = cli
+        .subcommands
+        .iter()
+        .find(|s| s.is_leaf)
+        .map(|s| s.name.as_str())
+        .unwrap_or(binary);
+    format!(
+        "description: >\n  Example usage of the {binary} orb.\nusage:\n  version: 2.1\n  orbs:\n    {binary}: {namespace}/{binary}@1.0\n  workflows:\n    use-my-orb:\n      jobs:\n        - {binary}/{job_name}\n"
+    )
+}
+
 fn build_orb_parameters(sub: &SubCommand, skip: &[&str]) -> IndexMap<String, OrbParameter> {
     let mut params = IndexMap::new();
     for p in &sub.parameters {
@@ -192,8 +221,8 @@ fn build_orb_parameters(sub: &SubCommand, skip: &[&str]) -> IndexMap<String, Orb
     params
 }
 
-/// Build the `run:` step for a command, interpolating all parameters.
-fn build_run_step(sub: &SubCommand, binary: &str, skip: &[&str]) -> serde_yaml::Value {
+/// Build the CLI invocation string for a script file.
+fn render_script_content(sub: &SubCommand, binary: &str, skip: &[&str]) -> String {
     let mut cmd_parts: Vec<String> = vec![format!("{} {}", binary, sub.name.replace('_', "-"))];
 
     for p in &sub.parameters {
@@ -203,7 +232,6 @@ fn build_run_step(sub: &SubCommand, binary: &str, skip: &[&str]) -> serde_yaml::
         let flag = format!("--{}", p.long_name.replace('_', "-"));
         match &p.param_type {
             ParamType::Boolean => {
-                // Mustache conditional: include flag only when param is truthy
                 cmd_parts.push(format!(
                     "<<# parameters.{0} >>{1}<</ parameters.{0} >>",
                     p.long_name, flag
@@ -222,7 +250,11 @@ fn build_run_step(sub: &SubCommand, binary: &str, skip: &[&str]) -> serde_yaml::
         }
     }
 
-    let command_str = cmd_parts.join(" \\\n  ");
+    cmd_parts.join(" \\\n  ")
+}
+
+/// Build the `run:` step for a command, referencing the script file (RC009 compliance).
+fn build_run_step(sub: &SubCommand, _binary: &str, _skip: &[&str]) -> serde_yaml::Value {
     serde_yaml::Value::Mapping({
         let mut m = serde_yaml::Mapping::new();
         let mut run_map = serde_yaml::Mapping::new();
@@ -232,7 +264,7 @@ fn build_run_step(sub: &SubCommand, binary: &str, skip: &[&str]) -> serde_yaml::
         );
         run_map.insert(
             serde_yaml::Value::String("command".to_string()),
-            serde_yaml::Value::String(command_str),
+            serde_yaml::Value::String(format!("<<include(scripts/{}.sh)>>", sub.name)),
         );
         m.insert(
             serde_yaml::Value::String("run".to_string()),
@@ -452,10 +484,35 @@ mod tests {
         );
     }
 
-    // ── command files ───────────────────────────────────────────────────────
+    // ── command files / scripts ─────────────────────────────────────────────
 
     #[test]
-    fn required_param_renders_without_conditional() {
+    fn command_step_uses_script_include() {
+        let sub = make_leaf("generate", vec![]);
+        let cli = make_cli("mytool", vec![sub]);
+        let files = generate(&cli, &default_opts());
+        let content = &files[&PathBuf::from("src/commands/generate.yml")];
+        assert!(
+            content.contains("<<include(scripts/generate.sh)>>"),
+            "command step must use script include for RC009 compliance:\n{content}"
+        );
+    }
+
+    #[test]
+    fn script_file_generated_for_each_subcommand() {
+        let subs = vec![make_leaf("generate", vec![]), make_leaf("validate", vec![])];
+        let cli = make_cli("mytool", subs);
+        let files = generate(&cli, &default_opts());
+        for name in &["generate", "validate"] {
+            assert!(
+                files.contains_key(&PathBuf::from(format!("src/scripts/{name}.sh"))),
+                "missing scripts/{name}.sh"
+            );
+        }
+    }
+
+    #[test]
+    fn script_file_contains_required_param_flag() {
         let params = vec![Parameter {
             long_name: "orb_path".to_string(),
             short: Some('p'),
@@ -467,14 +524,101 @@ mod tests {
         let sub = make_leaf("generate", params);
         let cli = make_cli("mytool", vec![sub]);
         let files = generate(&cli, &default_opts());
-        let content = &files[&PathBuf::from("src/commands/generate.yml")];
+        let script = &files[&PathBuf::from("src/scripts/generate.sh")];
         assert!(
-            content.contains("--orb-path \"<< parameters.orb_path >>\""),
-            "required param not rendered correctly:\n{content}"
+            script.contains("--orb-path \"<< parameters.orb_path >>\""),
+            "script must contain required param flag:\n{script}"
         );
         assert!(
-            !content.contains("<<# parameters.orb_path >>"),
-            "required param should not use conditional:\n{content}"
+            !script.contains("<<# parameters.orb_path >>"),
+            "required param in script should not use conditional:\n{script}"
+        );
+    }
+
+    #[test]
+    fn script_file_contains_optional_param_conditional() {
+        let params = vec![Parameter {
+            long_name: "output".to_string(),
+            short: None,
+            param_type: ParamType::String,
+            default: Some("./dist".to_string()),
+            required: false,
+            description: "Output dir.".to_string(),
+        }];
+        let sub = make_leaf("generate", params);
+        let cli = make_cli("mytool", vec![sub]);
+        let files = generate(&cli, &default_opts());
+        let script = &files[&PathBuf::from("src/scripts/generate.sh")];
+        assert!(
+            script.contains("<<# parameters.output >>"),
+            "optional param in script must use mustache conditional:\n{script}"
+        );
+    }
+
+    #[test]
+    fn script_file_contains_boolean_flag() {
+        let params = vec![Parameter {
+            long_name: "force".to_string(),
+            short: None,
+            param_type: ParamType::Boolean,
+            default: None,
+            required: false,
+            description: "Force overwrite.".to_string(),
+        }];
+        let sub = make_leaf("generate", params);
+        let cli = make_cli("mytool", vec![sub]);
+        let files = generate(&cli, &default_opts());
+        let script = &files[&PathBuf::from("src/scripts/generate.sh")];
+        assert!(
+            script.contains("<<# parameters.force >>--force<</ parameters.force >>"),
+            "boolean flag in script rendered incorrectly:\n{script}"
+        );
+    }
+
+    // ── examples ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn example_file_generated() {
+        let sub = make_leaf("generate", vec![]);
+        let cli = make_cli("mytool", vec![sub]);
+        let files = generate(&cli, &default_opts());
+        assert!(
+            files.contains_key(&PathBuf::from("src/examples/example.yml")),
+            "src/examples/example.yml must be generated for RC003 compliance"
+        );
+        let example = &files[&PathBuf::from("src/examples/example.yml")];
+        assert!(
+            example.contains("usage:"),
+            "example must have a usage block:\n{example}"
+        );
+        assert!(
+            example.contains("my-org/mytool"),
+            "example must reference the orb:\n{example}"
+        );
+    }
+
+    #[test]
+    fn required_param_renders_without_conditional() {
+        // CLI invocation lives in the script file; command YAML only holds parameters + include.
+        let params = vec![Parameter {
+            long_name: "orb_path".to_string(),
+            short: Some('p'),
+            param_type: ParamType::String,
+            default: None,
+            required: true,
+            description: "Path to orb.".to_string(),
+        }];
+        let sub = make_leaf("generate", params);
+        let cli = make_cli("mytool", vec![sub]);
+        let files = generate(&cli, &default_opts());
+        let script = &files[&PathBuf::from("src/scripts/generate.sh")];
+        assert!(
+            script.contains("--orb-path \"<< parameters.orb_path >>\""),
+            "required param not rendered correctly in script:\n{script}"
+        );
+        assert!(
+            !script.contains("<<# parameters.orb_path >>"),
+            "required param should not use conditional in script:\n{script}"
         );
     }
 
@@ -491,10 +635,10 @@ mod tests {
         let sub = make_leaf("generate", params);
         let cli = make_cli("mytool", vec![sub]);
         let files = generate(&cli, &default_opts());
-        let content = &files[&PathBuf::from("src/commands/generate.yml")];
+        let script = &files[&PathBuf::from("src/scripts/generate.sh")];
         assert!(
-            content.contains("<<# parameters.output >>"),
-            "optional param should use mustache conditional:\n{content}"
+            script.contains("<<# parameters.output >>"),
+            "optional param should use mustache conditional in script:\n{script}"
         );
     }
 
@@ -511,10 +655,10 @@ mod tests {
         let sub = make_leaf("generate", params);
         let cli = make_cli("mytool", vec![sub]);
         let files = generate(&cli, &default_opts());
-        let content = &files[&PathBuf::from("src/commands/generate.yml")];
+        let script = &files[&PathBuf::from("src/scripts/generate.sh")];
         assert!(
-            content.contains("<<# parameters.force >>--force<</ parameters.force >>"),
-            "boolean flag rendered incorrectly:\n{content}"
+            script.contains("<<# parameters.force >>--force<</ parameters.force >>"),
+            "boolean flag rendered incorrectly in script:\n{script}"
         );
     }
 
@@ -705,6 +849,10 @@ mod tests {
             assert!(
                 files.contains_key(&PathBuf::from(format!("src/jobs/{name}.yml"))),
                 "missing jobs/{name}.yml"
+            );
+            assert!(
+                files.contains_key(&PathBuf::from(format!("src/scripts/{name}.sh"))),
+                "missing scripts/{name}.sh"
             );
         }
     }

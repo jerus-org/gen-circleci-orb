@@ -1,0 +1,10 @@
+description: >
+  Example usage of the gen-circleci-orb orb.
+usage:
+  version: 2.1
+  orbs:
+    gen-circleci-orb: jerus-org/gen-circleci-orb@1.0
+  workflows:
+    use-my-orb:
+      jobs:
+        - gen-circleci-orb/generate
