@@ -77,5 +77,6 @@ workflows:
           name: publish-orb-jerus-org
           orb_name: jerus-org/gen-circleci-orb
           pub_type: production
+          vcs_type: github
           requires: [build-container, pack-orb-release]
           context: [orb-publishing]

@@ -395,6 +395,7 @@ fn release_workflow_steps(opts: &PatchOpts) -> Vec<String> {
     steps.push(format!("          name: publish-orb-{namespace}"));
     steps.push(format!("          orb_name: {namespace}/{binary}"));
     steps.push("          pub_type: production".to_string());
+    steps.push("          vcs_type: github".to_string());
     steps.push("          requires: [build-container, pack-orb-release]".to_string());
     steps.push(format!("          context: [{orb_ctx}]"));
 
@@ -825,6 +826,10 @@ workflows:
         assert!(
             output.contains("pub_type: production"),
             "publish must set pub_type production:\n{output}"
+        );
+        assert!(
+            output.contains("vcs_type: github"),
+            "publish must set vcs_type (required by orb-tools/publish):\n{output}"
         );
     }
 
