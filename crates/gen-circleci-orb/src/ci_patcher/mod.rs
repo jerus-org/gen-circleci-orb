@@ -141,6 +141,15 @@ pub fn patch_release(content: &str, opts: &PatchOpts) -> (String, PatchReport) {
             for (i, l) in job_block.iter().enumerate() {
                 lines.insert(pos + i, l.clone());
             }
+        } else if let Some(wf_pos) = find_top_level(&lines, "workflows:") {
+            // No top-level jobs section — create one before workflows:
+            lines.insert(wf_pos, String::new());
+            lines.insert(wf_pos, String::new());
+            let job_len = job_block.len();
+            for (i, _) in job_block.iter().rev().enumerate() {
+                lines.insert(wf_pos, job_block[job_len - 1 - i].clone());
+            }
+            lines.insert(wf_pos, "jobs:".to_string());
         }
         report.insertions.push("build-container job".to_string());
     }
@@ -477,6 +486,25 @@ workflows:
   release:
     jobs:
       - release-mytool
+";
+
+    // Toolkit-style release.yml: no top-level jobs section, only orbs + workflows.
+    // This is the common case for projects using only toolkit jobs.
+    const RELEASE_FIXTURE_NO_JOBS: &str = "\
+version: 2.1
+
+orbs:
+  toolkit: jerus-org/circleci-toolkit@6.0.0
+
+workflows:
+  release:
+    jobs:
+      - toolkit/release_crate:
+          name: release-mytool
+          context: [release]
+      - toolkit/release_prlog:
+          requires: [release-mytool]
+          context: [release]
 ";
 
     // ── patch_build (no pre-existing jobs section) ───────────────────────────
@@ -825,6 +853,27 @@ workflows:
         assert!(
             !output.contains("orb-path:"),
             "must not use deprecated orb-path:\n{output}"
+        );
+    }
+
+    #[test]
+    fn patch_release_adds_build_container_job_when_no_jobs_section() {
+        // release.yml with only toolkit jobs (no top-level jobs: section) is the
+        // common case. patch_release must create the jobs: section and insert
+        // build-container, not silently skip it.
+        let (output, _) = patch_release(RELEASE_FIXTURE_NO_JOBS, &make_opts());
+        assert!(
+            output.contains("build-container:"),
+            "build-container job definition missing when no pre-existing jobs section:\n{output}"
+        );
+        let jobs_pos = output.find("\njobs:").expect("jobs: section not created");
+        let workflows_pos = output.find("\nworkflows:").expect("no workflows: section");
+        let job_def_pos = output
+            .find("  build-container:")
+            .expect("no build-container job definition");
+        assert!(
+            job_def_pos > jobs_pos && job_def_pos < workflows_pos,
+            "build-container definition must be in jobs: section, not workflows:\n{output}"
         );
     }
 }
