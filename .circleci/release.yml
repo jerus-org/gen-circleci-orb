@@ -12,28 +12,40 @@ parameters:
 
 orbs:
   toolkit: jerus-org/circleci-toolkit@6.1.4
-
   orb-tools: circleci/orb-tools@12.3.3
   docker: circleci/docker@3.0.1
+
 jobs:
+  build-binary-release:
+    docker:
+      - image: rust:latest
+    steps:
+      - checkout
+      - run:
+          name: Build release binary
+          command: cargo build --release -p gen-circleci-orb
+      - persist_to_workspace:
+          root: target/release
+          paths: [gen-circleci-orb]
+
   build-container:
     docker:
       - image: cimg/base:stable
     steps:
       - checkout
       - setup_remote_docker
+      - attach_workspace:
+          at: /tmp/release-versions
+      - attach_workspace:
+          at: /tmp/bin
       - run:
-          name: Build Docker image
+          name: Build and push Docker image
           command: |
-            git fetch --tags
-            VERSION=$(git tag --list "gen-circleci-orb-v*" --sort=-version:refname | head -1 | sed 's/gen-circleci-orb-v//')
+            source /tmp/release-versions/versions.env
+            VERSION=${CRATE_VERSION_GEN_CIRCLECI_ORB}
+            cp /tmp/bin/gen-circleci-orb orb/gen-circleci-orb
             docker build -t jerusdp/gen-circleci-orb:${VERSION} -t jerusdp/gen-circleci-orb:latest orb
-      - run:
-          name: Push Docker image
-          command: |
             docker login -u "${DOCKER_LOGIN}" -p "${DOCKER_PASSWORD}"
-            git fetch --tags
-            VERSION=$(git tag --list "gen-circleci-orb-v*" --sort=-version:refname | head -1 | sed 's/gen-circleci-orb-v//')
             docker push jerusdp/gen-circleci-orb:${VERSION}
             docker push jerusdp/gen-circleci-orb:latest
 
@@ -52,10 +64,29 @@ workflows:
           requires:
             - calculate-versions
 
+      - build-binary-release:
+          requires: [approve-release]
+
+      - orb-tools/pack:
+          name: pack-orb-release
+          source_dir: orb/src
+          requires: [approve-release]
+
+      - build-container:
+          requires: [build-binary-release]
+          context: [docker-credentials]
+
+      - orb-tools/publish:
+          name: publish-orb-jerus-org
+          orb_name: jerus-org/gen-circleci-orb
+          pub_type: production
+          vcs_type: github
+          requires: [build-container, pack-orb-release]
+          context: [orb-publishing]
+
       - toolkit/release_crate:
           name: release-gen-circleci-orb
-          requires:
-            - approve-release
+          requires: [publish-orb-jerus-org]
           context:
             - release
             - bot-check
@@ -72,17 +103,3 @@ workflows:
             - release
             - bot-check
             - pcu-app
-      - orb-tools/pack:
-          name: pack-orb-release
-          source_dir: orb/src
-          requires: [release-gen-circleci-orb]
-      - build-container:
-          requires: [release-gen-circleci-orb]
-          context: [docker-credentials]
-      - orb-tools/publish:
-          name: publish-orb-jerus-org
-          orb_name: jerus-org/gen-circleci-orb
-          pub_type: production
-          vcs_type: github
-          requires: [build-container, pack-orb-release]
-          context: [orb-publishing]

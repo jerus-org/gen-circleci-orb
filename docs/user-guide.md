@@ -275,15 +275,26 @@ build-container:
     - run:
         name: Build Docker image
         command: |
-          docker build -t <docker-namespace>/<binary>:${CIRCLE_TAG} <orb-dir>
+          git fetch --tags
+          VERSION=$(git tag --list "<binary>-v*" --sort=-version:refname | head -1 | sed 's/<binary>-v//')
+          docker build -t <docker-namespace>/<binary>:${VERSION} -t <docker-namespace>/<binary>:latest <orb-dir>
     - run:
         name: Push Docker image
         command: |
-          docker push <docker-namespace>/<binary>:${CIRCLE_TAG}
+          docker login -u "${DOCKER_LOGIN}" -p "${DOCKER_PASSWORD}"
+          git fetch --tags
+          VERSION=$(git tag --list "<binary>-v*" --sort=-version:refname | head -1 | sed 's/<binary>-v//')
+          docker push <docker-namespace>/<binary>:${VERSION}
+          docker push <docker-namespace>/<binary>:latest
 ```
 
 `<docker-namespace>` is the value of `--docker-namespace` — independent of the CircleCI
 orb namespace (`--namespace`).
+
+`$CIRCLE_TAG` is only set when a pipeline is triggered by a tag push. Since the release
+pipeline is triggered by an approval gate (merge-triggered), the version is derived by
+fetching tags at runtime. A `:latest` tag is pushed in addition to the versioned tag.
+Docker Hub credentials are read from `${DOCKER_LOGIN}` and `${DOCKER_PASSWORD}`.
 
 Added to the release workflow:
 ```yaml
@@ -298,6 +309,7 @@ Added to the release workflow:
     name: publish-orb-<namespace>
     orb_name: <namespace>/<binary>
     pub_type: production
+    vcs_type: github
     requires: [build-container, pack-orb-release]
     context: [<orb-context>]
 ```
