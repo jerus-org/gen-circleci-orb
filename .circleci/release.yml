@@ -74,7 +74,7 @@ workflows:
 
       - build-container:
           requires: [build-binary-release]
-          context: [docker-credentials]
+          context: [docker]
 
       - orb-tools/publish:
           name: publish-orb-jerus-org

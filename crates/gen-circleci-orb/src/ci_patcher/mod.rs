@@ -427,7 +427,7 @@ mod tests {
             release_after_job: Some("release-mytool".to_string()),
             orb_tools_version: "12.3.3".to_string(),
             docker_orb_version: "3.0.1".to_string(),
-            docker_context: "docker-credentials".to_string(),
+            docker_context: "docker".to_string(),
             orb_context: "orb-publishing".to_string(),
             mcp: false,
         }
