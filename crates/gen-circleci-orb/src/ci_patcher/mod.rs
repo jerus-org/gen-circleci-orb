@@ -132,30 +132,54 @@ pub fn patch_release(content: &str, opts: &PatchOpts) -> (String, PatchReport) {
         }
     }
 
-    // 2. Add build-container job
-    if content.contains("build-container:") {
-        report.skipped.push("build-container job".to_string());
+    // 2. Add build-binary-release and build-container jobs
+    let has_binary_release = content.contains("build-binary-release:");
+    let has_container = content.contains("build-container:");
+    if has_binary_release && has_container {
+        report
+            .skipped
+            .push("build-binary-release and build-container jobs".to_string());
     } else {
-        let job_block = build_container_job(opts);
         if let Some(pos) = find_section_end(&lines, "jobs:") {
-            for (i, l) in job_block.iter().enumerate() {
-                lines.insert(pos + i, l.clone());
+            let mut insert_pos = pos;
+            if !has_binary_release {
+                let binary_block = build_binary_release_job(opts);
+                let binary_len = binary_block.len();
+                for (i, l) in binary_block.into_iter().enumerate() {
+                    lines.insert(insert_pos + i, l);
+                }
+                insert_pos += binary_len;
+            }
+            if !has_container {
+                let container_block = build_container_job(opts);
+                for (i, l) in container_block.into_iter().enumerate() {
+                    lines.insert(insert_pos + i, l);
+                }
             }
         } else if let Some(wf_pos) = find_top_level(&lines, "workflows:") {
             // No top-level jobs section — create one before workflows:
             lines.insert(wf_pos, String::new());
             lines.insert(wf_pos, String::new());
-            let job_len = job_block.len();
-            for (i, _) in job_block.iter().rev().enumerate() {
-                lines.insert(wf_pos, job_block[job_len - 1 - i].clone());
+            let container_block = build_container_job(opts);
+            let container_len = container_block.len();
+            for i in 0..container_len {
+                lines.insert(wf_pos, container_block[container_len - 1 - i].clone());
+            }
+            let binary_block = build_binary_release_job(opts);
+            let binary_len = binary_block.len();
+            for i in 0..binary_len {
+                lines.insert(wf_pos, binary_block[binary_len - 1 - i].clone());
             }
             lines.insert(wf_pos, "jobs:".to_string());
         }
-        report.insertions.push("build-container job".to_string());
+        report
+            .insertions
+            .push("build-binary-release and build-container jobs".to_string());
     }
 
     // 3. Add release workflow steps
     if content.contains("pack-orb-release")
+        && content.contains("      - build-binary-release:")
         && content.contains("      - build-container:")
         && content.contains("orb-tools/publish:")
     {
@@ -342,13 +366,32 @@ fn pack_validate_steps(opts: &PatchOpts) -> Vec<String> {
     steps
 }
 
+fn build_binary_release_job(opts: &PatchOpts) -> Vec<String> {
+    let binary = &opts.binary;
+    vec![
+        "  build-binary-release:".to_string(),
+        "    docker:".to_string(),
+        "      - image: rust:latest".to_string(),
+        "    steps:".to_string(),
+        "      - checkout".to_string(),
+        "      - run:".to_string(),
+        "          name: Build release binary".to_string(),
+        format!("          command: cargo build --release -p {binary}"),
+        "      - persist_to_workspace:".to_string(),
+        "          root: target/release".to_string(),
+        format!("          paths: [{binary}]"),
+    ]
+}
+
 fn build_container_job(opts: &PatchOpts) -> Vec<String> {
     let binary = &opts.binary;
     let docker_ns = &opts.docker_namespace;
     let orb_dir = &opts.orb_dir;
-    // CIRCLE_TAG is only set when a pipeline is triggered by a tag push.
-    // The release pipeline is triggered by a merge commit, so CIRCLE_TAG is empty.
-    // Instead, fetch tags and derive the version from the most recent matching tag.
+    // Version is read from versions.env written by toolkit/calculate_versions.
+    // The release pipeline is approval-triggered (not tag-triggered), so CIRCLE_TAG is empty.
+    // The binary is attached from the build-binary-release workspace and copied into the
+    // Docker build context so the image contains the freshly-compiled binary.
+    let version_var = format!("CRATE_VERSION_{}", binary.to_uppercase().replace('-', "_"));
     vec![
         "  build-container:".to_string(),
         "    docker:".to_string(),
@@ -356,18 +399,18 @@ fn build_container_job(opts: &PatchOpts) -> Vec<String> {
         "    steps:".to_string(),
         "      - checkout".to_string(),
         "      - setup_remote_docker".to_string(),
+        "      - attach_workspace:".to_string(),
+        "          at: /tmp/release-versions".to_string(),
+        "      - attach_workspace:".to_string(),
+        "          at: /tmp/bin".to_string(),
         "      - run:".to_string(),
-        "          name: Build Docker image".to_string(),
+        "          name: Build and push Docker image".to_string(),
         "          command: |".to_string(),
-        "            git fetch --tags".to_string(),
-        format!("            VERSION=$(git tag --list \"{binary}-v*\" --sort=-version:refname | head -1 | sed 's/{binary}-v//')"),
+        "            source /tmp/release-versions/versions.env".to_string(),
+        format!("            VERSION=${{{version_var}}}"),
+        format!("            cp /tmp/bin/{binary} {orb_dir}/{binary}"),
         format!("            docker build -t {docker_ns}/{binary}:${{VERSION}} -t {docker_ns}/{binary}:latest {orb_dir}"),
-        "      - run:".to_string(),
-        "          name: Push Docker image".to_string(),
-        "          command: |".to_string(),
         "            echo \"${DOCKERHUB_PASSWORD}\" | docker login -u \"${DOCKERHUB_USERNAME}\" --password-stdin".to_string(),
-        "            git fetch --tags".to_string(),
-        format!("            VERSION=$(git tag --list \"{binary}-v*\" --sort=-version:refname | head -1 | sed 's/{binary}-v//')"),
         format!("            docker push {docker_ns}/{binary}:${{VERSION}}"),
         format!("            docker push {docker_ns}/{binary}:latest"),
     ]
@@ -379,14 +422,25 @@ fn release_workflow_steps(opts: &PatchOpts) -> Vec<String> {
     let docker_ctx = &opts.docker_context;
     let orb_ctx = &opts.orb_context;
     let orb_dir = &opts.orb_dir;
+    // release_after_job is the approval gate; both build-binary-release and pack-orb-release
+    // require it so they run in parallel immediately after the gate clears.
     let requires = opts
         .release_after_job
         .as_deref()
         .map(|r| format!("[{r}]"))
         .unwrap_or_default();
+    // Variable name: CRATE_VERSION_ + binary uppercased with hyphens replaced by underscores.
+    // This matches the format written by toolkit/calculate_versions into versions.env.
+    let version_var = format!("CRATE_VERSION_{}", binary.to_uppercase().replace('-', "_"));
     let mut steps = vec![];
 
-    // Pack orb from committed source (runs in parallel with build-container)
+    // build-binary-release: compile the release binary, persist to workspace
+    steps.push("      - build-binary-release:".to_string());
+    if !requires.is_empty() {
+        steps.push(format!("          requires: {requires}"));
+    }
+
+    // Pack orb source (parallel with build-binary-release; both require the approval gate)
     steps.push("      - orb-tools/pack:".to_string());
     steps.push("          name: pack-orb-release".to_string());
     steps.push(format!("          source_dir: {orb_dir}/src"));
@@ -394,14 +448,25 @@ fn release_workflow_steps(opts: &PatchOpts) -> Vec<String> {
         steps.push(format!("          requires: {requires}"));
     }
 
+    // build-container: requires binary from workspace → sequential after build-binary-release
     steps.push("      - build-container:".to_string());
-    if !requires.is_empty() {
-        steps.push(format!("          requires: {requires}"));
-    }
+    steps.push("          requires: [build-binary-release]".to_string());
     steps.push(format!("          context: [{docker_ctx}]"));
 
+    // orb-tools/publish: inject CIRCLE_TAG via pre-steps (pipeline is approval-triggered,
+    // not tag-triggered, so CIRCLE_TAG is empty; inject it from versions.env)
     steps.push("      - orb-tools/publish:".to_string());
     steps.push(format!("          name: publish-orb-{namespace}"));
+    steps.push("          pre-steps:".to_string());
+    steps.push("            - attach_workspace:".to_string());
+    steps.push("                at: /tmp/release-versions".to_string());
+    steps.push("            - run:".to_string());
+    steps.push("                name: Export orb version as CIRCLE_TAG".to_string());
+    steps.push("                command: |".to_string());
+    steps.push("                  source /tmp/release-versions/versions.env".to_string());
+    steps.push(format!(
+        "                  echo \"export CIRCLE_TAG=${{{version_var}}}\" >> \"$BASH_ENV\""
+    ));
     steps.push(format!("          orb_name: {namespace}/{binary}"));
     steps.push("          pub_type: production".to_string());
     steps.push("          vcs_type: github".to_string());
@@ -424,7 +489,9 @@ mod tests {
             build_workflow: "validation".to_string(),
             release_workflow: "release".to_string(),
             requires_job: Some("common-tests".to_string()),
-            release_after_job: Some("release-mytool".to_string()),
+            // The approval gate job that binary build and orb pack run after.
+            // Docker/orb publish run before crates.io to establish the correct release order.
+            release_after_job: Some("approve-release".to_string()),
             orb_tools_version: "12.3.3".to_string(),
             docker_orb_version: "3.0.1".to_string(),
             docker_context: "docker".to_string(),
@@ -796,14 +863,19 @@ workflows:
             output.contains("docker push"),
             "missing docker push step:\n{output}"
         );
-        // CIRCLE_TAG is empty in merge-triggered pipelines; version must come from git tags
+        // Version comes from versions.env written by calculate_versions, not from git tags.
+        // The release pipeline is approval-triggered (not tag-triggered), so CIRCLE_TAG is empty.
         assert!(
             !output.contains("${CIRCLE_TAG}"),
-            "must not use CIRCLE_TAG (empty in merge pipelines):\n{output}"
+            "must not use CIRCLE_TAG (empty in approval-triggered pipelines):\n{output}"
         );
         assert!(
-            output.contains("git fetch --tags"),
-            "must fetch tags to get the just-released version:\n{output}"
+            output.contains("versions.env"),
+            "must source versions.env to get the release version:\n{output}"
+        );
+        assert!(
+            output.contains("attach_workspace"),
+            "must attach workspace to get versions.env and the binary:\n{output}"
         );
         assert!(
             output.contains("docker login -u \"${DOCKERHUB_USERNAME}\""),
@@ -895,20 +967,245 @@ workflows:
     fn patch_release_adds_build_container_job_when_no_jobs_section() {
         // release.yml with only toolkit jobs (no top-level jobs: section) is the
         // common case. patch_release must create the jobs: section and insert
-        // build-container, not silently skip it.
+        // both build-binary-release and build-container, not silently skip them.
         let (output, _) = patch_release(RELEASE_FIXTURE_NO_JOBS, &make_opts());
+        assert!(
+            output.contains("build-binary-release:"),
+            "build-binary-release job definition missing when no pre-existing jobs section:\n{output}"
+        );
         assert!(
             output.contains("build-container:"),
             "build-container job definition missing when no pre-existing jobs section:\n{output}"
         );
         let jobs_pos = output.find("\njobs:").expect("jobs: section not created");
         let workflows_pos = output.find("\nworkflows:").expect("no workflows: section");
-        let job_def_pos = output
+        let binary_release_pos = output
+            .find("  build-binary-release:")
+            .expect("no build-binary-release job definition");
+        let container_pos = output
             .find("  build-container:")
             .expect("no build-container job definition");
         assert!(
-            job_def_pos > jobs_pos && job_def_pos < workflows_pos,
+            binary_release_pos > jobs_pos && binary_release_pos < workflows_pos,
+            "build-binary-release definition must be in jobs: section, not workflows:\n{output}"
+        );
+        assert!(
+            container_pos > jobs_pos && container_pos < workflows_pos,
             "build-container definition must be in jobs: section, not workflows:\n{output}"
+        );
+    }
+
+    // ── new: build-binary-release job in release.yml ──────────────────────────
+
+    #[test]
+    fn patch_release_adds_build_binary_release_job() {
+        let (output, _) = patch_release(RELEASE_FIXTURE, &make_opts());
+        assert!(
+            output.contains("  build-binary-release:"),
+            "missing build-binary-release job definition:\n{output}"
+        );
+        let jobs_pos = output.find("\njobs:").expect("no jobs: section");
+        let workflows_pos = output.find("\nworkflows:").expect("no workflows: section");
+        let pos = output
+            .find("  build-binary-release:")
+            .expect("no build-binary-release job");
+        assert!(
+            pos > jobs_pos && pos < workflows_pos,
+            "build-binary-release must be in the jobs section:\n{output}"
+        );
+    }
+
+    #[test]
+    fn build_binary_release_job_uses_rust_latest() {
+        let (output, _) = patch_release(RELEASE_FIXTURE, &make_opts());
+        let block = job_block(&output, "build-binary-release");
+        assert!(
+            block.contains("rust:latest"),
+            "build-binary-release must use the public rust:latest image:\n{block}"
+        );
+    }
+
+    #[test]
+    fn build_binary_release_job_has_package_flag() {
+        let (output, _) = patch_release(RELEASE_FIXTURE, &make_opts());
+        let block = job_block(&output, "build-binary-release");
+        assert!(
+            block.contains("cargo build --release -p mytool"),
+            "build-binary-release must compile with -p <binary> flag:\n{block}"
+        );
+    }
+
+    #[test]
+    fn build_binary_release_job_persists_binary_to_workspace() {
+        let (output, _) = patch_release(RELEASE_FIXTURE, &make_opts());
+        let block = job_block(&output, "build-binary-release");
+        assert!(
+            block.contains("persist_to_workspace"),
+            "build-binary-release must persist binary to workspace:\n{block}"
+        );
+        assert!(
+            block.contains("paths: [mytool]"),
+            "build-binary-release must persist the binary by name:\n{block}"
+        );
+    }
+
+    // ── new: build-container uses versions.env + workspace binary ─────────────
+
+    #[test]
+    fn build_container_sources_versions_env() {
+        let (output, _) = patch_release(RELEASE_FIXTURE, &make_opts());
+        let block = job_block(&output, "build-container");
+        assert!(
+            block.contains("source /tmp/release-versions/versions.env"),
+            "build-container must source versions.env to get the release version:\n{block}"
+        );
+    }
+
+    #[test]
+    fn build_container_attaches_release_versions_workspace() {
+        let (output, _) = patch_release(RELEASE_FIXTURE, &make_opts());
+        let block = job_block(&output, "build-container");
+        assert!(
+            block.contains("at: /tmp/release-versions"),
+            "build-container must attach the release-versions workspace:\n{block}"
+        );
+    }
+
+    #[test]
+    fn build_container_attaches_bin_workspace() {
+        let (output, _) = patch_release(RELEASE_FIXTURE, &make_opts());
+        let block = job_block(&output, "build-container");
+        assert!(
+            block.contains("at: /tmp/bin"),
+            "build-container must attach the bin workspace to get the compiled binary:\n{block}"
+        );
+    }
+
+    #[test]
+    fn build_container_copies_workspace_binary() {
+        let (output, _) = patch_release(RELEASE_FIXTURE, &make_opts());
+        let block = job_block(&output, "build-container");
+        assert!(
+            block.contains("cp /tmp/bin/mytool orb/mytool"),
+            "build-container must copy binary from workspace into the Docker build context:\n{block}"
+        );
+    }
+
+    #[test]
+    fn build_container_uses_crate_version_var() {
+        let (output, _) = patch_release(RELEASE_FIXTURE, &make_opts());
+        let block = job_block(&output, "build-container");
+        // Variable name formula: CRATE_VERSION_ + binary.to_uppercase().replace('-', '_')
+        // mytool → CRATE_VERSION_MYTOOL
+        assert!(
+            block.contains("CRATE_VERSION_MYTOOL"),
+            "build-container must derive version from CRATE_VERSION_<BINARY> env var:\n{block}"
+        );
+    }
+
+    // ── new: release workflow step ordering ──────────────────────────────────
+
+    #[test]
+    fn release_workflow_has_build_binary_release_step() {
+        let (output, _) = patch_release(RELEASE_FIXTURE, &make_opts());
+        assert!(
+            output.contains("      - build-binary-release:"),
+            "missing build-binary-release workflow step:\n{output}"
+        );
+    }
+
+    #[test]
+    fn release_workflow_binary_and_pack_both_require_approval_gate() {
+        let (output, _) = patch_release(RELEASE_FIXTURE, &make_opts());
+        // build-binary-release step block
+        let after_binary = output
+            .split("      - build-binary-release:")
+            .nth(1)
+            .expect("no build-binary-release workflow step");
+        let binary_step = after_binary
+            .split("      - ")
+            .next()
+            .unwrap_or(after_binary);
+        assert!(
+            binary_step.contains("requires: [approve-release]"),
+            "build-binary-release workflow step must require the approval gate:\n{binary_step}"
+        );
+        // pack-orb-release step block
+        let after_pack = output
+            .split("name: pack-orb-release")
+            .nth(1)
+            .expect("no pack-orb-release step");
+        let pack_step = after_pack.split("      - ").next().unwrap_or(after_pack);
+        assert!(
+            pack_step.contains("requires: [approve-release]"),
+            "pack-orb-release step must require the approval gate (runs in parallel with build-binary-release):\n{pack_step}"
+        );
+    }
+
+    #[test]
+    fn release_workflow_container_requires_build_binary_release() {
+        let (output, _) = patch_release(RELEASE_FIXTURE, &make_opts());
+        let after_container = output
+            .split("      - build-container:")
+            .nth(1)
+            .expect("no build-container workflow step");
+        let step_block = after_container
+            .split("      - ")
+            .next()
+            .unwrap_or(after_container);
+        assert!(
+            step_block.contains("requires: [build-binary-release]"),
+            "build-container must require build-binary-release (not the approval gate directly):\n{step_block}"
+        );
+    }
+
+    #[test]
+    fn release_workflow_publish_has_pre_steps_circle_tag_injection() {
+        let (output, _) = patch_release(RELEASE_FIXTURE, &make_opts());
+        // orb-tools/publish requires CIRCLE_TAG for pub_type: production.
+        // Since the pipeline is approval-triggered (not tag-triggered), CIRCLE_TAG must be
+        // injected via pre-steps from versions.env.
+        assert!(
+            output.contains("pre-steps:"),
+            "orb-tools/publish must have pre-steps to inject CIRCLE_TAG:\n{output}"
+        );
+        assert!(
+            output.contains("Export orb version as CIRCLE_TAG"),
+            "pre-steps must contain a named step that exports CIRCLE_TAG:\n{output}"
+        );
+        assert!(
+            output.contains("CIRCLE_TAG"),
+            "pre-steps must set CIRCLE_TAG in BASH_ENV:\n{output}"
+        );
+        assert!(
+            output.contains("BASH_ENV"),
+            "pre-steps must export CIRCLE_TAG via BASH_ENV:\n{output}"
+        );
+    }
+
+    #[test]
+    fn release_workflow_publish_pre_steps_use_versions_env() {
+        let (output, _) = patch_release(RELEASE_FIXTURE, &make_opts());
+        // The pre-steps must source versions.env from the workspace to get the version.
+        // The workspace is attached first, then the env file sourced.
+        assert!(
+            output.contains("/tmp/release-versions"),
+            "publish pre-steps must attach the release-versions workspace:\n{output}"
+        );
+        assert!(
+            output.contains("source /tmp/release-versions/versions.env"),
+            "publish pre-steps must source versions.env to read CRATE_VERSION_*:\n{output}"
+        );
+    }
+
+    #[test]
+    fn release_workflow_publish_pre_steps_inject_correct_variable() {
+        let (output, _) = patch_release(RELEASE_FIXTURE, &make_opts());
+        // Variable name: CRATE_VERSION_ + binary.to_uppercase().replace('-', '_')
+        // mytool → CRATE_VERSION_MYTOOL
+        assert!(
+            output.contains("CIRCLE_TAG=${CRATE_VERSION_MYTOOL}"),
+            "CIRCLE_TAG must be set from CRATE_VERSION_MYTOOL (binary name uppercased, hyphens to underscores):\n{output}"
         );
     }
 }
