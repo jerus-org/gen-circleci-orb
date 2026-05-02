@@ -365,7 +365,7 @@ fn build_container_job(opts: &PatchOpts) -> Vec<String> {
         "      - run:".to_string(),
         "          name: Push Docker image".to_string(),
         "          command: |".to_string(),
-        "            docker login -u \"${DOCKER_LOGIN}\" -p \"${DOCKER_PASSWORD}\"".to_string(),
+        "            echo \"${DOCKERHUB_PASSWORD}\" | docker login -u \"${DOCKERHUB_USERNAME}\" --password-stdin".to_string(),
         "            git fetch --tags".to_string(),
         format!("            VERSION=$(git tag --list \"{binary}-v*\" --sort=-version:refname | head -1 | sed 's/{binary}-v//')"),
         format!("            docker push {docker_ns}/{binary}:${{VERSION}}"),
@@ -806,8 +806,12 @@ workflows:
             "must fetch tags to get the just-released version:\n{output}"
         );
         assert!(
-            output.contains("docker login"),
-            "must log in to Docker Hub before pushing:\n{output}"
+            output.contains("docker login -u \"${DOCKERHUB_USERNAME}\""),
+            "must log in to Docker Hub with DOCKERHUB_USERNAME before pushing:\n{output}"
+        );
+        assert!(
+            output.contains("--password-stdin"),
+            "must use --password-stdin (not -p flag) for Docker login:\n{output}"
         );
         assert!(
             output.contains(":latest"),

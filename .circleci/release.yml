@@ -45,7 +45,7 @@ jobs:
             VERSION=${CRATE_VERSION_GEN_CIRCLECI_ORB}
             cp /tmp/bin/gen-circleci-orb orb/gen-circleci-orb
             docker build -t jerusdp/gen-circleci-orb:${VERSION} -t jerusdp/gen-circleci-orb:latest orb
-            docker login -u "${DOCKER_LOGIN}" -p "${DOCKER_PASSWORD}"
+            echo "${DOCKERHUB_PASSWORD}" | docker login -u "${DOCKERHUB_USERNAME}" --password-stdin
             docker push jerusdp/gen-circleci-orb:${VERSION}
             docker push jerusdp/gen-circleci-orb:latest
 
