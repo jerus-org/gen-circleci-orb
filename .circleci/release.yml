@@ -85,7 +85,7 @@ workflows:
                 name: Export orb version as CIRCLE_TAG
                 command: |
                   source /tmp/release-versions/versions.env
-                  echo "export CIRCLE_TAG=${CRATE_VERSION_GEN_CIRCLECI_ORB}" >> "$BASH_ENV"
+                  echo "export CIRCLE_TAG=v${CRATE_VERSION_GEN_CIRCLECI_ORB}" >> "$BASH_ENV"
           orb_name: jerus-org/gen-circleci-orb
           pub_type: production
           vcs_type: github
