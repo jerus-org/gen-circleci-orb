@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Docker image and orb before crates.io(pr [#22])
 - use DOCKERHUB_USERNAME/PASSWORD with --password-stdin(pr [#23])
 - use docker-hub context for Docker push(pr [#24])
+- inject CIRCLE_TAG for orb-tools/publish in merge pipeline(pr [#25])
 
 ## [0.0.8] - 2026-05-01
 
@@ -93,6 +94,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#22]: https://github.com/jerus-org/gen-circleci-orb/pull/22
 [#23]: https://github.com/jerus-org/gen-circleci-orb/pull/23
 [#24]: https://github.com/jerus-org/gen-circleci-orb/pull/24
+[#25]: https://github.com/jerus-org/gen-circleci-orb/pull/25
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.8...HEAD
 [0.0.8]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.7...v0.0.8
 [0.0.7]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.6...v0.0.7
