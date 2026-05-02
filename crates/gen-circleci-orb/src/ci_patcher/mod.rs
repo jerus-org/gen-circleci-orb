@@ -464,8 +464,9 @@ fn release_workflow_steps(opts: &PatchOpts) -> Vec<String> {
     steps.push("                name: Export orb version as CIRCLE_TAG".to_string());
     steps.push("                command: |".to_string());
     steps.push("                  source /tmp/release-versions/versions.env".to_string());
+    // orb-tools/publish requires CIRCLE_TAG to match ^v[0-9]+\.[0-9]+\.[0-9]+$
     steps.push(format!(
-        "                  echo \"export CIRCLE_TAG=${{{version_var}}}\" >> \"$BASH_ENV\""
+        "                  echo \"export CIRCLE_TAG=v${{{version_var}}}\" >> \"$BASH_ENV\""
     ));
     steps.push(format!("          orb_name: {namespace}/{binary}"));
     steps.push("          pub_type: production".to_string());
@@ -1203,9 +1204,11 @@ workflows:
         let (output, _) = patch_release(RELEASE_FIXTURE, &make_opts());
         // Variable name: CRATE_VERSION_ + binary.to_uppercase().replace('-', '_')
         // mytool → CRATE_VERSION_MYTOOL
+        // orb-tools/publish pub_type:production requires CIRCLE_TAG matching ^v[0-9]+\.[0-9]+\.[0-9]+$
+        // so the v prefix is mandatory.
         assert!(
-            output.contains("CIRCLE_TAG=${CRATE_VERSION_MYTOOL}"),
-            "CIRCLE_TAG must be set from CRATE_VERSION_MYTOOL (binary name uppercased, hyphens to underscores):\n{output}"
+            output.contains("CIRCLE_TAG=v${CRATE_VERSION_MYTOOL}"),
+            "CIRCLE_TAG must have a v prefix — orb-tools/publish requires tag pattern ^v\\d+\\.\\d+\\.\\d+$:\n{output}"
         );
     }
 }
