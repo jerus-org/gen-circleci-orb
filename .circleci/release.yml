@@ -76,25 +76,9 @@ workflows:
           requires: [build-binary-release]
           context: [docker]
 
-      - orb-tools/publish:
-          name: publish-orb-jerus-org
-          pre-steps:
-            - attach_workspace:
-                at: /tmp/release-versions
-            - run:
-                name: Export orb version as CIRCLE_TAG
-                command: |
-                  source /tmp/release-versions/versions.env
-                  echo "export CIRCLE_TAG=${CRATE_VERSION_GEN_CIRCLECI_ORB}" >> "$BASH_ENV"
-          orb_name: jerus-org/gen-circleci-orb
-          pub_type: production
-          vcs_type: github
-          requires: [build-container, pack-orb-release]
-          context: [orb-publishing]
-
       - toolkit/release_crate:
           name: release-gen-circleci-orb
-          requires: [publish-orb-jerus-org]
+          requires: [build-container, pack-orb-release]
           context:
             - release
             - bot-check

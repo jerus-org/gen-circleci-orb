@@ -7,8 +7,18 @@ parameters:
 
 orbs:
   toolkit: jerus-org/circleci-toolkit@6.1.4
-
   orb-tools: circleci/orb-tools@12.3.3
+
+# Run all jobs in validation; only publish on v* release tags.
+filters: &filters
+  tags:
+    only: /.*/
+
+release-filters: &release-filters
+  tags:
+    only: /^v\d+\.\d+\.\d+$/
+  branches:
+    ignore: /.*/
 jobs:
   build-binary:
     docker:
@@ -107,3 +117,18 @@ workflows:
           name: review-orb
           source_dir: orb/src
           requires: [pack-orb]
+
+  publish-orb:
+    jobs:
+      - orb-tools/pack:
+          name: pack-orb-release
+          source_dir: orb/src
+          filters: *release-filters
+      - orb-tools/publish:
+          name: publish-orb-jerus-org
+          orb_name: jerus-org/gen-circleci-orb
+          pub_type: production
+          vcs_type: github
+          requires: [pack-orb-release]
+          context: [orb-publishing]
+          filters: *release-filters
