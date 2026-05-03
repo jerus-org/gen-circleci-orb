@@ -458,6 +458,20 @@ fn release_workflow_steps(opts: &PatchOpts) -> Vec<String> {
     steps.push("      - orb-tools/publish:".to_string());
     steps.push(format!("          name: publish-orb-{namespace}"));
     steps.push("          pre-steps:".to_string());
+    // Ensure the orb is registered before publishing. First release fails with
+    // "Cannot find orb" if the orb has never been created. The orb-tools executor
+    // has the CircleCI CLI available. Pattern: check first, create only if missing.
+    // Using `orb info || orb create` (not `orb create || true`) so wrong-namespace/
+    // wrong-token failures still surface rather than being silently swallowed.
+    steps.push("            - run:".to_string());
+    steps.push("                name: Ensure orb is registered".to_string());
+    steps.push("                command: |".to_string());
+    steps.push(format!(
+        "                  circleci orb info {namespace}/{binary} > /dev/null 2>&1 || \\"
+    ));
+    steps.push(format!(
+        "                    circleci orb create {namespace}/{binary} --no-prompt"
+    ));
     steps.push("            - attach_workspace:".to_string());
     steps.push("                at: /tmp/release-versions".to_string());
     steps.push("            - run:".to_string());
@@ -1209,6 +1223,63 @@ workflows:
         assert!(
             output.contains("CIRCLE_TAG=v${CRATE_VERSION_MYTOOL}"),
             "CIRCLE_TAG must have a v prefix — orb-tools/publish requires tag pattern ^v\\d+\\.\\d+\\.\\d+$:\n{output}"
+        );
+    }
+
+    // ── new: ensure-orb-registered pre-step ──────────────────────────────────
+
+    #[test]
+    fn release_workflow_publish_pre_steps_ensure_orb_registered() {
+        let (output, _) = patch_release(RELEASE_FIXTURE, &make_opts());
+        // orb-tools/publish fails with "Cannot find orb" on first release if the orb has
+        // never been created. A pre-step checks with `circleci orb info` and creates it
+        // via `circleci orb create` if missing. The orb-tools executor has the CLI available.
+        assert!(
+            output.contains("Ensure orb is registered"),
+            "publish pre-steps must include an ensure-orb-registered step:\n{output}"
+        );
+        assert!(
+            output.contains("circleci orb info"),
+            "ensure step must check whether the orb exists before creating:\n{output}"
+        );
+        assert!(
+            output.contains("circleci orb create"),
+            "ensure step must create the orb if it does not exist:\n{output}"
+        );
+    }
+
+    #[test]
+    fn release_workflow_publish_ensure_orb_uses_idempotent_pattern() {
+        let (output, _) = patch_release(RELEASE_FIXTURE, &make_opts());
+        // Pattern: `circleci orb info <ns>/<bin> > /dev/null 2>&1 || circleci orb create ...`
+        // First run: orb info exits non-zero → orb create runs.
+        // Subsequent runs: orb info exits 0 → orb create is skipped.
+        // Real failures (wrong token, wrong namespace) still surface because they
+        // fail the `orb info` side, not a silent `|| true`.
+        assert!(
+            output.contains("circleci orb info my-org/mytool"),
+            "ensure step must check the specific orb (namespace/binary):\n{output}"
+        );
+        assert!(
+            output.contains("circleci orb create my-org/mytool --no-prompt"),
+            "ensure step must create the specific orb with --no-prompt:\n{output}"
+        );
+    }
+
+    #[test]
+    fn release_workflow_publish_ensure_orb_not_silent_on_wrong_namespace() {
+        let (output, _) = patch_release(RELEASE_FIXTURE, &make_opts());
+        // `|| true` would hide wrong-namespace/wrong-token failures.
+        // The correct pattern uses `orb info || orb create`, NOT `orb create || true`.
+        // We verify by checking that `|| true` does NOT appear in the ensure step block.
+        let after_ensure = output
+            .split("Ensure orb is registered")
+            .nth(1)
+            .expect("no ensure step");
+        let ensure_block = after_ensure.split("name:").next().unwrap_or(after_ensure);
+        assert!(
+            !ensure_block.contains("|| true"),
+            "ensure step must not use `|| true` — real failures must surface:\n{ensure_block}"
         );
     }
 }
