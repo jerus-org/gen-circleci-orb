@@ -132,13 +132,15 @@ pub fn patch_release(content: &str, opts: &PatchOpts) -> (String, PatchReport) {
         }
     }
 
-    // 2. Add build-binary-release and build-container jobs
+    // 2. Add build-binary-release, ensure-orb-registered, and build-container jobs
     let has_binary_release = content.contains("build-binary-release:");
+    let has_ensure_orb = content.contains("ensure-orb-registered:");
     let has_container = content.contains("build-container:");
-    if has_binary_release && has_container {
-        report
-            .skipped
-            .push("build-binary-release and build-container jobs".to_string());
+    if has_binary_release && has_ensure_orb && has_container {
+        report.skipped.push(
+            "release jobs (build-binary-release, ensure-orb-registered, build-container)"
+                .to_string(),
+        );
     } else {
         if let Some(pos) = find_section_end(&lines, "jobs:") {
             let mut insert_pos = pos;
@@ -149,6 +151,14 @@ pub fn patch_release(content: &str, opts: &PatchOpts) -> (String, PatchReport) {
                     lines.insert(insert_pos + i, l);
                 }
                 insert_pos += binary_len;
+            }
+            if !has_ensure_orb {
+                let ensure_block = ensure_orb_registered_job(opts);
+                let ensure_len = ensure_block.len();
+                for (i, l) in ensure_block.into_iter().enumerate() {
+                    lines.insert(insert_pos + i, l);
+                }
+                insert_pos += ensure_len;
             }
             if !has_container {
                 let container_block = build_container_job(opts);
@@ -165,6 +175,11 @@ pub fn patch_release(content: &str, opts: &PatchOpts) -> (String, PatchReport) {
             for i in 0..container_len {
                 lines.insert(wf_pos, container_block[container_len - 1 - i].clone());
             }
+            let ensure_block = ensure_orb_registered_job(opts);
+            let ensure_len = ensure_block.len();
+            for i in 0..ensure_len {
+                lines.insert(wf_pos, ensure_block[ensure_len - 1 - i].clone());
+            }
             let binary_block = build_binary_release_job(opts);
             let binary_len = binary_block.len();
             for i in 0..binary_len {
@@ -172,14 +187,16 @@ pub fn patch_release(content: &str, opts: &PatchOpts) -> (String, PatchReport) {
             }
             lines.insert(wf_pos, "jobs:".to_string());
         }
-        report
-            .insertions
-            .push("build-binary-release and build-container jobs".to_string());
+        report.insertions.push(
+            "release jobs (build-binary-release, ensure-orb-registered, build-container)"
+                .to_string(),
+        );
     }
 
     // 3. Add release workflow steps
     if content.contains("pack-orb-release")
         && content.contains("      - build-binary-release:")
+        && content.contains("      - ensure-orb-registered:")
         && content.contains("      - build-container:")
         && content.contains("orb-tools/publish:")
     {
@@ -383,6 +400,25 @@ fn build_binary_release_job(opts: &PatchOpts) -> Vec<String> {
     ]
 }
 
+fn ensure_orb_registered_job(opts: &PatchOpts) -> Vec<String> {
+    let binary = &opts.binary;
+    let namespace = &opts.namespace;
+    // Uses orb-tools/default executor — same circleci/circleci-cli image as orb-tools/publish,
+    // so the CircleCI CLI is pre-installed. The orb-publishing context provides
+    // CIRCLECI_API_TOKEN; the CLI reads CIRCLECI_CLI_TOKEN, so we export one from the other.
+    vec![
+        "  ensure-orb-registered:".to_string(),
+        "    executor: orb-tools/default".to_string(),
+        "    steps:".to_string(),
+        "      - run:".to_string(),
+        "          name: Ensure orb is registered".to_string(),
+        "          command: |".to_string(),
+        "            export CIRCLECI_CLI_TOKEN=\"${CIRCLECI_API_TOKEN}\"".to_string(),
+        format!("            circleci orb info {namespace}/{binary} > /dev/null 2>&1 || \\"),
+        format!("              circleci orb create {namespace}/{binary} --no-prompt"),
+    ]
+}
+
 fn build_container_job(opts: &PatchOpts) -> Vec<String> {
     let binary = &opts.binary;
     let docker_ns = &opts.docker_namespace;
@@ -453,25 +489,22 @@ fn release_workflow_steps(opts: &PatchOpts) -> Vec<String> {
     steps.push("          requires: [build-binary-release]".to_string());
     steps.push(format!("          context: [{docker_ctx}]"));
 
+    // ensure-orb-registered: dedicated job using orb-tools/default executor (CLI pre-installed).
+    // Runs in parallel with build-container; both require the approval gate.
+    // A pre-step cannot be used because orb-tools/publish configures CLI auth in its own steps,
+    // which run after pre-steps — leaving the CLI unauthenticated during pre-step execution.
+    steps.push("      - ensure-orb-registered:".to_string());
+    if !requires.is_empty() {
+        steps.push(format!("          requires: {requires}"));
+    }
+    steps.push(format!("          context: [{orb_ctx}]"));
+
     // orb-tools/publish: inject CIRCLE_TAG via pre-steps (pipeline is approval-triggered,
-    // not tag-triggered, so CIRCLE_TAG is empty; inject it from versions.env)
+    // not tag-triggered, so CIRCLE_TAG is empty; inject it from versions.env).
+    // Also requires ensure-orb-registered so the orb exists before publish runs.
     steps.push("      - orb-tools/publish:".to_string());
     steps.push(format!("          name: publish-orb-{namespace}"));
     steps.push("          pre-steps:".to_string());
-    // Ensure the orb is registered before publishing. First release fails with
-    // "Cannot find orb" if the orb has never been created. The orb-tools executor
-    // has the CircleCI CLI available. Pattern: check first, create only if missing.
-    // Using `orb info || orb create` (not `orb create || true`) so wrong-namespace/
-    // wrong-token failures still surface rather than being silently swallowed.
-    steps.push("            - run:".to_string());
-    steps.push("                name: Ensure orb is registered".to_string());
-    steps.push("                command: |".to_string());
-    steps.push(format!(
-        "                  circleci orb info {namespace}/{binary} > /dev/null 2>&1 || \\"
-    ));
-    steps.push(format!(
-        "                    circleci orb create {namespace}/{binary} --no-prompt"
-    ));
     steps.push("            - attach_workspace:".to_string());
     steps.push("                at: /tmp/release-versions".to_string());
     steps.push("            - run:".to_string());
@@ -485,7 +518,10 @@ fn release_workflow_steps(opts: &PatchOpts) -> Vec<String> {
     steps.push(format!("          orb_name: {namespace}/{binary}"));
     steps.push("          pub_type: production".to_string());
     steps.push("          vcs_type: github".to_string());
-    steps.push("          requires: [build-container, pack-orb-release]".to_string());
+    steps.push(
+        "          requires: [build-container, pack-orb-release, ensure-orb-registered]"
+            .to_string(),
+    );
     steps.push(format!("          context: [{orb_ctx}]"));
 
     steps
@@ -1226,60 +1262,152 @@ workflows:
         );
     }
 
-    // ── new: ensure-orb-registered pre-step ──────────────────────────────────
+    // ── ensure-orb-registered: separate job (not a pre-step) ────────────────
+    // pre-steps run before the orb-tools job configures CLI auth, so the CLI has
+    // no token. The fix is a dedicated inline job using `executor: orb-tools/default`
+    // (same image as orb-tools/publish — CLI pre-installed) with the orb-publishing
+    // context, where CIRCLECI_API_TOKEN is available from the start.
 
     #[test]
-    fn release_workflow_publish_pre_steps_ensure_orb_registered() {
+    fn patch_release_adds_ensure_orb_registered_job() {
         let (output, _) = patch_release(RELEASE_FIXTURE, &make_opts());
-        // orb-tools/publish fails with "Cannot find orb" on first release if the orb has
-        // never been created. A pre-step checks with `circleci orb info` and creates it
-        // via `circleci orb create` if missing. The orb-tools executor has the CLI available.
         assert!(
-            output.contains("Ensure orb is registered"),
-            "publish pre-steps must include an ensure-orb-registered step:\n{output}"
+            output.contains("  ensure-orb-registered:"),
+            "missing ensure-orb-registered job definition:\n{output}"
         );
+        let jobs_pos = output.find("\njobs:").expect("no jobs: section");
+        let workflows_pos = output.find("\nworkflows:").expect("no workflows: section");
+        let pos = output
+            .find("  ensure-orb-registered:")
+            .expect("no ensure-orb-registered job");
         assert!(
-            output.contains("circleci orb info"),
-            "ensure step must check whether the orb exists before creating:\n{output}"
-        );
-        assert!(
-            output.contains("circleci orb create"),
-            "ensure step must create the orb if it does not exist:\n{output}"
+            pos > jobs_pos && pos < workflows_pos,
+            "ensure-orb-registered must be defined in the jobs section:\n{output}"
         );
     }
 
     #[test]
-    fn release_workflow_publish_ensure_orb_uses_idempotent_pattern() {
+    fn ensure_orb_registered_job_uses_orb_tools_executor() {
         let (output, _) = patch_release(RELEASE_FIXTURE, &make_opts());
-        // Pattern: `circleci orb info <ns>/<bin> > /dev/null 2>&1 || circleci orb create ...`
-        // First run: orb info exits non-zero → orb create runs.
-        // Subsequent runs: orb info exits 0 → orb create is skipped.
-        // Real failures (wrong token, wrong namespace) still surface because they
-        // fail the `orb info` side, not a silent `|| true`.
+        let block = job_block(&output, "ensure-orb-registered");
+        // orb-tools/default uses the circleci/circleci-cli Docker image — CLI pre-installed.
+        // No need to add a circleci/circleci-cli orb dependency.
         assert!(
-            output.contains("circleci orb info my-org/mytool"),
-            "ensure step must check the specific orb (namespace/binary):\n{output}"
-        );
-        assert!(
-            output.contains("circleci orb create my-org/mytool --no-prompt"),
-            "ensure step must create the specific orb with --no-prompt:\n{output}"
+            block.contains("executor: orb-tools/default"),
+            "ensure-orb-registered must use orb-tools/default executor (has CLI pre-installed):\n{block}"
         );
     }
 
     #[test]
-    fn release_workflow_publish_ensure_orb_not_silent_on_wrong_namespace() {
+    fn ensure_orb_registered_job_exports_cli_token() {
         let (output, _) = patch_release(RELEASE_FIXTURE, &make_opts());
-        // `|| true` would hide wrong-namespace/wrong-token failures.
-        // The correct pattern uses `orb info || orb create`, NOT `orb create || true`.
-        // We verify by checking that `|| true` does NOT appear in the ensure step block.
-        let after_ensure = output
-            .split("Ensure orb is registered")
+        let block = job_block(&output, "ensure-orb-registered");
+        // The job has the orb-publishing context so CIRCLECI_API_TOKEN is available.
+        // The CLI reads CIRCLECI_CLI_TOKEN, so we export one from the other.
+        assert!(
+            block.contains("CIRCLECI_CLI_TOKEN"),
+            "ensure-orb-registered must export CIRCLECI_CLI_TOKEN for the circleci CLI:\n{block}"
+        );
+        assert!(
+            block.contains("CIRCLECI_API_TOKEN"),
+            "ensure-orb-registered must derive the token from CIRCLECI_API_TOKEN (from orb-publishing context):\n{block}"
+        );
+    }
+
+    #[test]
+    fn ensure_orb_registered_job_uses_idempotent_check() {
+        let (output, _) = patch_release(RELEASE_FIXTURE, &make_opts());
+        let block = job_block(&output, "ensure-orb-registered");
+        assert!(
+            block.contains("circleci orb info my-org/mytool"),
+            "ensure job must check the specific orb before creating:\n{block}"
+        );
+        assert!(
+            block.contains("circleci orb create my-org/mytool --no-prompt"),
+            "ensure job must create the specific orb with --no-prompt:\n{block}"
+        );
+        assert!(
+            !block.contains("|| true"),
+            "must not use `|| true` — real failures (wrong token, wrong namespace) must surface:\n{block}"
+        );
+    }
+
+    #[test]
+    fn release_workflow_has_ensure_orb_registered_step() {
+        let (output, _) = patch_release(RELEASE_FIXTURE, &make_opts());
+        assert!(
+            output.contains("      - ensure-orb-registered:"),
+            "missing ensure-orb-registered workflow step:\n{output}"
+        );
+    }
+
+    #[test]
+    fn release_workflow_ensure_orb_step_requires_approval_gate() {
+        let (output, _) = patch_release(RELEASE_FIXTURE, &make_opts());
+        let after_step = output
+            .split("      - ensure-orb-registered:")
             .nth(1)
-            .expect("no ensure step");
-        let ensure_block = after_ensure.split("name:").next().unwrap_or(after_ensure);
+            .expect("no ensure-orb-registered workflow step");
+        let step_block = after_step.split("      - ").next().unwrap_or(after_step);
         assert!(
-            !ensure_block.contains("|| true"),
-            "ensure step must not use `|| true` — real failures must surface:\n{ensure_block}"
+            step_block.contains("requires: [approve-release]"),
+            "ensure-orb-registered must require the approval gate:\n{step_block}"
+        );
+    }
+
+    #[test]
+    fn release_workflow_ensure_orb_step_uses_orb_publishing_context() {
+        let (output, _) = patch_release(RELEASE_FIXTURE, &make_opts());
+        let after_step = output
+            .split("      - ensure-orb-registered:")
+            .nth(1)
+            .expect("no ensure-orb-registered workflow step");
+        let step_block = after_step.split("      - ").next().unwrap_or(after_step);
+        assert!(
+            step_block.contains("context: [orb-publishing]"),
+            "ensure-orb-registered must run in the orb-publishing context (provides CIRCLECI_API_TOKEN):\n{step_block}"
+        );
+    }
+
+    #[test]
+    fn release_workflow_publish_requires_ensure_orb_registered() {
+        let (output, _) = patch_release(RELEASE_FIXTURE, &make_opts());
+        let after_publish = output
+            .split("      - orb-tools/publish:")
+            .nth(1)
+            .expect("no orb-tools/publish step");
+        // Split on "\n      - " (newline-anchored) so 12-space pre-step items
+        // (which contain "      - " as a substring) do not cause a false cut.
+        let publish_block = after_publish
+            .split("\n      - ")
+            .next()
+            .unwrap_or(after_publish);
+        assert!(
+            publish_block.contains("ensure-orb-registered"),
+            "orb-tools/publish must require ensure-orb-registered:\n{publish_block}"
+        );
+    }
+
+    #[test]
+    fn release_workflow_publish_pre_steps_no_ensure_orb_step() {
+        let (output, _) = patch_release(RELEASE_FIXTURE, &make_opts());
+        // The ensure step is now a separate job, not a pre-step. The pre-steps block
+        // of orb-tools/publish should only contain workspace attachment and CIRCLE_TAG export.
+        let after_publish = output
+            .split("      - orb-tools/publish:")
+            .nth(1)
+            .expect("no orb-tools/publish step");
+        let pre_steps_block = after_publish
+            .split("          orb_name:")
+            .next()
+            .unwrap_or(after_publish);
+        assert!(
+            !pre_steps_block.contains("circleci orb info"),
+            "orb info must not be in orb-tools/publish pre-steps — it belongs in the separate ensure-orb-registered job:\n{pre_steps_block}"
+        );
+        assert!(
+            !pre_steps_block.contains("circleci orb create"),
+            "orb create must not be in orb-tools/publish pre-steps — it belongs in the separate ensure-orb-registered job:\n{pre_steps_block}"
         );
     }
 }

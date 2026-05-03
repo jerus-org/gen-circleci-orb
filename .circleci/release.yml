@@ -49,6 +49,16 @@ jobs:
             docker push jerusdp/gen-circleci-orb:${VERSION}
             docker push jerusdp/gen-circleci-orb:latest
 
+  ensure-orb-registered:
+    executor: orb-tools/default
+    steps:
+      - run:
+          name: Ensure orb is registered
+          command: |
+            export CIRCLECI_CLI_TOKEN="${CIRCLECI_API_TOKEN}"
+            circleci orb info jerus-org/gen-circleci-orb > /dev/null 2>&1 || \
+              circleci orb create jerus-org/gen-circleci-orb --no-prompt
+
 
 workflows:
   release:
@@ -76,14 +86,13 @@ workflows:
           requires: [build-binary-release]
           context: [docker]
 
+      - ensure-orb-registered:
+          requires: [approve-release]
+          context: [orb-publishing]
+
       - orb-tools/publish:
           name: publish-orb-jerus-org
           pre-steps:
-            - run:
-                name: Ensure orb is registered
-                command: |
-                  circleci orb info jerus-org/gen-circleci-orb > /dev/null 2>&1 || \
-                    circleci orb create jerus-org/gen-circleci-orb --no-prompt
             - attach_workspace:
                 at: /tmp/release-versions
             - run:
@@ -94,7 +103,7 @@ workflows:
           orb_name: jerus-org/gen-circleci-orb
           pub_type: production
           vcs_type: github
-          requires: [build-container, pack-orb-release]
+          requires: [build-container, pack-orb-release, ensure-orb-registered]
           context: [orb-publishing]
 
       - toolkit/release_crate:
