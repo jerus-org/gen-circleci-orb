@@ -79,6 +79,11 @@ workflows:
       - orb-tools/publish:
           name: publish-orb-jerus-org
           pre-steps:
+            - run:
+                name: Ensure orb is registered
+                command: |
+                  circleci orb info jerus-org/gen-circleci-orb > /dev/null 2>&1 || \
+                    circleci orb create jerus-org/gen-circleci-orb --no-prompt
             - attach_workspace:
                 at: /tmp/release-versions
             - run:
