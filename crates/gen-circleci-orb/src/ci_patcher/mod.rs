@@ -405,7 +405,7 @@ fn ensure_orb_registered_job(opts: &PatchOpts) -> Vec<String> {
     let namespace = &opts.namespace;
     // Uses orb-tools/default executor — same circleci/circleci-cli image as orb-tools/publish,
     // so the CircleCI CLI is pre-installed. The orb-publishing context provides
-    // CIRCLECI_API_TOKEN; the CLI reads CIRCLECI_CLI_TOKEN, so we export one from the other.
+    // CIRCLECI_CLI_TOKEN directly; the CLI reads it automatically, no export needed.
     vec![
         "  ensure-orb-registered:".to_string(),
         "    executor: orb-tools/default".to_string(),
@@ -413,7 +413,6 @@ fn ensure_orb_registered_job(opts: &PatchOpts) -> Vec<String> {
         "      - run:".to_string(),
         "          name: Ensure orb is registered".to_string(),
         "          command: |".to_string(),
-        "            export CIRCLECI_CLI_TOKEN=\"${CIRCLECI_API_TOKEN}\"".to_string(),
         format!("            circleci orb info {namespace}/{binary} > /dev/null 2>&1 || \\"),
         format!("              circleci orb create {namespace}/{binary} --no-prompt"),
     ]
@@ -1266,7 +1265,7 @@ workflows:
     // pre-steps run before the orb-tools job configures CLI auth, so the CLI has
     // no token. The fix is a dedicated inline job using `executor: orb-tools/default`
     // (same image as orb-tools/publish — CLI pre-installed) with the orb-publishing
-    // context, where CIRCLECI_API_TOKEN is available from the start.
+    // context, which injects CIRCLECI_CLI_TOKEN directly (the CLI reads it automatically).
 
     #[test]
     fn patch_release_adds_ensure_orb_registered_job() {
@@ -1299,18 +1298,14 @@ workflows:
     }
 
     #[test]
-    fn ensure_orb_registered_job_exports_cli_token() {
+    fn ensure_orb_registered_job_uses_context_token() {
         let (output, _) = patch_release(RELEASE_FIXTURE, &make_opts());
         let block = job_block(&output, "ensure-orb-registered");
-        // The job has the orb-publishing context so CIRCLECI_API_TOKEN is available.
-        // The CLI reads CIRCLECI_CLI_TOKEN, so we export one from the other.
+        // The orb-publishing context injects CIRCLECI_CLI_TOKEN directly.
+        // The CLI reads it automatically — no explicit export needed.
         assert!(
-            block.contains("CIRCLECI_CLI_TOKEN"),
-            "ensure-orb-registered must export CIRCLECI_CLI_TOKEN for the circleci CLI:\n{block}"
-        );
-        assert!(
-            block.contains("CIRCLECI_API_TOKEN"),
-            "ensure-orb-registered must derive the token from CIRCLECI_API_TOKEN (from orb-publishing context):\n{block}"
+            !block.contains("export CIRCLECI_CLI_TOKEN"),
+            "ensure-orb-registered must not manually export CIRCLECI_CLI_TOKEN — the context provides it:\n{block}"
         );
     }
 
