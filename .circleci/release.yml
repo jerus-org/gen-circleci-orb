@@ -55,6 +55,7 @@ jobs:
       - run:
           name: Ensure orb is registered
           command: |
+            export CIRCLECI_CLI_TOKEN="${CIRCLECI_TOKEN}"
             circleci orb info jerus-org/gen-circleci-orb > /dev/null 2>&1 || \
               circleci orb create jerus-org/gen-circleci-orb --no-prompt
 

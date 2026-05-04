@@ -404,8 +404,9 @@ fn ensure_orb_registered_job(opts: &PatchOpts) -> Vec<String> {
     let binary = &opts.binary;
     let namespace = &opts.namespace;
     // Uses orb-tools/default executor — same circleci/circleci-cli image as orb-tools/publish,
-    // so the CircleCI CLI is pre-installed. The orb-publishing context provides
-    // CIRCLECI_CLI_TOKEN directly; the CLI reads it automatically, no export needed.
+    // so the CircleCI CLI is pre-installed. orb-tools/publish reads CIRCLECI_TOKEN (its default
+    // circleci_token parameter); the orb-publishing context injects CIRCLECI_TOKEN, not
+    // CIRCLECI_CLI_TOKEN. Export one as the other so the CLI finds the token natively.
     vec![
         "  ensure-orb-registered:".to_string(),
         "    executor: orb-tools/default".to_string(),
@@ -413,6 +414,7 @@ fn ensure_orb_registered_job(opts: &PatchOpts) -> Vec<String> {
         "      - run:".to_string(),
         "          name: Ensure orb is registered".to_string(),
         "          command: |".to_string(),
+        "            export CIRCLECI_CLI_TOKEN=\"${CIRCLECI_TOKEN}\"".to_string(),
         format!("            circleci orb info {namespace}/{binary} > /dev/null 2>&1 || \\"),
         format!("              circleci orb create {namespace}/{binary} --no-prompt"),
     ]
@@ -1298,14 +1300,15 @@ workflows:
     }
 
     #[test]
-    fn ensure_orb_registered_job_uses_context_token() {
+    fn ensure_orb_registered_job_configures_cli_token() {
         let (output, _) = patch_release(RELEASE_FIXTURE, &make_opts());
         let block = job_block(&output, "ensure-orb-registered");
-        // The orb-publishing context injects CIRCLECI_CLI_TOKEN directly.
-        // The CLI reads it automatically — no explicit export needed.
+        // orb-tools/publish uses CIRCLECI_TOKEN (its default circleci_token parameter).
+        // The orb-publishing context injects CIRCLECI_TOKEN, not CIRCLECI_CLI_TOKEN.
+        // We must export CIRCLECI_TOKEN as CIRCLECI_CLI_TOKEN so the CLI finds it.
         assert!(
-            !block.contains("export CIRCLECI_CLI_TOKEN"),
-            "ensure-orb-registered must not manually export CIRCLECI_CLI_TOKEN — the context provides it:\n{block}"
+            block.contains("CIRCLECI_CLI_TOKEN") && block.contains("CIRCLECI_TOKEN"),
+            "ensure-orb-registered must export CIRCLECI_CLI_TOKEN from CIRCLECI_TOKEN:\n{block}"
         );
     }
 
