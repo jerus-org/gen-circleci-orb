@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - ensure orb is registered before publishing(pr [#29])
 - use separate job for orb registration(pr [#30])
 - drop CIRCLECI_API_TOKEN export in ensure-orb job(pr [#31])
+- export CIRCLECI_CLI_TOKEN from CIRCLECI_TOKEN(pr [#32])
 
 ## [0.0.8] - 2026-05-01
 
@@ -105,6 +106,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#29]: https://github.com/jerus-org/gen-circleci-orb/pull/29
 [#30]: https://github.com/jerus-org/gen-circleci-orb/pull/30
 [#31]: https://github.com/jerus-org/gen-circleci-orb/pull/31
+[#32]: https://github.com/jerus-org/gen-circleci-orb/pull/32
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.8...HEAD
 [0.0.8]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.7...v0.0.8
 [0.0.7]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.6...v0.0.7
