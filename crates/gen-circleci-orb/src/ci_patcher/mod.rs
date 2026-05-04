@@ -404,10 +404,9 @@ fn ensure_orb_registered_job(opts: &PatchOpts) -> Vec<String> {
     let binary = &opts.binary;
     let namespace = &opts.namespace;
     // Uses orb-tools/default executor — same circleci/circleci-cli image as orb-tools/publish,
-    // so the CircleCI CLI is pre-installed. orb-tools/publish uses CIRCLE_TOKEN (its default
-    // circleci_token parameter) and passes it directly via --token; it never runs circleci setup.
-    // The orb-publishing context injects CIRCLE_TOKEN. Export it as CIRCLECI_CLI_TOKEN so the
-    // CLI accepts commands without a config file.
+    // so the CircleCI CLI is pre-installed. The orb-publishing context injects CIRCLE_TOKEN.
+    // circleci setup must be called first to write the CLI config; without it the CLI has no
+    // session and every orb command fails with "please set a token with 'circleci setup'".
     vec![
         "  ensure-orb-registered:".to_string(),
         "    executor: orb-tools/default".to_string(),
@@ -415,7 +414,7 @@ fn ensure_orb_registered_job(opts: &PatchOpts) -> Vec<String> {
         "      - run:".to_string(),
         "          name: Ensure orb is registered".to_string(),
         "          command: |".to_string(),
-        "            export CIRCLECI_CLI_TOKEN=\"${CIRCLE_TOKEN}\"".to_string(),
+        "            circleci setup --token \"${CIRCLE_TOKEN}\" --host https://circleci.com --no-prompt".to_string(),
         format!("            circleci orb info {namespace}/{binary} > /dev/null 2>&1 || \\"),
         format!("              circleci orb create {namespace}/{binary} --no-prompt"),
     ]
@@ -1301,15 +1300,14 @@ workflows:
     }
 
     #[test]
-    fn ensure_orb_registered_job_configures_cli_token() {
+    fn ensure_orb_registered_job_runs_circleci_setup() {
         let (output, _) = patch_release(RELEASE_FIXTURE, &make_opts());
         let block = job_block(&output, "ensure-orb-registered");
-        // orb-tools/publish uses CIRCLE_TOKEN (its default circleci_token parameter) and passes
-        // it directly via --token; it never runs circleci setup. The orb-publishing context
-        // injects CIRCLE_TOKEN. We export it as CIRCLECI_CLI_TOKEN so the CLI finds it natively.
+        // The CLI has no session config in a fresh executor. circleci setup must be called
+        // with CIRCLE_TOKEN (the orb-publishing context variable) before any orb commands.
         assert!(
-            block.contains("CIRCLECI_CLI_TOKEN") && block.contains("CIRCLE_TOKEN"),
-            "ensure-orb-registered must export CIRCLECI_CLI_TOKEN from CIRCLE_TOKEN:\n{block}"
+            block.contains("circleci setup") && block.contains("CIRCLE_TOKEN"),
+            "ensure-orb-registered must run circleci setup --token ${{CIRCLE_TOKEN}}:\n{block}"
         );
     }
 
