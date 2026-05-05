@@ -3,9 +3,14 @@ parameters:
   binary:
     type: string
     description: Name of the binary to introspect (must be on PATH)
-  namespace:
+  public_orb_namespace:
     type: string
-    description: CircleCI namespace(s) to publish the orb under (repeatable)
+    description: CircleCI namespace(s) to publish the orb under as a public orb (repeatable). Must be set correctly on first init — visibility cannot be changed after the orb is created
+    default: ''
+  private_orb_namespace:
+    type: string
+    description: CircleCI namespace(s) to publish the orb under as a private orb (repeatable). Each listed namespace gets `--private` in its `circleci orb create` command. Must be set correctly on first init — visibility cannot be changed after the orb is created
+    default: ''
   build_workflow:
     type: string
     description: Name of the build/validation workflow to patch

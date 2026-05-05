@@ -3,9 +3,9 @@ parameters:
   binary:
     type: string
     description: Name of the binary to introspect (must be on PATH)
-  namespace:
+  orb_namespace:
     type: string
-    description: CircleCI namespace(s) to publish the orb under (repeatable)
+    description: CircleCI orb namespace(s) to publish the orb under (repeatable)
   output:
     type: string
     description: Project root directory (orb source is written to <output>/<orb-dir>/)

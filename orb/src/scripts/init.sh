@@ -1,6 +1,7 @@
 gen-circleci-orb init \
   --binary "<< parameters.binary >>" \
-  --namespace "<< parameters.namespace >>" \
+  <<# parameters.public_orb_namespace >>--public-orb-namespace "<< parameters.public_orb_namespace >>"<</ parameters.public_orb_namespace >> \
+  <<# parameters.private_orb_namespace >>--private-orb-namespace "<< parameters.private_orb_namespace >>"<</ parameters.private_orb_namespace >> \
   --build-workflow "<< parameters.build_workflow >>" \
   --release-workflow "<< parameters.release_workflow >>" \
   <<# parameters.requires_job >>--requires-job "<< parameters.requires_job >>"<</ parameters.requires_job >> \
