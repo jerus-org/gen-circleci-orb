@@ -211,6 +211,19 @@ pub fn patch_release(content: &str, opts: &PatchOpts) -> (String, PatchReport) {
         report.insertions.push("release workflow steps".to_string());
     }
 
+    // 4. Re-wire toolkit/release_crate to require publish-orb-<namespace>
+    //    so crates.io is published after the orb (Docker → orb → crates.io ordering).
+    let publish_job = format!("publish-orb-{}", opts.namespace);
+    if rewire_release_crate_requires(&mut lines, &opts.release_workflow, &publish_job) {
+        report
+            .insertions
+            .push("release_crate rewire to require orb publish".to_string());
+    } else {
+        report
+            .skipped
+            .push("release_crate rewire (already wired or no requires line)".to_string());
+    }
+
     let mut output = lines.join("\n");
     if content.ends_with('\n') {
         output.push('\n');
@@ -528,6 +541,54 @@ fn release_workflow_steps(opts: &PatchOpts) -> Vec<String> {
     steps
 }
 
+/// Find `toolkit/release_crate:` in the named release workflow and update its
+/// `requires:` line to `[publish_job]`. Returns true if a change was made.
+/// Idempotent: returns false if already wired correctly, or if no requires line exists.
+fn rewire_release_crate_requires(lines: &mut [String], workflow: &str, publish_job: &str) -> bool {
+    // Locate the named workflow
+    let wf_line = format!("  {workflow}:");
+    let Some(wf_idx) = lines
+        .iter()
+        .position(|l| l.trim_end() == wf_line.trim_end())
+    else {
+        return false;
+    };
+
+    // Find the `- toolkit/release_crate:` entry (6-space indent) inside the workflow
+    let mut rc_idx = None;
+    for (i, l) in lines.iter().enumerate().skip(wf_idx + 1) {
+        if !l.starts_with("  ") && !l.is_empty() {
+            break; // left the workflow block
+        }
+        if l.starts_with("      - toolkit/release_crate:") {
+            rc_idx = Some(i);
+            break;
+        }
+    }
+    let Some(rc_idx) = rc_idx else {
+        return false;
+    };
+
+    // Scan the job properties until the next sibling entry or end of workflow
+    let scan_start = rc_idx + 1;
+    for (offset, l) in lines[scan_start..].iter().enumerate() {
+        if l.starts_with("      - ") {
+            break; // next workflow job — left this block
+        }
+        if !l.is_empty() && !l.starts_with("  ") {
+            break; // left the workflow section entirely
+        }
+        if l.contains("requires:") {
+            if l.contains(publish_job) {
+                return false; // already correct
+            }
+            lines[scan_start + offset] = format!("          requires: [{publish_job}]");
+            return true;
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -630,6 +691,28 @@ workflows:
     jobs:
       - toolkit/release_crate:
           name: release-mytool
+          context: [release]
+      - toolkit/release_prlog:
+          requires: [release-mytool]
+          context: [release]
+";
+
+    // Toolkit-style release.yml with toolkit/release_crate requiring an approval gate.
+    // This is the pattern init must re-wire to require publish-orb-<namespace> instead.
+    const RELEASE_FIXTURE_WITH_RELEASE_CRATE: &str = "\
+version: 2.1
+
+orbs:
+  toolkit: jerus-org/circleci-toolkit@6.0.0
+
+workflows:
+  release:
+    jobs:
+      - approve-release:
+          type: approval
+      - toolkit/release_crate:
+          name: release-mytool
+          requires: [approve-release]
           context: [release]
       - toolkit/release_prlog:
           requires: [release-mytool]
@@ -1405,6 +1488,58 @@ workflows:
         assert!(
             !pre_steps_block.contains("circleci orb create"),
             "orb create must not be in orb-tools/publish pre-steps — it belongs in the separate ensure-orb-registered job:\n{pre_steps_block}"
+        );
+    }
+
+    // ── release_crate rewiring ─────────────────────────────────────────────────
+    // toolkit/release_crate must require publish-orb-<namespace> so crates.io is
+    // published after the orb (same ordering established in gen-circleci-orb itself).
+
+    #[test]
+    fn patch_release_rewires_release_crate_requires_to_orb_publish() {
+        let (output, _) = patch_release(RELEASE_FIXTURE_WITH_RELEASE_CRATE, &make_opts());
+        let wf_section = output.split("workflows:").nth(1).unwrap_or("");
+        let after_rc = wf_section
+            .split("- toolkit/release_crate:")
+            .nth(1)
+            .expect("no toolkit/release_crate step");
+        // Get the block for this job only (up to next same-level entry)
+        let block = after_rc.split("\n      - ").next().unwrap_or(after_rc);
+        assert!(
+            block.contains("publish-orb-my-org"),
+            "toolkit/release_crate requires must be updated to publish-orb-my-org:\n{block}"
+        );
+        assert!(
+            !block.contains("approve-release"),
+            "toolkit/release_crate must no longer require approve-release:\n{block}"
+        );
+    }
+
+    #[test]
+    fn patch_release_rewire_is_idempotent() {
+        let (first, _) = patch_release(RELEASE_FIXTURE_WITH_RELEASE_CRATE, &make_opts());
+        let (second, report) = patch_release(&first, &make_opts());
+        assert_eq!(first, second, "second run must not change output");
+        assert!(
+            report
+                .skipped
+                .iter()
+                .any(|s| s.contains("release_crate rewire")),
+            "idempotent rewire must appear in skipped report:\n{:?}",
+            report.skipped
+        );
+    }
+
+    #[test]
+    fn patch_release_rewire_reports_insertion() {
+        let (_, report) = patch_release(RELEASE_FIXTURE_WITH_RELEASE_CRATE, &make_opts());
+        assert!(
+            report
+                .insertions
+                .iter()
+                .any(|s| s.contains("release_crate rewire")),
+            "rewire must appear in insertions report:\n{:?}",
+            report.insertions
         );
     }
 }
