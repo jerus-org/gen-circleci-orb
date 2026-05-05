@@ -57,6 +57,13 @@ If a subcommand needs to accept a version string, prefer an explicit name that d
 what the version is for — for example `--crate-version`, `--server-version`, or
 `--output-version`.
 
+CircleCI also restricts the parameter name `name` within orb command definitions. When
+a CLI flag with a restricted name is encountered, `gen-circleci-orb` renames the orb
+parameter to `{subcommand}_{param}` rather than dropping it — see the note under
+[Parameter rendering](#parameter-rendering) below. The underlying CLI flag is unchanged.
+For clearest generated output, prefer descriptive flag names from the outset
+(e.g. `--server-name` rather than `--name`).
+
 ## Generated file structure
 
 Orb source is always placed under `<output>/<orb-dir>/` (defaults: `.` and `orb`).
@@ -131,11 +138,17 @@ annotation) receive `default: ""` (strings) or `default: false` (booleans) in th
 This makes the parameter optional for orb consumers — they can omit it. The mustache
 conditional in the run step ensures the flag is not forwarded when the value is empty or false:
 ```
-<<# parameters.name >>--name "<< parameters.name >>"<</ parameters.name >>
+<<# parameters.server_name >>--name "<< parameters.server_name >>"<</ parameters.server_name >>
 ```
 ```
 <<# parameters.force >>--force<</ parameters.force >>
 ```
+
+> **Note:** CircleCI restricts certain parameter names in command definitions (currently
+> `name`). When a CLI flag uses a restricted name, the generator renames the orb parameter
+> to `{subcommand}_{param}` — for example, a `--name` flag on the `generate` subcommand
+> becomes the orb parameter `generate_name`. The original CLI flag is still emitted
+> unchanged in the script, so the underlying binary call is unaffected.
 
 ### Jobs
 
