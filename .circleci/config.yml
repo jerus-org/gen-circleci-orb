@@ -35,6 +35,8 @@ jobs:
             gen-circleci-orb generate \
               --binary gen-circleci-orb \
               --orb-namespace jerus-org \
+              --source-url https://github.com/jerus-org/gen-circleci-orb \
+              --home-url https://github.com/jerus-org/gen-circleci-orb \
               --orb-dir orb
 
 
