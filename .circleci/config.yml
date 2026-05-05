@@ -34,7 +34,7 @@ jobs:
             export PATH="/tmp/bin:$PATH"
             gen-circleci-orb generate \
               --binary gen-circleci-orb \
-              --namespace jerus-org \
+              --orb-namespace jerus-org \
               --orb-dir orb
 
 

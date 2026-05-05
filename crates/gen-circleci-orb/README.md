@@ -44,9 +44,21 @@ contain a CircleCI orb, an error is raised.
 **Step 2 — wire orb generation into CI:**
 
 ```bash
+# Public orb in a single namespace
 gen-circleci-orb init \
   --binary my-tool \
   --public-orb-namespace my-org \
+  --docker-namespace my-docker-org \
+  --build-workflow validation \
+  --release-workflow release \
+  --requires-job common-tests \
+  --release-after-job release-my-tool
+
+# Mixed: production namespace public, pre-production namespace private
+gen-circleci-orb init \
+  --binary my-tool \
+  --public-orb-namespace my-org \
+  --private-orb-namespace my-org-preprod \
   --docker-namespace my-docker-org \
   --build-workflow validation \
   --release-workflow release \

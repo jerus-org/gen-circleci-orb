@@ -108,10 +108,10 @@ A developer wanting to expose `gen-orb-mcp` via CircleCI runs:
 
 ```bash
 gen-circleci-orb generate \
-  --binary gen-orb-mcp \
-  --orb-namespace jerus-org \
-  --orb-namespace digital-prstv \
-  --output ./gen-orb-mcp-orb
+  --binary my-tool \
+  --orb-namespace my-org \
+  --orb-namespace my-org-preprod \
+  --output ./my-tool-orb
 ```
 
 `gen-circleci-orb` executes `gen-orb-mcp --help`, `gen-orb-mcp generate --help`,
@@ -268,8 +268,8 @@ The generated release workflow orchestrates the complete chain from CLI build to
 flowchart LR
     BC["build-cli"] --> PC["publish-crate\n(crates.io)"]
     PC --> CONT["build-container\n(docker.io)"]
-    CONT --> PO1["publish-orb\njerus-org"]
-    CONT --> PO2["publish-orb\ndigital-prstv"]
+    CONT --> PO1["publish-orb\nmy-org"]
+    CONT --> PO2["publish-orb\nmy-org-preprod"]
     PO1 & PO2 --> MCP["build-mcp\n(GitHub release)"]
 ```
 
@@ -280,9 +280,9 @@ subcommand, it generates its own orb:
 
 ```bash
 gen-circleci-orb generate \
-  --binary gen-circleci-orb \
-  --orb-namespace jerus-org \
-  --output ./gen-circleci-orb-orb
+  --binary my-tool \
+  --orb-namespace my-org \
+  --output ./my-tool-orb
 ```
 
 This creates a reference implementation demonstrating what the tool produces and serves as a
@@ -517,18 +517,18 @@ generated release workflow. The orb name is always `<namespace>/<binary-name>`.
 
 ```bash
 # Single namespace (generate)
-gen-circleci-orb generate --binary gen-orb-mcp --orb-namespace jerus-org --output ./out
+gen-circleci-orb generate --binary my-tool --orb-namespace my-org --output ./out
 
 # Multiple namespaces (generate)
-gen-circleci-orb generate --binary gen-orb-mcp \
-  --orb-namespace jerus-org \
-  --orb-namespace digital-prstv \
+gen-circleci-orb generate --binary my-tool \
+  --orb-namespace my-org \
+  --orb-namespace my-org-preprod \
   --output ./out
 
 # Mixed visibility (init)
-gen-circleci-orb init --binary gen-orb-mcp \
-  --public-orb-namespace jerus-org \
-  --private-orb-namespace digital-prstv \
+gen-circleci-orb init --binary my-tool \
+  --public-orb-namespace my-org \
+  --private-orb-namespace my-org-preprod \
   ...
 ```
 
