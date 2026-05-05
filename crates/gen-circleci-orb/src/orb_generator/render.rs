@@ -75,7 +75,7 @@ fn render_subcommand(sub: &SubCommand, binary: &str, files: &mut HashMap<PathBuf
         );
         files.insert(
             PathBuf::from(format!("src/scripts/{}.sh", sub.name)),
-            render_script_content(sub, binary, &[]),
+            render_script_content(sub, binary, RESERVED_COMMAND_PARAMS),
         );
     }
     for child in &sub.subcommands {
@@ -83,8 +83,12 @@ fn render_subcommand(sub: &SubCommand, binary: &str, files: &mut HashMap<PathBuf
     }
 }
 
+/// CircleCI parameter names that are restricted in command definitions.
+/// orb pack rejects these with "Restricted parameter: '<name>'".
+const RESERVED_COMMAND_PARAMS: &[&str] = &["name"];
+
 /// CircleCI job parameter names that are reserved by the platform and cannot be
-/// used as user-defined parameters. Commands have no such restriction.
+/// used as user-defined parameters in job definitions.
 const RESERVED_JOB_PARAMS: &[&str] = &[
     "name",
     "type",
@@ -97,8 +101,8 @@ const RESERVED_JOB_PARAMS: &[&str] = &[
 ];
 
 fn render_command(sub: &SubCommand, binary: &str) -> String {
-    let parameters = build_orb_parameters(sub, &[]);
-    let step = build_run_step(sub, binary, &[]);
+    let parameters = build_orb_parameters(sub, RESERVED_COMMAND_PARAMS);
+    let step = build_run_step(sub, binary, RESERVED_COMMAND_PARAMS);
     let cmd = OrbCommand {
         description: sub.description.clone(),
         parameters,
@@ -146,7 +150,7 @@ fn render_dockerfile(binary: &str, method: &InstallMethod, base_image: &str) -> 
         InstallMethod::Binstall => format!(
             r#"FROM rust:1-slim-bookworm AS builder
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates pkg-config libssl-dev \
+    && apt-get install -y --no-install-recommends ca-certificates libssl-dev pkg-config \
     && rm -rf /var/lib/apt/lists/* \
     && cargo install {binary}
 
@@ -836,7 +840,6 @@ mod tests {
         // CircleCI reserves "name" (and others) as job-level parameters.
         // The generator must omit reserved names from job files so orb pack
         // does not reject the output with "Reserved job parameter name: 'name'".
-        // The command file is NOT affected — commands have no such restriction.
         let params = vec![
             Parameter {
                 long_name: "name".to_string(),
@@ -859,24 +862,77 @@ mod tests {
         let cli = make_cli("mytool", vec![sub]);
         let files = generate(&cli, &default_opts());
 
-        // Job must NOT contain `name:` as a parameter key
+        // Job must NOT contain `name:` as a parameter key (2-space indent = parameter level).
         let job = &files[&PathBuf::from("src/jobs/generate.yml")];
         assert!(
-            !job.contains("name:\n") && !job.contains("  name:"),
+            !job.contains("\n  name:\n"),
             "job must not contain reserved parameter 'name':\n{job}"
-        );
-
-        // Command may still contain `name:` — no restriction applies there
-        let cmd = &files[&PathBuf::from("src/commands/generate.yml")];
-        assert!(
-            cmd.contains("name:"),
-            "command should still expose the 'name' parameter:\n{cmd}"
         );
 
         // Non-reserved param must still appear in the job
         assert!(
             job.contains("output:"),
             "job must still contain non-reserved parameter 'output':\n{job}"
+        );
+    }
+
+    #[test]
+    fn command_excludes_restricted_parameter_name() {
+        // CircleCI also restricts "name" as a command parameter — orb pack rejects
+        // it with "Restricted parameter: 'name'" in the command definition.
+        // The generator must omit "name" from command YAML and from the step script.
+        let params = vec![
+            Parameter {
+                long_name: "name".to_string(),
+                short: Some('n'),
+                param_type: ParamType::String,
+                default: Some(String::new()),
+                required: false,
+                description: "Name for the output.".to_string(),
+            },
+            Parameter {
+                long_name: "output".to_string(),
+                short: Some('o'),
+                param_type: ParamType::String,
+                default: Some("./dist".to_string()),
+                required: false,
+                description: "Output dir.".to_string(),
+            },
+        ];
+        let sub = make_leaf("generate", params);
+        let cli = make_cli("mytool", vec![sub]);
+        let files = generate(&cli, &default_opts());
+
+        // Command YAML must NOT contain `name:` as a parameter key.
+        // Parameters are at 2-space indent; the run step's `name: <step>` (4-space) is OK.
+        let cmd = &files[&PathBuf::from("src/commands/generate.yml")];
+        assert!(
+            !cmd.contains("\n  name:\n"),
+            "command must not contain restricted parameter 'name':\n{cmd}"
+        );
+
+        // Script must NOT reference the restricted parameter
+        let script = &files[&PathBuf::from("src/scripts/generate.sh")];
+        assert!(
+            !script.contains("parameters.name"),
+            "script must not reference restricted parameter 'name':\n{script}"
+        );
+
+        // Non-restricted param must still appear
+        assert!(
+            cmd.contains("output:"),
+            "command must still contain non-restricted parameter 'output':\n{cmd}"
+        );
+    }
+
+    #[test]
+    fn dockerfile_binstall_builder_packages_sorted() {
+        // SonarQube S7018: package lists must be sorted alphanumerically.
+        let dockerfile = render_dockerfile("mytool", &InstallMethod::Binstall, "debian:12-slim");
+        // builder stage: ca-certificates libssl-dev pkg-config (alphabetical)
+        assert!(
+            dockerfile.contains("ca-certificates libssl-dev pkg-config"),
+            "builder packages must be sorted: ca-certificates libssl-dev pkg-config\n{dockerfile}"
         );
     }
 
