@@ -10,9 +10,16 @@ pub struct Init {
     #[arg(long)]
     pub binary: String,
 
-    /// CircleCI namespace(s) to publish the orb under (repeatable).
-    #[arg(long = "namespace", required = true)]
-    pub namespaces: Vec<String>,
+    /// CircleCI namespace(s) to publish the orb under as a public orb (repeatable).
+    /// Must be set correctly on first init — visibility cannot be changed after the orb is created.
+    #[arg(long = "public-orb-namespace")]
+    pub public_orb_namespaces: Vec<String>,
+
+    /// CircleCI namespace(s) to publish the orb under as a private orb (repeatable).
+    /// Each listed namespace gets `--private` in its `circleci orb create` command.
+    /// Must be set correctly on first init — visibility cannot be changed after the orb is created.
+    #[arg(long = "private-orb-namespace")]
+    pub private_orb_namespaces: Vec<String>,
 
     /// Name of the build/validation workflow to patch.
     #[arg(long)]
@@ -58,13 +65,6 @@ pub struct Init {
     #[arg(long, default_value = "orb-publishing")]
     pub orb_context: String,
 
-    /// Namespace(s) to register as a private orb (repeatable).
-    /// Each listed namespace gets `--private` in its `circleci orb create` command.
-    /// Namespaces not listed are registered as public.
-    /// Must be set correctly on first init — visibility cannot be changed after the orb is created.
-    #[arg(long = "private-namespace")]
-    pub private_namespaces: Vec<String>,
-
     /// Wire in toolkit/build_mcp_server after orb publish (requires jerus-org/circleci-toolkit).
     #[arg(long)]
     pub mcp: bool,
@@ -76,11 +76,18 @@ pub struct Init {
 
 impl Init {
     pub fn run(&self) -> Result<()> {
+        let namespaces: Vec<String> = self
+            .public_orb_namespaces
+            .iter()
+            .chain(self.private_orb_namespaces.iter())
+            .cloned()
+            .collect();
+
         // Step 1: generate orb source files
         tracing::info!("Generating orb source into ./{}", self.orb_dir);
         let gen = Generate {
             binary: self.binary.clone(),
-            namespaces: self.namespaces.clone(),
+            namespaces: namespaces.clone(),
             output: PathBuf::from("."),
             orb_dir: self.orb_dir.clone(),
             install_method: crate::commands::generate::InstallMethod::Binstall,
@@ -94,7 +101,7 @@ impl Init {
         // Step 2: patch CI configs
         let opts = ci_patcher::PatchOpts {
             binary: self.binary.clone(),
-            namespaces: self.namespaces.clone(),
+            namespaces,
             docker_namespace: self.docker_namespace.clone(),
             orb_dir: self.orb_dir.clone(),
             build_workflow: self.build_workflow.clone(),
@@ -105,7 +112,7 @@ impl Init {
             docker_orb_version: self.docker_orb_version.clone(),
             docker_context: self.docker_context.clone(),
             orb_context: self.orb_context.clone(),
-            private_namespaces: self.private_namespaces.clone(),
+            private_namespaces: self.private_orb_namespaces.clone(),
             mcp: self.mcp,
         };
 
