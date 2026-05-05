@@ -52,6 +52,41 @@ pub struct Generate {
     pub dry_run: bool,
 }
 
+/// Convert any git remote URL to a plain HTTPS URL, stripping the `.git` suffix.
+///
+/// Handles:
+/// - `git@github.com:org/repo.git` → `https://github.com/org/repo`
+/// - `https://github.com/org/repo.git` → `https://github.com/org/repo`
+/// - `https://github.com/org/repo` → unchanged
+pub(crate) fn normalize_git_remote_url(url: &str) -> String {
+    let url = if let Some(rest) = url.strip_prefix("git@") {
+        // git@host:org/repo.git → https://host/org/repo
+        let normalized = rest.replacen(':', "/", 1);
+        format!("https://{normalized}")
+    } else {
+        url.to_string()
+    };
+    url.strip_suffix(".git").unwrap_or(&url).to_string()
+}
+
+/// Attempt to detect the repository source URL from the git remote named `origin`.
+/// Returns `None` if git is unavailable or no `origin` remote is configured.
+pub(crate) fn detect_source_url() -> Option<String> {
+    let output = std::process::Command::new("git")
+        .args(["remote", "get-url", "origin"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let raw = String::from_utf8(output.stdout).ok()?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(normalize_git_remote_url(trimmed))
+}
+
 /// Guard: refuse to write into a directory that exists but looks like unrelated source code.
 ///
 /// A directory is considered safe if it is absent, empty, or already contains `src/@orb.yml`.
@@ -85,12 +120,16 @@ impl Generate {
 
         tracing::info!("Discovered {} subcommand(s)", cli_def.subcommands.len());
 
+        let detected_url = self.source_url.is_none().then(detect_source_url).flatten();
+        let source_url = self.source_url.clone().or_else(|| detected_url.clone());
+        let home_url = self.home_url.clone().or_else(|| detected_url.clone());
+
         let opts = orb_generator::GenerateOpts {
             namespaces: self.namespaces.clone(),
             install_method: self.install_method.clone(),
             base_image: self.base_image.clone(),
-            home_url: self.home_url.clone(),
-            source_url: self.source_url.clone(),
+            home_url,
+            source_url,
             binary_name: cli_def.binary_name.clone(),
         };
 
@@ -113,6 +152,40 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+
+    // ── normalize_git_remote_url ────────────────────────────────────────────
+
+    #[test]
+    fn normalize_ssh_remote_to_https() {
+        assert_eq!(
+            normalize_git_remote_url("git@github.com:jerus-org/gen-circleci-orb.git"),
+            "https://github.com/jerus-org/gen-circleci-orb"
+        );
+    }
+
+    #[test]
+    fn normalize_https_with_git_suffix() {
+        assert_eq!(
+            normalize_git_remote_url("https://github.com/jerus-org/gen-circleci-orb.git"),
+            "https://github.com/jerus-org/gen-circleci-orb"
+        );
+    }
+
+    #[test]
+    fn normalize_https_without_git_suffix_unchanged() {
+        assert_eq!(
+            normalize_git_remote_url("https://github.com/jerus-org/gen-circleci-orb"),
+            "https://github.com/jerus-org/gen-circleci-orb"
+        );
+    }
+
+    #[test]
+    fn normalize_ssh_non_github_host() {
+        assert_eq!(
+            normalize_git_remote_url("git@gitlab.com:myorg/myrepo.git"),
+            "https://gitlab.com/myorg/myrepo"
+        );
+    }
 
     #[test]
     fn check_orb_dir_absent_is_ok() {
