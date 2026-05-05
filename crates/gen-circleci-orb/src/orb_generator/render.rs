@@ -165,8 +165,7 @@ fn build_command_orb_parameters(sub: &SubCommand) -> IndexMap<String, OrbParamet
 /// Build the CLI invocation string for a command's script file.
 /// Uses the renamed orb parameter name for interpolation but keeps the original CLI flag.
 fn render_command_script_content(sub: &SubCommand, binary: &str) -> String {
-    let mut cmd_parts: Vec<String> =
-        vec![format!("{} {}", binary, sub.name.replace('_', "-"))];
+    let mut cmd_parts: Vec<String> = vec![format!("{} {}", binary, sub.name.replace('_', "-"))];
 
     for p in &sub.parameters {
         let orb_name = resolve_command_param_name(&sub.name, &p.long_name);
