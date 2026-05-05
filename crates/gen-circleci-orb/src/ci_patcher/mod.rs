@@ -16,6 +16,10 @@ pub struct PatchOpts {
     pub docker_orb_version: String,
     pub docker_context: String,
     pub orb_context: String,
+    /// Whether the orb should be registered as private.
+    /// Passed as `--private` to `circleci orb create` in the ensure-orb-registered job.
+    /// Cannot be changed after the orb is first created; must be set correctly on init.
+    pub private: bool,
     pub mcp: bool,
 }
 
@@ -160,7 +164,7 @@ pub fn patch_release(content: &str, opts: &PatchOpts) -> (String, PatchReport) {
                 insert_pos += binary_len;
             }
             for ns in &missing_ensure_ns {
-                let ensure_block = ensure_orb_registered_job_for(ns, &opts.binary);
+                let ensure_block = ensure_orb_registered_job_for(ns, &opts.binary, opts.private);
                 let ensure_len = ensure_block.len();
                 for (i, l) in ensure_block.into_iter().enumerate() {
                     lines.insert(insert_pos + i, l);
@@ -185,7 +189,8 @@ pub fn patch_release(content: &str, opts: &PatchOpts) -> (String, PatchReport) {
             // Insert ensure jobs in reverse order to preserve namespace ordering
             for ns in opts.namespaces.iter().rev() {
                 if missing_ensure_ns.contains(&ns) {
-                    let ensure_block = ensure_orb_registered_job_for(ns, &opts.binary);
+                    let ensure_block =
+                        ensure_orb_registered_job_for(ns, &opts.binary, opts.private);
                     let ensure_len = ensure_block.len();
                     for i in 0..ensure_len {
                         lines.insert(wf_pos, ensure_block[ensure_len - 1 - i].clone());
@@ -440,7 +445,13 @@ fn build_binary_release_job(opts: &PatchOpts) -> Vec<String> {
 /// so the CircleCI CLI is pre-installed). The orb-publishing context injects CIRCLE_TOKEN.
 /// circleci setup must be called first — without it the CLI has no session config and
 /// every orb command fails with "please set a token with 'circleci setup'".
-fn ensure_orb_registered_job_for(ns: &str, binary: &str) -> Vec<String> {
+fn ensure_orb_registered_job_for(ns: &str, binary: &str, private: bool) -> Vec<String> {
+    // --private must be passed at creation time; visibility cannot be changed afterwards.
+    let create_flags = if private {
+        "--private --no-prompt"
+    } else {
+        "--no-prompt"
+    };
     vec![
         format!("  ensure-orb-registered-{ns}:"),
         "    executor: orb-tools/default".to_string(),
@@ -450,7 +461,7 @@ fn ensure_orb_registered_job_for(ns: &str, binary: &str) -> Vec<String> {
         "          command: |".to_string(),
         "            circleci setup --token \"${CIRCLE_TOKEN}\" --host https://circleci.com --no-prompt".to_string(),
         format!("            circleci orb info {ns}/{binary} > /dev/null 2>&1 || \\"),
-        format!("              circleci orb create {ns}/{binary} --no-prompt"),
+        format!("              circleci orb create {ns}/{binary} {create_flags}"),
     ]
 }
 
@@ -637,6 +648,7 @@ mod tests {
             docker_orb_version: "3.0.1".to_string(),
             docker_context: "docker".to_string(),
             orb_context: "orb-publishing".to_string(),
+            private: false,
             mcp: false,
         }
     }
@@ -1673,6 +1685,38 @@ workflows:
         assert!(
             !second_report.skipped.is_empty(),
             "expected skipped entries on second run"
+        );
+    }
+
+    // ── orb visibility (public vs private) ────────────────────────────────────
+    // circleci orb create sets visibility at creation time — it cannot be changed
+    // after the orb exists. --private must be passed when the orb is first registered.
+
+    #[test]
+    fn ensure_orb_create_omits_private_flag_for_public_orb() {
+        let (output, _) = patch_release(RELEASE_FIXTURE, &make_opts());
+        let block = job_block(&output, "ensure-orb-registered-my-org");
+        assert!(
+            block.contains("circleci orb create my-org/mytool --no-prompt"),
+            "public orb create must not have --private flag:\n{block}"
+        );
+        assert!(
+            !block.contains("--private"),
+            "public orb must not pass --private to circleci orb create:\n{block}"
+        );
+    }
+
+    #[test]
+    fn ensure_orb_create_includes_private_flag_for_private_orb() {
+        let opts = PatchOpts {
+            private: true,
+            ..make_opts()
+        };
+        let (output, _) = patch_release(RELEASE_FIXTURE, &opts);
+        let block = job_block(&output, "ensure-orb-registered-my-org");
+        assert!(
+            block.contains("circleci orb create my-org/mytool --private --no-prompt"),
+            "private orb create must include --private flag:\n{block}"
         );
     }
 }

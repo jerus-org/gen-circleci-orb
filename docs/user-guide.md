@@ -188,6 +188,26 @@ Re-running after no changes produces `0 created, 0 updated, N unchanged`.
 
 `init` calls `generate` first, then patches two CI config files additively.
 
+### Orb visibility: public vs private
+
+Pass `--private` when the orb should only be accessible within the organization.
+This flag controls the `--private` argument to `circleci orb create` in the generated
+`ensure-orb-registered-<ns>` job:
+
+```bash
+# Public orb (default) — listed in the CircleCI orb registry
+gen-circleci-orb init --binary mytool --namespace my-org ...
+
+# Private orb — accessible only within my-org
+gen-circleci-orb init --binary mytool --namespace my-org --private ...
+```
+
+**This must be decided before running `init` for the first time.** CircleCI sets orb
+visibility at creation time and it cannot be changed afterwards. Running `init` again
+with or without `--private` has no effect if the orb already exists — the
+`ensure-orb-registered-<ns>` job silently skips `circleci orb create` when the orb
+is already registered.
+
 ### config.yml changes
 
 Added to `orbs:`:

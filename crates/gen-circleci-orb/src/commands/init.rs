@@ -58,6 +58,11 @@ pub struct Init {
     #[arg(long, default_value = "orb-publishing")]
     pub orb_context: String,
 
+    /// Register the orb as private (only accessible within the organization).
+    /// Must be set correctly on first init — visibility cannot be changed after the orb is created.
+    #[arg(long)]
+    pub private: bool,
+
     /// Wire in toolkit/build_mcp_server after orb publish (requires jerus-org/circleci-toolkit).
     #[arg(long)]
     pub mcp: bool,
@@ -98,6 +103,7 @@ impl Init {
             docker_orb_version: self.docker_orb_version.clone(),
             docker_context: self.docker_context.clone(),
             orb_context: self.orb_context.clone(),
+            private: self.private,
             mcp: self.mcp,
         };
 
