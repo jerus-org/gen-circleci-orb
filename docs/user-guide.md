@@ -264,7 +264,59 @@ docker: circleci/docker@<version>
 orb-tools: circleci/orb-tools@<version>
 ```
 
-Added to `jobs:`:
+Three jobs are added to `jobs:`:
+
+**`build-binary-release`** compiles the release binary and persists it for later use in the
+Docker build. The `-p <binary>` flag scopes the build to the named package, which is required
+in workspace projects where `cargo build --release` without a `-p` flag would compile all
+workspace members.
+
+```yaml
+build-binary-release:
+  docker:
+    - image: rust:latest
+  steps:
+    - checkout
+    - run:
+        name: Build release binary
+        command: cargo build --release -p <binary>
+    - persist_to_workspace:
+        root: target/release
+        paths: [<binary>]
+```
+
+**`ensure-orb-registered`** checks that the orb namespace entry exists before attempting to
+publish — `orb-tools/publish` fails if the orb has never been registered. This is a separate
+inline job rather than a pre-step of `orb-tools/publish` because `orb-tools/publish`
+configures CLI authentication in its own steps, which execute after pre-steps. Running
+`circleci orb info` before that point would fail with "please set a token". The inline job
+uses `executor: orb-tools/default` (the same `circleci/circleci-cli` image used by
+`orb-tools/publish`) and the `orb-publishing` context, which injects `CIRCLE_TOKEN`.
+`circleci setup` must be called explicitly to write the CLI config file before any
+`circleci orb` commands.
+
+```yaml
+ensure-orb-registered:
+  executor: orb-tools/default
+  steps:
+    - run:
+        name: Ensure orb is registered
+        command: |
+          circleci setup --token "${CIRCLE_TOKEN}" --host https://circleci.com --no-prompt
+          circleci orb info <namespace>/<binary> > /dev/null 2>&1 || \
+            circleci orb create <namespace>/<binary> --no-prompt
+```
+
+**`build-container`** builds and pushes the Docker image for the orb executor. The release
+pipeline is approval-triggered (not tag-triggered), so `$CIRCLE_TAG` is empty. The version
+is read from `versions.env` written by `toolkit/calculate_versions` and persisted to the
+CircleCI workspace. The compiled binary is attached from the `build-binary-release` workspace
+and copied into the Docker build context so the image contains the freshly-built release
+binary. `<docker-namespace>` is the value of `--docker-namespace` — independent of the
+CircleCI orb namespace (`--namespace`). The `CRATE_VERSION_<BINARY_UPPERCASED>` variable
+name matches the format written by `toolkit/calculate_versions` (hyphens replaced by
+underscores, all uppercase).
+
 ```yaml
 build-container:
   docker:
@@ -272,77 +324,112 @@ build-container:
   steps:
     - checkout
     - setup_remote_docker
+    - attach_workspace:
+        at: /tmp/release-versions
+    - attach_workspace:
+        at: /tmp/bin
     - run:
-        name: Build Docker image
+        name: Build and push Docker image
         command: |
-          git fetch --tags
-          VERSION=$(git tag --list "<binary>-v*" --sort=-version:refname | head -1 | sed 's/<binary>-v//')
+          source /tmp/release-versions/versions.env
+          VERSION=${CRATE_VERSION_<BINARY_UPPERCASED>}
+          cp /tmp/bin/<binary> <orb-dir>/<binary>
           docker build -t <docker-namespace>/<binary>:${VERSION} -t <docker-namespace>/<binary>:latest <orb-dir>
-    - run:
-        name: Push Docker image
-        command: |
           echo "${DOCKERHUB_PASSWORD}" | docker login -u "${DOCKERHUB_USERNAME}" --password-stdin
-          git fetch --tags
-          VERSION=$(git tag --list "<binary>-v*" --sort=-version:refname | head -1 | sed 's/<binary>-v//')
           docker push <docker-namespace>/<binary>:${VERSION}
           docker push <docker-namespace>/<binary>:latest
 ```
 
-`<docker-namespace>` is the value of `--docker-namespace` — independent of the CircleCI
-orb namespace (`--namespace`).
-
-`$CIRCLE_TAG` is only set when a pipeline is triggered by a tag push. Since the release
-pipeline is triggered by an approval gate (merge-triggered), the version is derived by
-fetching tags at runtime. A `:latest` tag is pushed in addition to the versioned tag.
-Docker Hub credentials are read from `${DOCKERHUB_USERNAME}` and `${DOCKERHUB_PASSWORD}`
-using `--password-stdin` (the recommended approach — avoids shell history exposure).
-
 Added to the release workflow:
+
 ```yaml
+- build-binary-release:
+    requires: [<release-after-job>]
 - orb-tools/pack:
     name: pack-orb-release
     source_dir: <orb-dir>/src
     requires: [<release-after-job>]
 - build-container:
-    requires: [<release-after-job>]
+    requires: [build-binary-release]
     context: [<docker-context>]
+- ensure-orb-registered:
+    requires: [<release-after-job>]
+    context: [<orb-context>]
 - orb-tools/publish:
     name: publish-orb-<namespace>
+    pre-steps:
+      - attach_workspace:
+          at: /tmp/release-versions
+      - run:
+          name: Export orb version as CIRCLE_TAG
+          command: |
+            source /tmp/release-versions/versions.env
+            echo "export CIRCLE_TAG=v${CRATE_VERSION_<BINARY_UPPERCASED>}" >> "$BASH_ENV"
     orb_name: <namespace>/<binary>
     pub_type: production
     vcs_type: github
-    requires: [build-container, pack-orb-release]
+    requires: [build-container, pack-orb-release, ensure-orb-registered]
     context: [<orb-context>]
 ```
 
-`orb-tools/pack` runs in parallel with `build-container` and provides the packed orb
-to `orb-tools/publish` via workspace persistence.
+`build-binary-release`, `orb-tools/pack`, and `ensure-orb-registered` all run in parallel
+immediately after the approval gate. `build-container` is sequential after
+`build-binary-release` because it needs the compiled binary from the workspace. 
+`orb-tools/publish` fans in after all three parallel branches.
+
+`orb-tools/publish` requires `$CIRCLE_TAG` to match `^v[0-9]+\.[0-9]+\.[0-9]+$` for
+`pub_type: production`. The pre-steps inject it from `versions.env` via `$BASH_ENV` since
+the pipeline is approval-triggered and `$CIRCLE_TAG` is otherwise empty.
+
+### Release ordering: Docker → orb → crates.io
+
+If the release workflow contains `toolkit/release_crate:` (the toolkit job that publishes
+to crates.io), `init` automatically rewires its `requires:` line to
+`[publish-orb-<namespace>]`. This ensures crates.io is published last — after the orb and
+Docker image are live — which is important because the published `Cargo.toml` may reference
+the orb version.
+
+The publish job name is derived from `--namespace`: e.g., `jerus-org` →
+`publish-orb-jerus-org`. No additional flag is needed. If `toolkit/release_crate:` is not
+present in the release workflow, this step is silently skipped.
 
 ### Idempotency
 
-`init` checks for existing entries before inserting. Running it twice produces identical output.
-Specific checks:
-- `orb-tools:` in `orbs:` section → skip orb-tools insertion
-- `  docker: circleci/` in `orbs:` section → skip docker orb insertion
-- `regenerate-orb:` at job definition level → skip job insertion
-- `orb-tools/pack:` in content → skip pack/review workflow steps
-- `pack-orb-release` + `build-container:` + `orb-tools/publish:` in release workflow → skip release workflow steps
+`init` checks for existing entries before inserting. Running it twice produces identical
+output. Specific checks for `release.yml`:
+
+- `  docker: circleci/` in `orbs:` → skip docker orb insertion
+- `  orb-tools: circleci/` in `orbs:` → skip orb-tools orb insertion
+- `build-binary-release:` in content → skip job definition
+- `ensure-orb-registered:` in content → skip job definition
+- `build-container:` in content → skip job definition
+- `pack-orb-release` + `- build-binary-release:` + `- ensure-orb-registered:` +
+  `- build-container:` + `orb-tools/publish:` in release workflow → skip workflow steps
+- `toolkit/release_crate:` requires already contains `publish-orb-<namespace>` → skip rewire
 
 ### Design principle
 
-`init` does not assume the consuming repo uses any specific orb or toolkit.
-The generated CI installs `gen-circleci-orb` at runtime from crates.io and uses only
-the standard public `circleci/orb-tools` and `circleci/docker` orbs.
+`init` uses only public orbs (`circleci/orb-tools`, `circleci/docker`) for container
+builds and orb publishing. The `regenerate-orb` job uses the `jerusdp/gen-circleci-orb`
+Docker image (pre-installed tool, no runtime installation) and does not require the orb
+being generated to be published yet.
+
+**Exception**: step 4 (release ordering rewire) assumes `toolkit/release_crate` is the
+crates.io publish job. This step is skipped silently for projects that do not use
+`toolkit/release_crate`. It is intentional for jerus-org projects — the toolkit is the
+standard crates.io publish mechanism across all repos in this organization.
 
 ## Bootstrapping sequence
 
 The first release after running `init` triggers this sequence automatically:
 
-1. CI runs `regenerate-orb` on every push → keeps orb source in sync
-2. On release tag: `build-container` builds and pushes the Docker image
-3. `orb-tools/publish` publishes the orb to the CircleCI registry
-4. Future consumers can add `<namespace>/<binary>@<version>` to their orbs and use the
-   generated jobs/commands directly
+1. CI runs `regenerate-orb` on every push → keeps orb source in sync with the binary
+2. On release approval: `build-binary-release` and `orb-tools/pack` run in parallel
+3. `build-container` builds and pushes the Docker image (requires compiled binary)
+4. `ensure-orb-registered` checks/creates the orb entry (runs in parallel with build-container)
+5. `orb-tools/publish` publishes the orb to the CircleCI registry (fan-in from steps 3 and 4)
+6. `toolkit/release_crate` publishes to crates.io after the orb is live
 
-There is no circular dependency: `regenerate-orb` installs `gen-circleci-orb` fresh from
-crates.io on each run and does not depend on the orb being published first.
+There is no circular dependency: `regenerate-orb` uses the `jerusdp/gen-circleci-orb`
+image with `gen-circleci-orb` pre-installed, and does not depend on the orb being
+published first.
