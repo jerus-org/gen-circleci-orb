@@ -58,10 +58,12 @@ pub struct Init {
     #[arg(long, default_value = "orb-publishing")]
     pub orb_context: String,
 
-    /// Register the orb as private (only accessible within the organization).
+    /// Namespace(s) to register as a private orb (repeatable).
+    /// Each listed namespace gets `--private` in its `circleci orb create` command.
+    /// Namespaces not listed are registered as public.
     /// Must be set correctly on first init — visibility cannot be changed after the orb is created.
-    #[arg(long)]
-    pub private: bool,
+    #[arg(long = "private-namespace")]
+    pub private_namespaces: Vec<String>,
 
     /// Wire in toolkit/build_mcp_server after orb publish (requires jerus-org/circleci-toolkit).
     #[arg(long)]
@@ -103,7 +105,7 @@ impl Init {
             docker_orb_version: self.docker_orb_version.clone(),
             docker_context: self.docker_context.clone(),
             orb_context: self.orb_context.clone(),
-            private: self.private,
+            private_namespaces: self.private_namespaces.clone(),
             mcp: self.mcp,
         };
 

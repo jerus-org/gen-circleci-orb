@@ -16,10 +16,11 @@ pub struct PatchOpts {
     pub docker_orb_version: String,
     pub docker_context: String,
     pub orb_context: String,
-    /// Whether the orb should be registered as private.
-    /// Passed as `--private` to `circleci orb create` in the ensure-orb-registered job.
-    /// Cannot be changed after the orb is first created; must be set correctly on init.
-    pub private: bool,
+    /// Namespaces that should be registered as private orbs.
+    /// A namespace listed here gets `--private` in its `circleci orb create` command.
+    /// Namespaces not listed are registered as public.
+    /// Visibility is set at orb creation time and cannot be changed afterwards.
+    pub private_namespaces: Vec<String>,
     pub mcp: bool,
 }
 
@@ -164,7 +165,11 @@ pub fn patch_release(content: &str, opts: &PatchOpts) -> (String, PatchReport) {
                 insert_pos += binary_len;
             }
             for ns in &missing_ensure_ns {
-                let ensure_block = ensure_orb_registered_job_for(ns, &opts.binary, opts.private);
+                let ensure_block = ensure_orb_registered_job_for(
+                    ns,
+                    &opts.binary,
+                    opts.private_namespaces.contains(ns),
+                );
                 let ensure_len = ensure_block.len();
                 for (i, l) in ensure_block.into_iter().enumerate() {
                     lines.insert(insert_pos + i, l);
@@ -189,8 +194,11 @@ pub fn patch_release(content: &str, opts: &PatchOpts) -> (String, PatchReport) {
             // Insert ensure jobs in reverse order to preserve namespace ordering
             for ns in opts.namespaces.iter().rev() {
                 if missing_ensure_ns.contains(&ns) {
-                    let ensure_block =
-                        ensure_orb_registered_job_for(ns, &opts.binary, opts.private);
+                    let ensure_block = ensure_orb_registered_job_for(
+                        ns,
+                        &opts.binary,
+                        opts.private_namespaces.contains(ns),
+                    );
                     let ensure_len = ensure_block.len();
                     for i in 0..ensure_len {
                         lines.insert(wf_pos, ensure_block[ensure_len - 1 - i].clone());
@@ -648,7 +656,7 @@ mod tests {
             docker_orb_version: "3.0.1".to_string(),
             docker_context: "docker".to_string(),
             orb_context: "orb-publishing".to_string(),
-            private: false,
+            private_namespaces: vec![],
             mcp: false,
         }
     }
@@ -1688,9 +1696,11 @@ workflows:
         );
     }
 
-    // ── orb visibility (public vs private) ────────────────────────────────────
+    // ── orb visibility (public vs private, per namespace) ────────────────────
     // circleci orb create sets visibility at creation time — it cannot be changed
     // after the orb exists. --private must be passed when the orb is first registered.
+    // Each namespace has independent visibility: a production namespace can be public
+    // while a preprod/testing namespace is kept private.
 
     #[test]
     fn ensure_orb_create_omits_private_flag_for_public_orb() {
@@ -1707,16 +1717,52 @@ workflows:
     }
 
     #[test]
-    fn ensure_orb_create_includes_private_flag_for_private_orb() {
+    fn ensure_orb_create_includes_private_flag_when_namespace_is_private() {
         let opts = PatchOpts {
-            private: true,
+            private_namespaces: vec!["my-org".to_string()],
             ..make_opts()
         };
         let (output, _) = patch_release(RELEASE_FIXTURE, &opts);
         let block = job_block(&output, "ensure-orb-registered-my-org");
         assert!(
             block.contains("circleci orb create my-org/mytool --private --no-prompt"),
-            "private orb create must include --private flag:\n{block}"
+            "private namespace orb create must include --private flag:\n{block}"
+        );
+    }
+
+    #[test]
+    fn mixed_visibility_public_namespace_has_no_private_flag() {
+        // my-org is public; other-org is private
+        let opts = PatchOpts {
+            namespaces: vec!["my-org".to_string(), "other-org".to_string()],
+            private_namespaces: vec!["other-org".to_string()],
+            ..make_opts()
+        };
+        let (output, _) = patch_release(RELEASE_FIXTURE, &opts);
+        let my_org_block = job_block(&output, "ensure-orb-registered-my-org");
+        assert!(
+            !my_org_block.contains("--private"),
+            "my-org is public — must not have --private:\n{my_org_block}"
+        );
+        assert!(
+            my_org_block.contains("circleci orb create my-org/mytool --no-prompt"),
+            "my-org create must be public:\n{my_org_block}"
+        );
+    }
+
+    #[test]
+    fn mixed_visibility_private_namespace_has_private_flag() {
+        // my-org is public; other-org is private
+        let opts = PatchOpts {
+            namespaces: vec!["my-org".to_string(), "other-org".to_string()],
+            private_namespaces: vec!["other-org".to_string()],
+            ..make_opts()
+        };
+        let (output, _) = patch_release(RELEASE_FIXTURE, &opts);
+        let other_org_block = job_block(&output, "ensure-orb-registered-other-org");
+        assert!(
+            other_org_block.contains("circleci orb create other-org/mytool --private --no-prompt"),
+            "other-org is private — create must have --private:\n{other_org_block}"
         );
     }
 }

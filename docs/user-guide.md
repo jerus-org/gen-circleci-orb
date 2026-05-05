@@ -190,22 +190,39 @@ Re-running after no changes produces `0 created, 0 updated, N unchanged`.
 
 ### Orb visibility: public vs private
 
-Pass `--private` when the orb should only be accessible within the organization.
-This flag controls the `--private` argument to `circleci orb create` in the generated
-`ensure-orb-registered-<ns>` job:
+Each namespace has independent visibility. Use `--private-namespace <NS>` (repeatable)
+to mark specific namespaces as private. Namespaces not listed are registered as public.
 
 ```bash
-# Public orb (default) — listed in the CircleCI orb registry
+# All public (default)
 gen-circleci-orb init --binary mytool --namespace my-org ...
 
-# Private orb — accessible only within my-org
-gen-circleci-orb init --binary mytool --namespace my-org --private ...
+# Single private namespace
+gen-circleci-orb init --binary mytool --namespace my-org \
+  --private-namespace my-org ...
+
+# Mixed: production namespace public, preprod namespace private
+gen-circleci-orb init --binary mytool \
+  --namespace my-org \
+  --namespace my-org-preprod \
+  --private-namespace my-org-preprod ...
+
+# All namespaces private
+gen-circleci-orb init --binary mytool \
+  --namespace my-org \
+  --namespace my-org-preprod \
+  --private-namespace my-org \
+  --private-namespace my-org-preprod ...
 ```
+
+Each `--private-namespace` value controls whether `--private` is passed to
+`circleci orb create` in that namespace's `ensure-orb-registered-<ns>` job.
+The other namespace's job is unaffected.
 
 **This must be decided before running `init` for the first time.** CircleCI sets orb
 visibility at creation time and it cannot be changed afterwards. Running `init` again
-with or without `--private` has no effect if the orb already exists — the
-`ensure-orb-registered-<ns>` job silently skips `circleci orb create` when the orb
+with different `--private-namespace` values has no effect if the orb already exists —
+the `ensure-orb-registered-<ns>` job silently skips `circleci orb create` when the orb
 is already registered.
 
 ### config.yml changes
