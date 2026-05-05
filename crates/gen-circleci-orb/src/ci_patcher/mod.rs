@@ -2,7 +2,10 @@ use anyhow::Result;
 
 pub struct PatchOpts {
     pub binary: String,
-    pub namespace: String,
+    /// One or more CircleCI namespaces to publish the orb under.
+    /// Each namespace gets its own `ensure-orb-registered-<ns>` job and
+    /// `orb-tools/publish: name: publish-orb-<ns>` workflow step.
+    pub namespaces: Vec<String>,
     pub docker_namespace: String,
     pub orb_dir: String,
     pub build_workflow: String,
@@ -132,11 +135,15 @@ pub fn patch_release(content: &str, opts: &PatchOpts) -> (String, PatchReport) {
         }
     }
 
-    // 2. Add build-binary-release, ensure-orb-registered, and build-container jobs
+    // 2. Add build-binary-release, ensure-orb-registered-<ns> (per namespace), and build-container jobs
     let has_binary_release = content.contains("build-binary-release:");
-    let has_ensure_orb = content.contains("ensure-orb-registered:");
+    let missing_ensure_ns: Vec<&String> = opts
+        .namespaces
+        .iter()
+        .filter(|ns| !content.contains(&format!("  ensure-orb-registered-{ns}:")))
+        .collect();
     let has_container = content.contains("build-container:");
-    if has_binary_release && has_ensure_orb && has_container {
+    if has_binary_release && missing_ensure_ns.is_empty() && has_container {
         report.skipped.push(
             "release jobs (build-binary-release, ensure-orb-registered, build-container)"
                 .to_string(),
@@ -152,8 +159,8 @@ pub fn patch_release(content: &str, opts: &PatchOpts) -> (String, PatchReport) {
                 }
                 insert_pos += binary_len;
             }
-            if !has_ensure_orb {
-                let ensure_block = ensure_orb_registered_job(opts);
+            for ns in &missing_ensure_ns {
+                let ensure_block = ensure_orb_registered_job_for(ns, &opts.binary);
                 let ensure_len = ensure_block.len();
                 for (i, l) in ensure_block.into_iter().enumerate() {
                     lines.insert(insert_pos + i, l);
@@ -175,10 +182,15 @@ pub fn patch_release(content: &str, opts: &PatchOpts) -> (String, PatchReport) {
             for i in 0..container_len {
                 lines.insert(wf_pos, container_block[container_len - 1 - i].clone());
             }
-            let ensure_block = ensure_orb_registered_job(opts);
-            let ensure_len = ensure_block.len();
-            for i in 0..ensure_len {
-                lines.insert(wf_pos, ensure_block[ensure_len - 1 - i].clone());
+            // Insert ensure jobs in reverse order to preserve namespace ordering
+            for ns in opts.namespaces.iter().rev() {
+                if missing_ensure_ns.contains(&ns) {
+                    let ensure_block = ensure_orb_registered_job_for(ns, &opts.binary);
+                    let ensure_len = ensure_block.len();
+                    for i in 0..ensure_len {
+                        lines.insert(wf_pos, ensure_block[ensure_len - 1 - i].clone());
+                    }
+                }
             }
             let binary_block = build_binary_release_job(opts);
             let binary_len = binary_block.len();
@@ -194,11 +206,14 @@ pub fn patch_release(content: &str, opts: &PatchOpts) -> (String, PatchReport) {
     }
 
     // 3. Add release workflow steps
+    let all_ns_steps_present = opts.namespaces.iter().all(|ns| {
+        content.contains(&format!("      - ensure-orb-registered-{ns}:"))
+            && content.contains(&format!("name: publish-orb-{ns}"))
+    });
     if content.contains("pack-orb-release")
         && content.contains("      - build-binary-release:")
-        && content.contains("      - ensure-orb-registered:")
         && content.contains("      - build-container:")
-        && content.contains("orb-tools/publish:")
+        && all_ns_steps_present
     {
         report.skipped.push("release workflow steps".to_string());
     } else {
@@ -211,10 +226,14 @@ pub fn patch_release(content: &str, opts: &PatchOpts) -> (String, PatchReport) {
         report.insertions.push("release workflow steps".to_string());
     }
 
-    // 4. Re-wire toolkit/release_crate to require publish-orb-<namespace>
-    //    so crates.io is published after the orb (Docker → orb → crates.io ordering).
-    let publish_job = format!("publish-orb-{}", opts.namespace);
-    if rewire_release_crate_requires(&mut lines, &opts.release_workflow, &publish_job) {
+    // 4. Re-wire toolkit/release_crate to require all publish-orb-<ns> jobs
+    //    so crates.io is published after ALL orb namespaces (Docker → orb → crates.io ordering).
+    let publish_jobs: Vec<String> = opts
+        .namespaces
+        .iter()
+        .map(|ns| format!("publish-orb-{ns}"))
+        .collect();
+    if rewire_release_crate_requires(&mut lines, &opts.release_workflow, &publish_jobs) {
         report
             .insertions
             .push("release_crate rewire to require orb publish".to_string());
@@ -344,11 +363,10 @@ fn build_binary_job(opts: &PatchOpts) -> Vec<String> {
 
 fn regenerate_orb_job(opts: &PatchOpts) -> Vec<String> {
     let binary = &opts.binary;
-    let namespace = &opts.namespace;
     let orb_dir = &opts.orb_dir;
     // gen-circleci-orb is pre-installed in its own Docker image (jerusdp/gen-circleci-orb).
     // The target binary is attached from the build-binary workspace — no runtime installs needed.
-    vec![
+    let mut lines = vec![
         "  regenerate-orb:".to_string(),
         "    docker:".to_string(),
         "      - image: jerusdp/gen-circleci-orb:latest".to_string(),
@@ -362,9 +380,13 @@ fn regenerate_orb_job(opts: &PatchOpts) -> Vec<String> {
         "            export PATH=\"/tmp/bin:$PATH\"".to_string(),
         "            gen-circleci-orb generate \\".to_string(),
         format!("              --binary {binary} \\"),
-        format!("              --namespace {namespace} \\"),
-        format!("              --orb-dir {orb_dir}"),
-    ]
+    ];
+    // Each namespace gets its own --namespace flag (repeatable CLI arg).
+    for ns in &opts.namespaces {
+        lines.push(format!("              --namespace {ns} \\"));
+    }
+    lines.push(format!("              --orb-dir {orb_dir}"));
+    lines
 }
 
 fn pack_validate_steps(opts: &PatchOpts) -> Vec<String> {
@@ -413,23 +435,22 @@ fn build_binary_release_job(opts: &PatchOpts) -> Vec<String> {
     ]
 }
 
-fn ensure_orb_registered_job(opts: &PatchOpts) -> Vec<String> {
-    let binary = &opts.binary;
-    let namespace = &opts.namespace;
-    // Uses orb-tools/default executor — same circleci/circleci-cli image as orb-tools/publish,
-    // so the CircleCI CLI is pre-installed. The orb-publishing context injects CIRCLE_TOKEN.
-    // circleci setup must be called first to write the CLI config; without it the CLI has no
-    // session and every orb command fails with "please set a token with 'circleci setup'".
+/// Build the job definition lines for one `ensure-orb-registered-<ns>` job.
+/// Uses orb-tools/default executor (same circleci/circleci-cli image as orb-tools/publish,
+/// so the CircleCI CLI is pre-installed). The orb-publishing context injects CIRCLE_TOKEN.
+/// circleci setup must be called first — without it the CLI has no session config and
+/// every orb command fails with "please set a token with 'circleci setup'".
+fn ensure_orb_registered_job_for(ns: &str, binary: &str) -> Vec<String> {
     vec![
-        "  ensure-orb-registered:".to_string(),
+        format!("  ensure-orb-registered-{ns}:"),
         "    executor: orb-tools/default".to_string(),
         "    steps:".to_string(),
         "      - run:".to_string(),
         "          name: Ensure orb is registered".to_string(),
         "          command: |".to_string(),
         "            circleci setup --token \"${CIRCLE_TOKEN}\" --host https://circleci.com --no-prompt".to_string(),
-        format!("            circleci orb info {namespace}/{binary} > /dev/null 2>&1 || \\"),
-        format!("              circleci orb create {namespace}/{binary} --no-prompt"),
+        format!("            circleci orb info {ns}/{binary} > /dev/null 2>&1 || \\"),
+        format!("              circleci orb create {ns}/{binary} --no-prompt"),
     ]
 }
 
@@ -468,12 +489,12 @@ fn build_container_job(opts: &PatchOpts) -> Vec<String> {
 
 fn release_workflow_steps(opts: &PatchOpts) -> Vec<String> {
     let binary = &opts.binary;
-    let namespace = &opts.namespace;
     let docker_ctx = &opts.docker_context;
     let orb_ctx = &opts.orb_context;
     let orb_dir = &opts.orb_dir;
-    // release_after_job is the approval gate; both build-binary-release and pack-orb-release
-    // require it so they run in parallel immediately after the gate clears.
+    // release_after_job is the approval gate; build-binary-release, pack-orb-release, and
+    // all ensure-orb-registered-<ns> jobs require it so they run in parallel immediately
+    // after the gate clears.
     let requires = opts
         .release_after_job
         .as_deref()
@@ -503,48 +524,53 @@ fn release_workflow_steps(opts: &PatchOpts) -> Vec<String> {
     steps.push("          requires: [build-binary-release]".to_string());
     steps.push(format!("          context: [{docker_ctx}]"));
 
-    // ensure-orb-registered: dedicated job using orb-tools/default executor (CLI pre-installed).
-    // Runs in parallel with build-container; both require the approval gate.
-    // A pre-step cannot be used because orb-tools/publish configures CLI auth in its own steps,
-    // which run after pre-steps — leaving the CLI unauthenticated during pre-step execution.
-    steps.push("      - ensure-orb-registered:".to_string());
-    if !requires.is_empty() {
-        steps.push(format!("          requires: {requires}"));
-    }
-    steps.push(format!("          context: [{orb_ctx}]"));
+    // Per-namespace: ensure-orb-registered-<ns> + orb-tools/publish: name: publish-orb-<ns>
+    // Each namespace gets its own registration check and its own publish job.
+    // Ensure jobs run in parallel with build-container (both require the approval gate).
+    // Each publish job fans in from build-container, pack-orb-release, and its own ensure job.
+    for ns in &opts.namespaces {
+        // ensure-orb-registered-<ns>: dedicated job (not a pre-step — see job definition comment)
+        steps.push(format!("      - ensure-orb-registered-{ns}:"));
+        if !requires.is_empty() {
+            steps.push(format!("          requires: {requires}"));
+        }
+        steps.push(format!("          context: [{orb_ctx}]"));
 
-    // orb-tools/publish: inject CIRCLE_TAG via pre-steps (pipeline is approval-triggered,
-    // not tag-triggered, so CIRCLE_TAG is empty; inject it from versions.env).
-    // Also requires ensure-orb-registered so the orb exists before publish runs.
-    steps.push("      - orb-tools/publish:".to_string());
-    steps.push(format!("          name: publish-orb-{namespace}"));
-    steps.push("          pre-steps:".to_string());
-    steps.push("            - attach_workspace:".to_string());
-    steps.push("                at: /tmp/release-versions".to_string());
-    steps.push("            - run:".to_string());
-    steps.push("                name: Export orb version as CIRCLE_TAG".to_string());
-    steps.push("                command: |".to_string());
-    steps.push("                  source /tmp/release-versions/versions.env".to_string());
-    // orb-tools/publish requires CIRCLE_TAG to match ^v[0-9]+\.[0-9]+\.[0-9]+$
-    steps.push(format!(
-        "                  echo \"export CIRCLE_TAG=v${{{version_var}}}\" >> \"$BASH_ENV\""
-    ));
-    steps.push(format!("          orb_name: {namespace}/{binary}"));
-    steps.push("          pub_type: production".to_string());
-    steps.push("          vcs_type: github".to_string());
-    steps.push(
-        "          requires: [build-container, pack-orb-release, ensure-orb-registered]"
-            .to_string(),
-    );
-    steps.push(format!("          context: [{orb_ctx}]"));
+        // orb-tools/publish: inject CIRCLE_TAG via pre-steps (pipeline is approval-triggered,
+        // not tag-triggered, so CIRCLE_TAG is empty; inject it from versions.env).
+        steps.push("      - orb-tools/publish:".to_string());
+        steps.push(format!("          name: publish-orb-{ns}"));
+        steps.push("          pre-steps:".to_string());
+        steps.push("            - attach_workspace:".to_string());
+        steps.push("                at: /tmp/release-versions".to_string());
+        steps.push("            - run:".to_string());
+        steps.push("                name: Export orb version as CIRCLE_TAG".to_string());
+        steps.push("                command: |".to_string());
+        steps.push("                  source /tmp/release-versions/versions.env".to_string());
+        // orb-tools/publish requires CIRCLE_TAG to match ^v[0-9]+\.[0-9]+\.[0-9]+$
+        steps.push(format!(
+            "                  echo \"export CIRCLE_TAG=v${{{version_var}}}\" >> \"$BASH_ENV\""
+        ));
+        steps.push(format!("          orb_name: {ns}/{binary}"));
+        steps.push("          pub_type: production".to_string());
+        steps.push("          vcs_type: github".to_string());
+        steps.push(format!(
+            "          requires: [build-container, pack-orb-release, ensure-orb-registered-{ns}]"
+        ));
+        steps.push(format!("          context: [{orb_ctx}]"));
+    }
 
     steps
 }
 
 /// Find `toolkit/release_crate:` in the named release workflow and update its
-/// `requires:` line to `[publish_job]`. Returns true if a change was made.
-/// Idempotent: returns false if already wired correctly, or if no requires line exists.
-fn rewire_release_crate_requires(lines: &mut [String], workflow: &str, publish_job: &str) -> bool {
+/// `requires:` line to list all `publish_jobs`. Returns true if a change was made.
+/// Idempotent: returns false if all publish jobs are already present, or if no requires line.
+fn rewire_release_crate_requires(
+    lines: &mut [String],
+    workflow: &str,
+    publish_jobs: &[String],
+) -> bool {
     // Locate the named workflow
     let wf_line = format!("  {workflow}:");
     let Some(wf_idx) = lines
@@ -579,10 +605,12 @@ fn rewire_release_crate_requires(lines: &mut [String], workflow: &str, publish_j
             break; // left the workflow section entirely
         }
         if l.contains("requires:") {
-            if l.contains(publish_job) {
-                return false; // already correct
+            // Already correct if every publish job appears in the requires line
+            if publish_jobs.iter().all(|j| l.contains(j.as_str())) {
+                return false;
             }
-            lines[scan_start + offset] = format!("          requires: [{publish_job}]");
+            let joined = publish_jobs.join(", ");
+            lines[scan_start + offset] = format!("          requires: [{joined}]");
             return true;
         }
     }
@@ -596,7 +624,7 @@ mod tests {
     fn make_opts() -> PatchOpts {
         PatchOpts {
             binary: "mytool".to_string(),
-            namespace: "my-org".to_string(),
+            namespaces: vec!["my-org".to_string()],
             docker_namespace: "my-docker-org".to_string(),
             orb_dir: "orb".to_string(),
             build_workflow: "validation".to_string(),
@@ -610,6 +638,13 @@ mod tests {
             docker_context: "docker".to_string(),
             orb_context: "orb-publishing".to_string(),
             mcp: false,
+        }
+    }
+
+    fn make_opts_two_ns() -> PatchOpts {
+        PatchOpts {
+            namespaces: vec!["my-org".to_string(), "other-org".to_string()],
+            ..make_opts()
         }
     }
 
@@ -1355,49 +1390,50 @@ workflows:
     #[test]
     fn patch_release_adds_ensure_orb_registered_job() {
         let (output, _) = patch_release(RELEASE_FIXTURE, &make_opts());
+        // Job name always includes namespace suffix for unambiguous multi-namespace support.
         assert!(
-            output.contains("  ensure-orb-registered:"),
-            "missing ensure-orb-registered job definition:\n{output}"
+            output.contains("  ensure-orb-registered-my-org:"),
+            "missing ensure-orb-registered-my-org job definition:\n{output}"
         );
         let jobs_pos = output.find("\njobs:").expect("no jobs: section");
         let workflows_pos = output.find("\nworkflows:").expect("no workflows: section");
         let pos = output
-            .find("  ensure-orb-registered:")
-            .expect("no ensure-orb-registered job");
+            .find("  ensure-orb-registered-my-org:")
+            .expect("no ensure-orb-registered-my-org job");
         assert!(
             pos > jobs_pos && pos < workflows_pos,
-            "ensure-orb-registered must be defined in the jobs section:\n{output}"
+            "ensure-orb-registered-my-org must be defined in the jobs section:\n{output}"
         );
     }
 
     #[test]
     fn ensure_orb_registered_job_uses_orb_tools_executor() {
         let (output, _) = patch_release(RELEASE_FIXTURE, &make_opts());
-        let block = job_block(&output, "ensure-orb-registered");
+        let block = job_block(&output, "ensure-orb-registered-my-org");
         // orb-tools/default uses the circleci/circleci-cli Docker image — CLI pre-installed.
         // No need to add a circleci/circleci-cli orb dependency.
         assert!(
             block.contains("executor: orb-tools/default"),
-            "ensure-orb-registered must use orb-tools/default executor (has CLI pre-installed):\n{block}"
+            "ensure-orb-registered-my-org must use orb-tools/default executor (has CLI pre-installed):\n{block}"
         );
     }
 
     #[test]
     fn ensure_orb_registered_job_runs_circleci_setup() {
         let (output, _) = patch_release(RELEASE_FIXTURE, &make_opts());
-        let block = job_block(&output, "ensure-orb-registered");
+        let block = job_block(&output, "ensure-orb-registered-my-org");
         // The CLI has no session config in a fresh executor. circleci setup must be called
         // with CIRCLE_TOKEN (the orb-publishing context variable) before any orb commands.
         assert!(
             block.contains("circleci setup") && block.contains("CIRCLE_TOKEN"),
-            "ensure-orb-registered must run circleci setup --token ${{CIRCLE_TOKEN}}:\n{block}"
+            "ensure-orb-registered-my-org must run circleci setup --token ${{CIRCLE_TOKEN}}:\n{block}"
         );
     }
 
     #[test]
     fn ensure_orb_registered_job_uses_idempotent_check() {
         let (output, _) = patch_release(RELEASE_FIXTURE, &make_opts());
-        let block = job_block(&output, "ensure-orb-registered");
+        let block = job_block(&output, "ensure-orb-registered-my-org");
         assert!(
             block.contains("circleci orb info my-org/mytool"),
             "ensure job must check the specific orb before creating:\n{block}"
@@ -1416,8 +1452,8 @@ workflows:
     fn release_workflow_has_ensure_orb_registered_step() {
         let (output, _) = patch_release(RELEASE_FIXTURE, &make_opts());
         assert!(
-            output.contains("      - ensure-orb-registered:"),
-            "missing ensure-orb-registered workflow step:\n{output}"
+            output.contains("      - ensure-orb-registered-my-org:"),
+            "missing ensure-orb-registered-my-org workflow step:\n{output}"
         );
     }
 
@@ -1425,13 +1461,13 @@ workflows:
     fn release_workflow_ensure_orb_step_requires_approval_gate() {
         let (output, _) = patch_release(RELEASE_FIXTURE, &make_opts());
         let after_step = output
-            .split("      - ensure-orb-registered:")
+            .split("      - ensure-orb-registered-my-org:")
             .nth(1)
-            .expect("no ensure-orb-registered workflow step");
+            .expect("no ensure-orb-registered-my-org workflow step");
         let step_block = after_step.split("      - ").next().unwrap_or(after_step);
         assert!(
             step_block.contains("requires: [approve-release]"),
-            "ensure-orb-registered must require the approval gate:\n{step_block}"
+            "ensure-orb-registered-my-org must require the approval gate:\n{step_block}"
         );
     }
 
@@ -1439,13 +1475,13 @@ workflows:
     fn release_workflow_ensure_orb_step_uses_orb_publishing_context() {
         let (output, _) = patch_release(RELEASE_FIXTURE, &make_opts());
         let after_step = output
-            .split("      - ensure-orb-registered:")
+            .split("      - ensure-orb-registered-my-org:")
             .nth(1)
-            .expect("no ensure-orb-registered workflow step");
+            .expect("no ensure-orb-registered-my-org workflow step");
         let step_block = after_step.split("      - ").next().unwrap_or(after_step);
         assert!(
             step_block.contains("context: [orb-publishing]"),
-            "ensure-orb-registered must run in the orb-publishing context (provides CIRCLECI_API_TOKEN):\n{step_block}"
+            "ensure-orb-registered-my-org must run in the orb-publishing context:\n{step_block}"
         );
     }
 
@@ -1540,6 +1576,103 @@ workflows:
                 .any(|s| s.contains("release_crate rewire")),
             "rewire must appear in insertions report:\n{:?}",
             report.insertions
+        );
+    }
+
+    // ── multi-namespace support ────────────────────────────────────────────────
+    // When --namespace is given multiple times, each namespace gets its own
+    // ensure-orb-registered-<ns> job and publish-orb-<ns> workflow step.
+    // toolkit/release_crate must require ALL publish jobs.
+
+    #[test]
+    fn patch_release_adds_per_namespace_ensure_and_publish_jobs() {
+        let (output, _) = patch_release(RELEASE_FIXTURE, &make_opts_two_ns());
+        assert!(
+            output.contains("  ensure-orb-registered-my-org:"),
+            "missing ensure-orb-registered-my-org job:\n{output}"
+        );
+        assert!(
+            output.contains("  ensure-orb-registered-other-org:"),
+            "missing ensure-orb-registered-other-org job:\n{output}"
+        );
+        assert!(
+            output.contains("name: publish-orb-my-org"),
+            "missing publish-orb-my-org step:\n{output}"
+        );
+        assert!(
+            output.contains("name: publish-orb-other-org"),
+            "missing publish-orb-other-org step:\n{output}"
+        );
+    }
+
+    #[test]
+    fn each_publish_job_requires_its_own_ensure_job() {
+        let (output, _) = patch_release(RELEASE_FIXTURE, &make_opts_two_ns());
+        // publish-orb-my-org must require ensure-orb-registered-my-org (not other-org).
+        // Split on "\n      - " (6-space indent, workflow-level) to get just this job's block —
+        // pre-steps use 12-space indent so they are not split on.
+        let after_my_org = output
+            .split("name: publish-orb-my-org")
+            .nth(1)
+            .expect("no publish-orb-my-org step");
+        let my_org_block = after_my_org
+            .split("\n      - ")
+            .next()
+            .unwrap_or(after_my_org);
+        assert!(
+            my_org_block.contains("ensure-orb-registered-my-org"),
+            "publish-orb-my-org must require ensure-orb-registered-my-org:\n{my_org_block}"
+        );
+        assert!(
+            !my_org_block.contains("ensure-orb-registered-other-org"),
+            "publish-orb-my-org must NOT require other-org's ensure job:\n{my_org_block}"
+        );
+
+        // publish-orb-other-org must require ensure-orb-registered-other-org
+        let after_other_org = output
+            .split("name: publish-orb-other-org")
+            .nth(1)
+            .expect("no publish-orb-other-org step");
+        let other_org_block = after_other_org
+            .split("\n      - ")
+            .next()
+            .unwrap_or(after_other_org);
+        assert!(
+            other_org_block.contains("ensure-orb-registered-other-org"),
+            "publish-orb-other-org must require ensure-orb-registered-other-org:\n{other_org_block}"
+        );
+    }
+
+    #[test]
+    fn rewire_requires_all_publish_jobs_for_multiple_namespaces() {
+        let (output, _) = patch_release(RELEASE_FIXTURE_WITH_RELEASE_CRATE, &make_opts_two_ns());
+        let wf_section = output.split("workflows:").nth(1).unwrap_or("");
+        let after_rc = wf_section
+            .split("- toolkit/release_crate:")
+            .nth(1)
+            .expect("no toolkit/release_crate step");
+        let block = after_rc.split("\n      - ").next().unwrap_or(after_rc);
+        assert!(
+            block.contains("publish-orb-my-org"),
+            "requires must include publish-orb-my-org:\n{block}"
+        );
+        assert!(
+            block.contains("publish-orb-other-org"),
+            "requires must include publish-orb-other-org:\n{block}"
+        );
+    }
+
+    #[test]
+    fn multi_namespace_patch_release_is_idempotent() {
+        let (first, _) = patch_release(RELEASE_FIXTURE, &make_opts_two_ns());
+        let (second, second_report) = patch_release(&first, &make_opts_two_ns());
+        assert_eq!(
+            first, second,
+            "second multi-namespace patch must not change content"
+        );
+        assert!(
+            !second_report.skipped.is_empty(),
+            "expected skipped entries on second run"
         );
     }
 }

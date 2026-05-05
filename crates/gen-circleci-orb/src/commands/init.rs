@@ -69,8 +69,6 @@ pub struct Init {
 
 impl Init {
     pub fn run(&self) -> Result<()> {
-        let namespace = self.namespaces.first().cloned().unwrap_or_default();
-
         // Step 1: generate orb source files
         tracing::info!("Generating orb source into ./{}", self.orb_dir);
         let gen = Generate {
@@ -89,7 +87,7 @@ impl Init {
         // Step 2: patch CI configs
         let opts = ci_patcher::PatchOpts {
             binary: self.binary.clone(),
-            namespace,
+            namespaces: self.namespaces.clone(),
             docker_namespace: self.docker_namespace.clone(),
             orb_dir: self.orb_dir.clone(),
             build_workflow: self.build_workflow.clone(),

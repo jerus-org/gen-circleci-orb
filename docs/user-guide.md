@@ -340,7 +340,8 @@ build-container:
           docker push <docker-namespace>/<binary>:latest
 ```
 
-Added to the release workflow:
+Added to the release workflow (one `ensure-orb-registered-<ns>` and one
+`orb-tools/publish` per namespace; shown here for two namespaces `ns1`/`ns2`):
 
 ```yaml
 - build-binary-release:
@@ -352,11 +353,12 @@ Added to the release workflow:
 - build-container:
     requires: [build-binary-release]
     context: [<docker-context>]
-- ensure-orb-registered:
+# ── repeated once per namespace ──────────────────────────────────────────────
+- ensure-orb-registered-<ns1>:
     requires: [<release-after-job>]
     context: [<orb-context>]
 - orb-tools/publish:
-    name: publish-orb-<namespace>
+    name: publish-orb-<ns1>
     pre-steps:
       - attach_workspace:
           at: /tmp/release-versions
@@ -365,17 +367,27 @@ Added to the release workflow:
           command: |
             source /tmp/release-versions/versions.env
             echo "export CIRCLE_TAG=v${CRATE_VERSION_<BINARY_UPPERCASED>}" >> "$BASH_ENV"
-    orb_name: <namespace>/<binary>
+    orb_name: <ns1>/<binary>
     pub_type: production
     vcs_type: github
-    requires: [build-container, pack-orb-release, ensure-orb-registered]
+    requires: [build-container, pack-orb-release, ensure-orb-registered-<ns1>]
+    context: [<orb-context>]
+- ensure-orb-registered-<ns2>:
+    requires: [<release-after-job>]
+    context: [<orb-context>]
+- orb-tools/publish:
+    name: publish-orb-<ns2>
+    ...
+    requires: [build-container, pack-orb-release, ensure-orb-registered-<ns2>]
     context: [<orb-context>]
 ```
 
-`build-binary-release`, `orb-tools/pack`, and `ensure-orb-registered` all run in parallel
-immediately after the approval gate. `build-container` is sequential after
-`build-binary-release` because it needs the compiled binary from the workspace. 
-`orb-tools/publish` fans in after all three parallel branches.
+`build-binary-release`, `orb-tools/pack`, and all `ensure-orb-registered-<ns>` jobs run
+in parallel immediately after the approval gate. `build-container` is sequential after
+`build-binary-release` because it needs the compiled binary from the workspace. Each
+`orb-tools/publish` job fans in from `build-container`, `pack-orb-release`, and its own
+namespace's `ensure-orb-registered-<ns>` job — keeping each namespace's publish path
+independent while sharing the single container build.
 
 `orb-tools/publish` requires `$CIRCLE_TAG` to match `^v[0-9]+\.[0-9]+\.[0-9]+$` for
 `pub_type: production`. The pre-steps inject it from `versions.env` via `$BASH_ENV` since
@@ -383,15 +395,23 @@ the pipeline is approval-triggered and `$CIRCLE_TAG` is otherwise empty.
 
 ### Release ordering: Docker → orb → crates.io
 
-If the release workflow contains `toolkit/release_crate:` (the toolkit job that publishes
-to crates.io), `init` automatically rewires its `requires:` line to
-`[publish-orb-<namespace>]`. This ensures crates.io is published last — after the orb and
-Docker image are live — which is important because the published `Cargo.toml` may reference
-the orb version.
+If the release workflow contains `toolkit/release_crate:`, `init` automatically rewires
+its `requires:` line to list every `publish-orb-<ns>` job. This ensures crates.io is
+published last — after all orb namespaces and the Docker image are live.
 
-The publish job name is derived from `--namespace`: e.g., `jerus-org` →
-`publish-orb-jerus-org`. No additional flag is needed. If `toolkit/release_crate:` is not
-present in the release workflow, this step is silently skipped.
+With a single `--namespace jerus-org` this produces:
+```yaml
+requires: [publish-orb-jerus-org]
+```
+
+With `--namespace jerus-org --namespace digital-prstv`:
+```yaml
+requires: [publish-orb-jerus-org, publish-orb-digital-prstv]
+```
+
+The publish job names are derived from the `--namespace` values — no additional flag is
+needed. If `toolkit/release_crate:` is not present in the release workflow, this step is
+silently skipped.
 
 ### Idempotency
 
@@ -401,11 +421,11 @@ output. Specific checks for `release.yml`:
 - `  docker: circleci/` in `orbs:` → skip docker orb insertion
 - `  orb-tools: circleci/` in `orbs:` → skip orb-tools orb insertion
 - `build-binary-release:` in content → skip job definition
-- `ensure-orb-registered:` in content → skip job definition
+- `ensure-orb-registered-<ns>:` present for every `--namespace` → skip job definitions
 - `build-container:` in content → skip job definition
-- `pack-orb-release` + `- build-binary-release:` + `- ensure-orb-registered:` +
-  `- build-container:` + `orb-tools/publish:` in release workflow → skip workflow steps
-- `toolkit/release_crate:` requires already contains `publish-orb-<namespace>` → skip rewire
+- `pack-orb-release` + `- build-binary-release:` + `- build-container:` + all per-namespace
+  `ensure-orb-registered-<ns>:` and `publish-orb-<ns>` entries present → skip workflow steps
+- `toolkit/release_crate:` requires already lists all `publish-orb-<ns>` jobs → skip rewire
 
 ### Design principle
 
@@ -424,11 +444,12 @@ standard crates.io publish mechanism across all repos in this organization.
 The first release after running `init` triggers this sequence automatically:
 
 1. CI runs `regenerate-orb` on every push → keeps orb source in sync with the binary
-2. On release approval: `build-binary-release` and `orb-tools/pack` run in parallel
+2. On release approval: `build-binary-release`, `orb-tools/pack`, and all
+   `ensure-orb-registered-<ns>` jobs run in parallel
 3. `build-container` builds and pushes the Docker image (requires compiled binary)
-4. `ensure-orb-registered` checks/creates the orb entry (runs in parallel with build-container)
-5. `orb-tools/publish` publishes the orb to the CircleCI registry (fan-in from steps 3 and 4)
-6. `toolkit/release_crate` publishes to crates.io after the orb is live
+4. Each `orb-tools/publish: name: publish-orb-<ns>` fans in from `build-container`,
+   `pack-orb-release`, and its namespace's `ensure-orb-registered-<ns>`
+5. `toolkit/release_crate` publishes to crates.io after all `publish-orb-*` jobs finish
 
 There is no circular dependency: `regenerate-orb` uses the `jerusdp/gen-circleci-orb`
 image with `gen-circleci-orb` pre-installed, and does not depend on the orb being
