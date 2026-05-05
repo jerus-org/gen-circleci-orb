@@ -434,14 +434,14 @@ If the release workflow contains `toolkit/release_crate:`, `init` automatically 
 its `requires:` line to list every `publish-orb-<ns>` job. This ensures crates.io is
 published last — after all orb namespaces and the Docker image are live.
 
-With a single `--public-orb-namespace jerus-org` this produces:
+With a single `--public-orb-namespace my-org` this produces:
 ```yaml
-requires: [publish-orb-jerus-org]
+requires: [publish-orb-my-org]
 ```
 
-With `--public-orb-namespace jerus-org --private-orb-namespace digital-prstv`:
+With `--public-orb-namespace my-org --private-orb-namespace my-org-preprod`:
 ```yaml
-requires: [publish-orb-jerus-org, publish-orb-digital-prstv]
+requires: [publish-orb-my-org, publish-orb-my-org-preprod]
 ```
 
 The publish job names are derived from the namespace values — no additional flag is
@@ -471,8 +471,8 @@ being generated to be published yet.
 
 **Exception**: step 4 (release ordering rewire) assumes `toolkit/release_crate` is the
 crates.io publish job. This step is skipped silently for projects that do not use
-`toolkit/release_crate`. It is intentional for jerus-org projects — the toolkit is the
-standard crates.io publish mechanism across all repos in this organization.
+`toolkit/release_crate`. It is intentional for projects that use the `circleci-toolkit` orb — the toolkit is the
+standard crates.io publish mechanism for repos built around it.
 
 ## Bootstrapping sequence
 
