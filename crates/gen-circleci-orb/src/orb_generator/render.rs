@@ -153,8 +153,11 @@ RUN apt-get update \
 FROM {base_image}
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates git \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd -ms /bin/bash circleci
 COPY --from=builder /usr/local/cargo/bin/{binary} /usr/local/bin/{binary}
+USER circleci
+WORKDIR /home/circleci/project
 "#
         ),
         InstallMethod::Apt => format!(
@@ -447,6 +450,43 @@ mod tests {
         assert!(
             content.contains("apt-get install") && content.contains(" git"),
             "Dockerfile must install git via apt for CircleCI checkout step:\n{content}"
+        );
+    }
+
+    #[test]
+    fn dockerfile_binstall_has_circleci_user_and_workdir() {
+        let cli = make_cli("mytool", vec![]);
+        let files = generate(&cli, &default_opts());
+        let content = &files[&PathBuf::from("Dockerfile")];
+        assert!(
+            content.contains("useradd") && content.contains("circleci"),
+            "runtime stage must create circleci user:\n{content}"
+        );
+        assert!(
+            content.contains("USER circleci"),
+            "runtime stage must set USER circleci:\n{content}"
+        );
+        assert!(
+            content.contains("WORKDIR /home/circleci/project"),
+            "runtime stage must set WORKDIR /home/circleci/project:\n{content}"
+        );
+    }
+
+    #[test]
+    fn dockerfile_binstall_does_not_run_as_root() {
+        let cli = make_cli("mytool", vec![]);
+        let files = generate(&cli, &default_opts());
+        let content = &files[&PathBuf::from("Dockerfile")];
+        // USER circleci must appear after the binary is copied — not root at final layer
+        let user_pos = content
+            .rfind("USER circleci")
+            .expect("USER circleci not found");
+        let copy_pos = content
+            .rfind("COPY --from=builder")
+            .expect("COPY --from=builder not found");
+        assert!(
+            user_pos > copy_pos,
+            "USER circleci must appear after COPY --from=builder:\n{content}"
         );
     }
 

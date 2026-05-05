@@ -7,5 +7,8 @@ RUN apt-get update \
 FROM debian:12-slim
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates git \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd -ms /bin/bash circleci
 COPY --from=builder /usr/local/cargo/bin/gen-circleci-orb /usr/local/bin/gen-circleci-orb
+USER circleci
+WORKDIR /home/circleci/project
