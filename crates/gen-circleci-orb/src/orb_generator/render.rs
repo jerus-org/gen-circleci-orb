@@ -142,21 +142,25 @@ fn render_executor(binary_name: &str) -> String {
 }
 
 fn render_dockerfile(binary: &str, method: &InstallMethod, base_image: &str) -> String {
-    let install_block = match method {
+    match method {
         InstallMethod::Binstall => format!(
-            r#"RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl git \
+            r#"FROM rust:1-slim-bookworm AS builder
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates pkg-config libssl-dev \
     && rm -rf /var/lib/apt/lists/* \
-    && curl -L --proto '=https' --tlsv1.2 -sSf \
-       https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash \
-    && cargo-binstall --no-confirm {binary} \
-    && rm -rf /root/.cargo/registry /root/.cargo/git"#
+    && cargo install {binary}
+
+FROM {base_image}
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates git \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /usr/local/cargo/bin/{binary} /usr/local/bin/{binary}
+"#
         ),
         InstallMethod::Apt => format!(
-            "RUN apt-get update \\\n    && apt-get install -y --no-install-recommends git {binary} \\\n    && rm -rf /var/lib/apt/lists/*"
+            "FROM {base_image}\nRUN apt-get update \\\n    && apt-get install -y --no-install-recommends git {binary} \\\n    && rm -rf /var/lib/apt/lists/*\n"
         ),
-    };
-    format!("FROM {base_image}\n{install_block}\n")
+    }
 }
 
 fn render_example(cli: &CliDefinition, opts: &GenerateOpts) -> String {
@@ -388,45 +392,49 @@ mod tests {
     // ── Dockerfile ──────────────────────────────────────────────────────────
 
     #[test]
-    fn dockerfile_binstall_uses_slim_base_and_bootstrap() {
+    fn dockerfile_binstall_uses_multistage_build() {
         let cli = make_cli("mytool", vec![]);
         let files = generate(&cli, &default_opts());
         let content = &files[&PathBuf::from("Dockerfile")];
-        // Correct base image
+        // Builder stage uses Rust on Bookworm so binary links against same GLIBC as runtime
+        assert!(
+            content.contains("FROM rust:1-slim-bookworm AS builder"),
+            "should use rust:1-slim-bookworm builder stage:\n{content}"
+        );
+        // Runtime stage is the slim Debian image
         assert!(
             content.contains("FROM debian:12-slim"),
-            "should use debian:12-slim:\n{content}"
+            "should use debian:12-slim runtime stage:\n{content}"
         );
-        // Bootstrap cargo-binstall (no cargo pre-installed on slim images)
+        // Binary compiled from source in builder stage — no curl|bash
         assert!(
-            content.contains("cargo-bins/cargo-binstall"),
-            "should bootstrap cargo-binstall:\n{content}"
+            content.contains("cargo install mytool"),
+            "should install via cargo install in builder stage:\n{content}"
         );
-        // Install the binary via cargo-binstall (hyphen form, cargo not required)
+        // Binary copied from builder to runtime
         assert!(
-            content.contains("cargo-binstall --no-confirm mytool"),
-            "should install via cargo-binstall:\n{content}"
+            content.contains("COPY --from=builder"),
+            "should copy binary from builder stage:\n{content}"
         );
-        // Required runtime deps for TLS binaries
+        // No pipe-to-bash pattern
         assert!(
-            content.contains("ca-certificates"),
-            "should install ca-certificates:\n{content}"
-        );
-        // Clean up apt lists to keep image small
-        assert!(
-            content.contains("rm -rf /var/lib/apt/lists"),
-            "should clean apt lists:\n{content}"
+            !content.contains("| bash"),
+            "must not use curl|bash pattern:\n{content}"
         );
     }
 
     #[test]
-    fn dockerfile_binstall_cleans_cargo_cache() {
+    fn dockerfile_binstall_runtime_has_ca_certs_and_git() {
         let cli = make_cli("mytool", vec![]);
         let files = generate(&cli, &default_opts());
         let content = &files[&PathBuf::from("Dockerfile")];
         assert!(
-            content.contains(".cargo/registry") || content.contains(".cargo/git"),
-            "should clean cargo cache:\n{content}"
+            content.contains("ca-certificates"),
+            "runtime stage should install ca-certificates:\n{content}"
+        );
+        assert!(
+            content.contains("apt-get install") && content.contains(" git"),
+            "runtime stage must install git for CircleCI checkout step:\n{content}"
         );
     }
 

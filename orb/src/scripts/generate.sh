@@ -1,6 +1,6 @@
 gen-circleci-orb generate \
   --binary "<< parameters.binary >>" \
-  --namespace "<< parameters.namespace >>" \
+  --orb-namespace "<< parameters.orb_namespace >>" \
   <<# parameters.output >>--output "<< parameters.output >>"<</ parameters.output >> \
   <<# parameters.install_method >>--install-method "<< parameters.install_method >>"<</ parameters.install_method >> \
   <<# parameters.base_image >>--base-image "<< parameters.base_image >>"<</ parameters.base_image >> \
