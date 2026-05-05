@@ -148,7 +148,7 @@ Each job file contains the same parameters as the corresponding command, plus:
 `src/executors/default.yml` defines a Docker executor with a `tag` parameter
 (default: `latest`) pointing to `<docker-namespace>/<binary>:<< parameters.tag >>`,
 where `<docker-namespace>` is the value passed to `--docker-namespace` at `init` time
-(or `--namespace` at `generate` time, which defaults to the first namespace value).
+(or `--orb-namespace` at `generate` time, which defaults to the first namespace value passed to `init`).
 
 ### Dockerfile
 
@@ -188,6 +188,41 @@ Re-running after no changes produces `0 created, 0 updated, N unchanged`.
 
 `init` calls `generate` first, then patches two CI config files additively.
 
+### Orb visibility: public vs private
+
+Each namespace has independent visibility. Use `--public-orb-namespace <NS>` and
+`--private-orb-namespace <NS>` (both repeatable) to declare each namespace explicitly.
+At least one of the two flags must be provided; the total set of namespaces is the union.
+
+```bash
+# Single public namespace
+gen-circleci-orb init --binary mytool \
+  --public-orb-namespace my-org ...
+
+# Single private namespace
+gen-circleci-orb init --binary mytool \
+  --private-orb-namespace my-org ...
+
+# Mixed: production namespace public, preprod namespace private
+gen-circleci-orb init --binary mytool \
+  --public-orb-namespace my-org \
+  --private-orb-namespace my-org-preprod ...
+
+# All namespaces private
+gen-circleci-orb init --binary mytool \
+  --private-orb-namespace my-org \
+  --private-orb-namespace my-org-preprod ...
+```
+
+`--private-orb-namespace` controls whether `--private` is passed to `circleci orb create`
+in that namespace's `ensure-orb-registered-<ns>` job. The other namespace's job is unaffected.
+
+**This must be decided before running `init` for the first time.** CircleCI sets orb
+visibility at creation time and it cannot be changed afterwards. Running `init` again
+with different visibility flags has no effect if the orb already exists —
+the `ensure-orb-registered-<ns>` job silently skips `circleci orb create` when the orb
+is already registered.
+
 ### config.yml changes
 
 Added to `orbs:`:
@@ -222,7 +257,7 @@ regenerate-orb:
           export PATH="/tmp/bin:$PATH"
           gen-circleci-orb generate \
             --binary <binary> \
-            --namespace <namespace> \
+            --orb-namespace <ns> \
             --orb-dir <orb-dir>
 ```
 
@@ -313,7 +348,7 @@ is read from `versions.env` written by `toolkit/calculate_versions` and persiste
 CircleCI workspace. The compiled binary is attached from the `build-binary-release` workspace
 and copied into the Docker build context so the image contains the freshly-built release
 binary. `<docker-namespace>` is the value of `--docker-namespace` — independent of the
-CircleCI orb namespace (`--namespace`). The `CRATE_VERSION_<BINARY_UPPERCASED>` variable
+CircleCI orb namespace (`--public-orb-namespace` / `--private-orb-namespace`). The `CRATE_VERSION_<BINARY_UPPERCASED>` variable
 name matches the format written by `toolkit/calculate_versions` (hyphens replaced by
 underscores, all uppercase).
 
@@ -399,17 +434,17 @@ If the release workflow contains `toolkit/release_crate:`, `init` automatically 
 its `requires:` line to list every `publish-orb-<ns>` job. This ensures crates.io is
 published last — after all orb namespaces and the Docker image are live.
 
-With a single `--namespace jerus-org` this produces:
+With a single `--public-orb-namespace my-org` this produces:
 ```yaml
-requires: [publish-orb-jerus-org]
+requires: [publish-orb-my-org]
 ```
 
-With `--namespace jerus-org --namespace digital-prstv`:
+With `--public-orb-namespace my-org --private-orb-namespace my-org-preprod`:
 ```yaml
-requires: [publish-orb-jerus-org, publish-orb-digital-prstv]
+requires: [publish-orb-my-org, publish-orb-my-org-preprod]
 ```
 
-The publish job names are derived from the `--namespace` values — no additional flag is
+The publish job names are derived from the namespace values — no additional flag is
 needed. If `toolkit/release_crate:` is not present in the release workflow, this step is
 silently skipped.
 
@@ -421,11 +456,11 @@ output. Specific checks for `release.yml`:
 - `  docker: circleci/` in `orbs:` → skip docker orb insertion
 - `  orb-tools: circleci/` in `orbs:` → skip orb-tools orb insertion
 - `build-binary-release:` in content → skip job definition
-- `ensure-orb-registered-<ns>:` present for every `--namespace` → skip job definitions
+- `ensure-orb-registered-<ns>:` present for every namespace → skip job definitions
 - `build-container:` in content → skip job definition
 - `pack-orb-release` + `- build-binary-release:` + `- build-container:` + all per-namespace
   `ensure-orb-registered-<ns>:` and `publish-orb-<ns>` entries present → skip workflow steps
-- `toolkit/release_crate:` requires already lists all `publish-orb-<ns>` jobs → skip rewire
+- `toolkit/release_crate:` `requires:` already lists all `publish-orb-<ns>` jobs → skip rewire
 
 ### Design principle
 
@@ -436,8 +471,8 @@ being generated to be published yet.
 
 **Exception**: step 4 (release ordering rewire) assumes `toolkit/release_crate` is the
 crates.io publish job. This step is skipped silently for projects that do not use
-`toolkit/release_crate`. It is intentional for jerus-org projects — the toolkit is the
-standard crates.io publish mechanism across all repos in this organization.
+`toolkit/release_crate`. It is intentional for projects that use the `circleci-toolkit` orb — the toolkit is the
+standard crates.io publish mechanism for repos built around it.
 
 ## Bootstrapping sequence
 

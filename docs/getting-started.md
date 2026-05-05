@@ -22,7 +22,7 @@ Run from your project root, pointing `generate` at any binary on your `PATH`:
 ```bash
 gen-circleci-orb generate \
   --binary my-tool \
-  --namespace my-org
+  --orb-namespace my-org
 ```
 
 The tool runs `my-tool --help` and `my-tool <subcommand> --help` for each subcommand, then
@@ -61,7 +61,7 @@ Run `init` once from your repo root:
 ```bash
 gen-circleci-orb init \
   --binary my-tool \
-  --namespace my-org \
+  --public-orb-namespace my-org \
   --docker-namespace my-docker-org \
   --build-workflow validation \
   --release-workflow release \
@@ -70,7 +70,8 @@ gen-circleci-orb init \
 ```
 
 `--docker-namespace` is the Docker Hub (or registry) org for the built container image.
-`--namespace` is the CircleCI orb namespace — these are independent and often differ.
+`--public-orb-namespace` (or `--private-orb-namespace`) is the CircleCI orb namespace —
+these are independent and often differ.
 
 This:
 1. Runs `generate` to write `orb/` (same as the manual step above)

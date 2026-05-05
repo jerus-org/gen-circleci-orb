@@ -71,7 +71,7 @@ first-class agent support from the first release.
 ```mermaid
 flowchart TD
     DEV["Developer\n(one time)"]
-    INIT["gen-circleci-orb init\n--binary my-tool\n--namespace my-ns\n--build-workflow build\n--release-workflow release"]
+    INIT["gen-circleci-orb init\n--binary my-tool\n--public-orb-namespace my-ns\n--build-workflow build\n--release-workflow release"]
     REPO["Consumer repo\n.circleci/ patched\norb/src/ added"]
     CI_BUILD["CI: build/test workflow\ngen-circleci-orb generate\n→ regenerate orb/src/\n→ cargo binstall + orb-tools validate"]
     CI_RELEASE["CI: release/deploy workflow\ngen-circleci-orb generate\n→ docker build → docker.io\n→ orb-tools publish → CircleCI registry\n→ gen-orb-mcp → GitHub release (MCP)"]
@@ -108,10 +108,10 @@ A developer wanting to expose `gen-orb-mcp` via CircleCI runs:
 
 ```bash
 gen-circleci-orb generate \
-  --binary gen-orb-mcp \
-  --namespace jerus-org \
-  --namespace digital-prstv \
-  --output ./gen-orb-mcp-orb
+  --binary my-tool \
+  --orb-namespace my-org \
+  --orb-namespace my-org-preprod \
+  --output ./my-tool-orb
 ```
 
 `gen-circleci-orb` executes `gen-orb-mcp --help`, `gen-orb-mcp generate --help`,
@@ -268,8 +268,8 @@ The generated release workflow orchestrates the complete chain from CLI build to
 flowchart LR
     BC["build-cli"] --> PC["publish-crate\n(crates.io)"]
     PC --> CONT["build-container\n(docker.io)"]
-    CONT --> PO1["publish-orb\njerus-org"]
-    CONT --> PO2["publish-orb\ndigital-prstv"]
+    CONT --> PO1["publish-orb\nmy-org"]
+    CONT --> PO2["publish-orb\nmy-org-preprod"]
     PO1 & PO2 --> MCP["build-mcp\n(GitHub release)"]
 ```
 
@@ -280,9 +280,9 @@ subcommand, it generates its own orb:
 
 ```bash
 gen-circleci-orb generate \
-  --binary gen-circleci-orb \
-  --namespace jerus-org \
-  --output ./gen-circleci-orb-orb
+  --binary my-tool \
+  --orb-namespace my-org \
+  --output ./my-tool-orb
 ```
 
 This creates a reference implementation demonstrating what the tool produces and serves as a
@@ -311,7 +311,7 @@ services that gen-circleci-orb will eventually replace or encapsulate via genera
 2. Run init once in the CLI tool's repository
    gen-circleci-orb init \
      --binary my-tool \
-     --namespace my-org \
+     --public-orb-namespace my-org \
      --build-workflow build \
      --release-workflow release \
      --mcp                        # optional: wire in MCP generation
@@ -357,7 +357,7 @@ successfully. All credentials are expected as CircleCI context environment varia
 
 **Access visibility:**
 - Orbs can be published as **public** (visible at circleci.com/developer/orbs) or **private**
-  (visible only within the CircleCI organisation). The `--private` flag on `init` controls this.
+  (visible only within the CircleCI organisation). Use `--private-orb-namespace` on `init` to mark a namespace as private.
 - The generated container image on docker.io is public by default. Private registries are a
   roadmap item.
 
@@ -385,7 +385,7 @@ flowchart LR
 
     subgraph "Inputs"
         BIN["CLI binary\n(any language)"]
-        FLAGS["CLI flags\n--namespace (repeatable)\n--install-method\n--orb-tools-version\n--build-workflow\n--release-workflow\n--mcp\n--private\n--dry-run"]
+        FLAGS["CLI flags\n--orb-namespace (repeatable, generate)\n--public-orb-namespace / --private-orb-namespace (init)\n--install-method\n--orb-tools-version\n--build-workflow\n--release-workflow\n--mcp\n--dry-run"]
         EXISTING[".circleci/\n(existing consumer CI)"]
     end
 
@@ -511,18 +511,25 @@ information. In best-effort mode all parameters default to `type: string`.
 
 ### 6.3 Namespace publishing
 
-`--namespace` is required and repeatable. Each namespace produces a separate `publish-orb-<ns>`
-job in the generated release workflow. The orb name is always `<namespace>/<binary-name>`.
+`--orb-namespace` (on `generate`) and `--public-orb-namespace` / `--private-orb-namespace`
+(on `init`) are repeatable. Each namespace produces a separate `publish-orb-<ns>` job in the
+generated release workflow. The orb name is always `<namespace>/<binary-name>`.
 
 ```bash
-# Single namespace
-gen-circleci-orb generate --binary gen-orb-mcp --namespace jerus-org --output ./out
+# Single namespace (generate)
+gen-circleci-orb generate --binary my-tool --orb-namespace my-org --output ./out
 
-# Multiple namespaces (parallel publish jobs)
-gen-circleci-orb generate --binary gen-orb-mcp \
-  --namespace jerus-org \
-  --namespace digital-prstv \
+# Multiple namespaces (generate)
+gen-circleci-orb generate --binary my-tool \
+  --orb-namespace my-org \
+  --orb-namespace my-org-preprod \
   --output ./out
+
+# Mixed visibility (init)
+gen-circleci-orb init --binary my-tool \
+  --public-orb-namespace my-org \
+  --private-orb-namespace my-org-preprod \
+  ...
 ```
 
 ### 6.4 Diff-aware regeneration
@@ -569,7 +576,7 @@ This is the same pattern currently used by the `circleci-toolkit` orb itself.
 | 3 | Container scope | Dockerfile embedded in the consumer's repo alongside `orb/src/`. No separate container repository. |
 | 4 | Release pipeline | Full chain: CLI build → crates.io → docker.io → CircleCI registry (per namespace) → GitHub release (MCP binary). MVP targets these four registries/repositories. |
 | 5 | MCP server placement | Post orb publish in CI (Option A). Mirrors `toolkit/build_mcp_server` pattern. Optional at `init` time via `--mcp`. |
-| 6 | Namespace | `--namespace` flag, required, repeatable. Generates one publish job per namespace. |
+| 6 | Namespace | `--orb-namespace` (generate), `--public-orb-namespace` / `--private-orb-namespace` (init), required, repeatable. Generates one publish job per namespace. |
 | 7 | Regeneration | Diff-aware. Only changed files are written; `--prune` removes stale files. |
 | 8 | orb-tools version | Exposed as `--orb-tools-version`. Prompted on greenfield; preserved from existing config on brownfield. |
 | 9 | Help format | MVP targets Rust/clap. Best-effort mode for non-clap CLIs (all params default to `string`). |
@@ -577,7 +584,7 @@ This is the same pattern currently used by the `circleci-toolkit` orb itself.
 | 11 | Primary interface | `init` subcommand for one-time wiring into existing consumer CI; `generate` subcommand for subsequent CI-driven regeneration. Orb-only mode (no CLI install) provides guidance via job descriptions. |
 | 12 | Orb source location | Generated orb source lives in `orb/src/` within the CLI tool's own repo. CI commits regenerated files back to the branch (diff-aware: no commit if unchanged). No separate orb repository is created. |
 | 13 | CI config modification strategy | `init` patches the consumer's existing `.circleci/` files additively — it adds new jobs to named workflows but does not replace or restructure existing CI. The consumer specifies which workflows receive build/test jobs and which receive release/deploy jobs. |
-| 14 | Orb visibility | `--private` flag on `init` controls whether the published orb is public (default) or private to the CircleCI organisation. |
+| 14 | Orb visibility | `--public-orb-namespace` / `--private-orb-namespace` on `init` controls per-namespace visibility. Each namespace is independently public or private; visibility is set at orb creation time and cannot be changed. |
 | 15 | Environment requirements | MVP targets: GitHub (source + releases), docker.io (container), CircleCI registry (orb). crates.io optional (Rust CLIs). All credentials supplied via CircleCI contexts. |
 
 ---

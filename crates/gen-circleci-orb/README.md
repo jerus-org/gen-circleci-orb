@@ -27,7 +27,7 @@ cargo install gen-circleci-orb
 ```bash
 gen-circleci-orb generate \
   --binary my-tool \
-  --namespace my-org
+  --orb-namespace my-org
 ```
 
 This writes orb source into an `orb/` subdirectory (the default `--orb-dir`):
@@ -44,9 +44,21 @@ contain a CircleCI orb, an error is raised.
 **Step 2 — wire orb generation into CI:**
 
 ```bash
+# Public orb in a single namespace
 gen-circleci-orb init \
   --binary my-tool \
-  --namespace my-org \
+  --public-orb-namespace my-org \
+  --docker-namespace my-docker-org \
+  --build-workflow validation \
+  --release-workflow release \
+  --requires-job common-tests \
+  --release-after-job release-my-tool
+
+# Mixed: production namespace public, pre-production namespace private
+gen-circleci-orb init \
+  --binary my-tool \
+  --public-orb-namespace my-org \
+  --private-orb-namespace my-org-preprod \
   --docker-namespace my-docker-org \
   --build-workflow validation \
   --release-workflow release \
@@ -63,11 +75,11 @@ This patches `.circleci/config.yml` and `.circleci/release.yml` to add:
 ## `generate` reference
 
 ```
-gen-circleci-orb generate [OPTIONS] --binary <BINARY> --namespace <NAMESPACE>
+gen-circleci-orb generate [OPTIONS] --binary <BINARY> --orb-namespace <NAMESPACE>
 
 Options:
   --binary <BINARY>               Binary to introspect (must be on PATH)
-  --namespace <NAMESPACE>         CircleCI namespace (repeatable)
+  --orb-namespace <NAMESPACE>     CircleCI orb namespace (repeatable)
   --output <DIR>                  Project root directory [default: .]
   --orb-dir <DIR>                 Orb subdirectory within --output [default: orb]
   --install-method <METHOD>       binstall | apt [default: binstall]
@@ -80,14 +92,16 @@ Options:
 ## `init` reference
 
 ```
-gen-circleci-orb init [OPTIONS] --binary <BINARY> --namespace <NAMESPACE>
+gen-circleci-orb init [OPTIONS] --binary <BINARY>
+                                 --public-orb-namespace <NS> | --private-orb-namespace <NS>
                                  --docker-namespace <NS>
                                  --build-workflow <WF> --release-workflow <WF>
 
 Required:
-  --binary <BINARY>               Binary to introspect (must be on PATH)
-  --namespace <NAMESPACE>         CircleCI orb namespace (repeatable)
-  --docker-namespace <NS>         Docker Hub (or registry) namespace for the container image
+  --binary <BINARY>                   Binary to introspect (must be on PATH)
+  --public-orb-namespace <NS>         CircleCI orb namespace, registered public (repeatable)
+  --private-orb-namespace <NS>        CircleCI orb namespace, registered private (repeatable)
+  --docker-namespace <NS>             Docker Hub (or registry) namespace for the container image
   --build-workflow <WF>           Validation workflow name to patch
   --release-workflow <WF>         Release workflow name to patch
 
