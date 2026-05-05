@@ -148,7 +148,7 @@ Each job file contains the same parameters as the corresponding command, plus:
 `src/executors/default.yml` defines a Docker executor with a `tag` parameter
 (default: `latest`) pointing to `<docker-namespace>/<binary>:<< parameters.tag >>`,
 where `<docker-namespace>` is the value passed to `--docker-namespace` at `init` time
-(or `--namespace` at `generate` time, which defaults to the first namespace value passed to `init`).
+(or `--orb-namespace` at `generate` time, which defaults to the first namespace value passed to `init`).
 
 ### Dockerfile
 
@@ -257,7 +257,7 @@ regenerate-orb:
           export PATH="/tmp/bin:$PATH"
           gen-circleci-orb generate \
             --binary <binary> \
-            --namespace <ns> \
+            --orb-namespace <ns> \
             --orb-dir <orb-dir>
 ```
 

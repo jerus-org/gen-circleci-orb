@@ -394,9 +394,9 @@ fn regenerate_orb_job(opts: &PatchOpts) -> Vec<String> {
         "            gen-circleci-orb generate \\".to_string(),
         format!("              --binary {binary} \\"),
     ];
-    // Each namespace gets its own --namespace flag (repeatable CLI arg).
+    // Each namespace gets its own --orb-namespace flag (repeatable CLI arg).
     for ns in &opts.namespaces {
-        lines.push(format!("              --namespace {ns} \\"));
+        lines.push(format!("              --orb-namespace {ns} \\"));
     }
     lines.push(format!("              --orb-dir {orb_dir}"));
     lines
@@ -1600,9 +1600,9 @@ workflows:
     }
 
     // ── multi-namespace support ────────────────────────────────────────────────
-    // When --namespace is given multiple times, each namespace gets its own
-    // ensure-orb-registered-<ns> job and publish-orb-<ns> workflow step.
-    // toolkit/release_crate must require ALL publish jobs.
+    // When --orb-namespace / --public-orb-namespace / --private-orb-namespace is given
+    // multiple times, each namespace gets its own ensure-orb-registered-<ns> job and
+    // publish-orb-<ns> workflow step. toolkit/release_crate must require ALL publish jobs.
 
     #[test]
     fn patch_release_adds_per_namespace_ensure_and_publish_jobs() {

@@ -19,8 +19,8 @@ pub struct Generate {
     #[arg(long)]
     pub binary: String,
 
-    /// CircleCI namespace(s) to publish the orb under (repeatable).
-    #[arg(long = "namespace", required = true)]
+    /// CircleCI orb namespace(s) to publish the orb under (repeatable).
+    #[arg(long = "orb-namespace", required = true)]
     pub namespaces: Vec<String>,
 
     /// Project root directory (orb source is written to <output>/<orb-dir>/).
