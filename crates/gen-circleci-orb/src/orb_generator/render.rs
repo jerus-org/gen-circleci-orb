@@ -67,7 +67,7 @@ fn render_subcommand(sub: &SubCommand, binary: &str, files: &mut HashMap<PathBuf
     if sub.is_leaf {
         files.insert(
             PathBuf::from(format!("src/commands/{}.yml", sub.name)),
-            render_command(sub, binary),
+            render_command(sub),
         );
         files.insert(
             PathBuf::from(format!("src/jobs/{}.yml", sub.name)),
@@ -75,7 +75,7 @@ fn render_subcommand(sub: &SubCommand, binary: &str, files: &mut HashMap<PathBuf
         );
         files.insert(
             PathBuf::from(format!("src/scripts/{}.sh", sub.name)),
-            render_script_content(sub, binary, &[]),
+            render_command_script_content(sub, binary),
         );
     }
     for child in &sub.subcommands {
@@ -83,8 +83,25 @@ fn render_subcommand(sub: &SubCommand, binary: &str, files: &mut HashMap<PathBuf
     }
 }
 
+/// CircleCI parameter names that are restricted in command definitions.
+/// orb pack rejects these with "Restricted parameter: '<name>'".
+/// Rather than dropping them, the generator renames them to `{subcommand}_{param}`
+/// so the functionality is preserved under a descriptive, unambiguous name.
+const RESTRICTED_COMMAND_PARAMS: &[&str] = &["name"];
+
+/// Returns the orb parameter name to use for a CLI parameter in a command.
+/// Restricted names are prefixed with the subcommand name
+/// (e.g. `generate` + `name` → `generate_name`).
+fn resolve_command_param_name(subcommand: &str, param: &str) -> String {
+    if RESTRICTED_COMMAND_PARAMS.contains(&param) {
+        format!("{subcommand}_{param}")
+    } else {
+        param.to_string()
+    }
+}
+
 /// CircleCI job parameter names that are reserved by the platform and cannot be
-/// used as user-defined parameters. Commands have no such restriction.
+/// used as user-defined parameters in job definitions.
 const RESERVED_JOB_PARAMS: &[&str] = &[
     "name",
     "type",
@@ -96,15 +113,82 @@ const RESERVED_JOB_PARAMS: &[&str] = &[
     "post_steps",
 ];
 
-fn render_command(sub: &SubCommand, binary: &str) -> String {
-    let parameters = build_orb_parameters(sub, &[]);
-    let step = build_run_step(sub, binary, &[]);
+fn render_command(sub: &SubCommand) -> String {
+    let parameters = build_command_orb_parameters(sub);
+    let step = build_run_step(sub);
     let cmd = OrbCommand {
         description: sub.description.clone(),
         parameters,
         steps: vec![step],
     };
     serde_yaml::to_string(&cmd).unwrap()
+}
+
+/// Build orb parameters for a command, renaming any restricted names with a
+/// subcommand prefix so they remain usable (e.g. `name` → `generate_name`).
+fn build_command_orb_parameters(sub: &SubCommand) -> IndexMap<String, OrbParameter> {
+    let mut params = IndexMap::new();
+    for p in &sub.parameters {
+        let orb_name = resolve_command_param_name(&sub.name, &p.long_name);
+        let (type_str, enum_vals) = match &p.param_type {
+            ParamType::String => ("string".to_string(), None),
+            ParamType::Boolean => ("boolean".to_string(), None),
+            ParamType::Integer => ("integer".to_string(), None),
+            ParamType::Enum(vals) => ("enum".to_string(), Some(vals.clone())),
+        };
+        let default = match &p.param_type {
+            ParamType::Boolean => {
+                let val = p.default.as_ref().map(|d| d == "true").unwrap_or(false);
+                Some(serde_yaml::Value::Bool(val))
+            }
+            _ if !p.required && p.default.is_none() => {
+                Some(serde_yaml::Value::String(String::new()))
+            }
+            _ => p
+                .default
+                .as_ref()
+                .map(|d| serde_yaml::Value::String(d.clone())),
+        };
+        params.insert(
+            orb_name,
+            OrbParameter {
+                param_type: type_str,
+                description: p.description.clone(),
+                default,
+                enum_values: enum_vals,
+            },
+        );
+    }
+    params
+}
+
+/// Build the CLI invocation string for a command's script file.
+/// Uses the renamed orb parameter name for interpolation but keeps the original CLI flag.
+fn render_command_script_content(sub: &SubCommand, binary: &str) -> String {
+    let mut cmd_parts: Vec<String> = vec![format!("{} {}", binary, sub.name.replace('_', "-"))];
+
+    for p in &sub.parameters {
+        let orb_name = resolve_command_param_name(&sub.name, &p.long_name);
+        let flag = format!("--{}", p.long_name.replace('_', "-"));
+        match &p.param_type {
+            ParamType::Boolean => {
+                cmd_parts.push(format!(
+                    "<<# parameters.{orb_name} >>{flag}<</ parameters.{orb_name} >>"
+                ));
+            }
+            _ => {
+                if p.required {
+                    cmd_parts.push(format!("{flag} \"<< parameters.{orb_name} >>\""));
+                } else {
+                    cmd_parts.push(format!(
+                        "<<# parameters.{orb_name} >>{flag} \"<< parameters.{orb_name} >>\"<</ parameters.{orb_name} >>"
+                    ));
+                }
+            }
+        }
+    }
+
+    cmd_parts.join(" \\\n  ")
 }
 
 fn render_job(sub: &SubCommand) -> String {
@@ -146,7 +230,7 @@ fn render_dockerfile(binary: &str, method: &InstallMethod, base_image: &str) -> 
         InstallMethod::Binstall => format!(
             r#"FROM rust:1-slim-bookworm AS builder
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates pkg-config libssl-dev \
+    && apt-get install -y --no-install-recommends ca-certificates libssl-dev pkg-config \
     && rm -rf /var/lib/apt/lists/* \
     && cargo install {binary}
 
@@ -228,40 +312,8 @@ fn build_orb_parameters(sub: &SubCommand, skip: &[&str]) -> IndexMap<String, Orb
     params
 }
 
-/// Build the CLI invocation string for a script file.
-fn render_script_content(sub: &SubCommand, binary: &str, skip: &[&str]) -> String {
-    let mut cmd_parts: Vec<String> = vec![format!("{} {}", binary, sub.name.replace('_', "-"))];
-
-    for p in &sub.parameters {
-        if skip.contains(&p.long_name.as_str()) {
-            continue;
-        }
-        let flag = format!("--{}", p.long_name.replace('_', "-"));
-        match &p.param_type {
-            ParamType::Boolean => {
-                cmd_parts.push(format!(
-                    "<<# parameters.{0} >>{1}<</ parameters.{0} >>",
-                    p.long_name, flag
-                ));
-            }
-            _ => {
-                if p.required {
-                    cmd_parts.push(format!("{flag} \"<< parameters.{} >>\"", p.long_name));
-                } else {
-                    cmd_parts.push(format!(
-                        "<<# parameters.{0} >>{flag} \"<< parameters.{0} >>\"<</ parameters.{0} >>",
-                        p.long_name
-                    ));
-                }
-            }
-        }
-    }
-
-    cmd_parts.join(" \\\n  ")
-}
-
 /// Build the `run:` step for a command, referencing the script file (RC009 compliance).
-fn build_run_step(sub: &SubCommand, _binary: &str, _skip: &[&str]) -> serde_yaml::Value {
+fn build_run_step(sub: &SubCommand) -> serde_yaml::Value {
     serde_yaml::Value::Mapping({
         let mut m = serde_yaml::Mapping::new();
         let mut run_map = serde_yaml::Mapping::new();
@@ -836,7 +888,6 @@ mod tests {
         // CircleCI reserves "name" (and others) as job-level parameters.
         // The generator must omit reserved names from job files so orb pack
         // does not reject the output with "Reserved job parameter name: 'name'".
-        // The command file is NOT affected — commands have no such restriction.
         let params = vec![
             Parameter {
                 long_name: "name".to_string(),
@@ -859,24 +910,88 @@ mod tests {
         let cli = make_cli("mytool", vec![sub]);
         let files = generate(&cli, &default_opts());
 
-        // Job must NOT contain `name:` as a parameter key
+        // Job must NOT contain `name:` as a parameter key (2-space indent = parameter level).
         let job = &files[&PathBuf::from("src/jobs/generate.yml")];
         assert!(
-            !job.contains("name:\n") && !job.contains("  name:"),
+            !job.contains("\n  name:\n"),
             "job must not contain reserved parameter 'name':\n{job}"
-        );
-
-        // Command may still contain `name:` — no restriction applies there
-        let cmd = &files[&PathBuf::from("src/commands/generate.yml")];
-        assert!(
-            cmd.contains("name:"),
-            "command should still expose the 'name' parameter:\n{cmd}"
         );
 
         // Non-reserved param must still appear in the job
         assert!(
             job.contains("output:"),
             "job must still contain non-reserved parameter 'output':\n{job}"
+        );
+    }
+
+    #[test]
+    fn command_renames_restricted_parameter_with_subcommand_prefix() {
+        // CircleCI restricts "name" as a command parameter.
+        // Rather than silently dropping it, the generator must rename it to
+        // "{subcommand}_{param}" so the functionality is preserved under a
+        // descriptive, unambiguous name — e.g. "generate" + "name" → "generate_name".
+        // The CLI flag emitted in the script stays --name (the original flag).
+        let params = vec![
+            Parameter {
+                long_name: "name".to_string(),
+                short: Some('n'),
+                param_type: ParamType::String,
+                default: Some(String::new()),
+                required: false,
+                description: "Name for the output.".to_string(),
+            },
+            Parameter {
+                long_name: "output".to_string(),
+                short: Some('o'),
+                param_type: ParamType::String,
+                default: Some("./dist".to_string()),
+                required: false,
+                description: "Output dir.".to_string(),
+            },
+        ];
+        let sub = make_leaf("generate", params);
+        let cli = make_cli("mytool", vec![sub]);
+        let files = generate(&cli, &default_opts());
+
+        let cmd = &files[&PathBuf::from("src/commands/generate.yml")];
+        // Must NOT appear as the bare restricted name
+        assert!(
+            !cmd.contains("\n  name:\n"),
+            "command must not use bare restricted parameter 'name':\n{cmd}"
+        );
+        // MUST appear under the prefixed name
+        assert!(
+            cmd.contains("generate_name:"),
+            "command must expose 'name' as 'generate_name':\n{cmd}"
+        );
+
+        let script = &files[&PathBuf::from("src/scripts/generate.sh")];
+        // Script interpolates via the renamed orb parameter …
+        assert!(
+            script.contains("parameters.generate_name"),
+            "script must reference 'generate_name' parameter:\n{script}"
+        );
+        // … but still emits the original CLI flag to the binary
+        assert!(
+            script.contains("--name"),
+            "script must still emit '--name' flag to the binary:\n{script}"
+        );
+
+        // Non-restricted param must still appear unchanged
+        assert!(
+            cmd.contains("output:"),
+            "command must still contain non-restricted parameter 'output':\n{cmd}"
+        );
+    }
+
+    #[test]
+    fn dockerfile_binstall_builder_packages_sorted() {
+        // SonarQube S7018: package lists must be sorted alphanumerically.
+        let dockerfile = render_dockerfile("mytool", &InstallMethod::Binstall, "debian:12-slim");
+        // builder stage: ca-certificates libssl-dev pkg-config (alphabetical)
+        assert!(
+            dockerfile.contains("ca-certificates libssl-dev pkg-config"),
+            "builder packages must be sorted: ca-certificates libssl-dev pkg-config\n{dockerfile}"
         );
     }
 

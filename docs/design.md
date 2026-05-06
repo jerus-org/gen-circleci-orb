@@ -163,10 +163,11 @@ parameters:
     default: "source"
     enum: ["binary", "source"]
     description: "Output format"
-  name:
+  generate_name:
     type: string
     default: ""
     description: "Name for the generated orb server (defaults to filename)"
+    # Note: 'name' is a CircleCI-restricted command parameter; renamed to generate_name.
   version:
     type: string
     default: ""
@@ -195,7 +196,7 @@ steps:
           --orb-path "<< parameters.orb_path >>" \
           --output "<< parameters.output >>" \
           --format "<< parameters.format >>" \
-          <<# parameters.name >>--name "<< parameters.name >>"<</ parameters.name >> \
+          <<# parameters.generate_name >>--name "<< parameters.generate_name >>"<</ parameters.generate_name >> \
           <<# parameters.version >>--version "<< parameters.version >>"<</ parameters.version >> \
           <<# parameters.force >>--force<</ parameters.force >> \
           <<# parameters.migrations >>--migrations "<< parameters.migrations >>"<</ parameters.migrations >> \
