@@ -119,6 +119,7 @@ workflows:
           binary_name: gen-circleci-orb
 
       - toolkit/release_prlog:
+          name: release-prlog
           requires:
             - release-gen-circleci-orb
           context:
@@ -126,24 +127,28 @@ workflows:
             - bot-check
             - pcu-app
 
-  build-mcp:
-    jobs:
       - toolkit/build_mcp_server:
           name: build-mcp-server
           orb_path: orb/src/@orb.yml
           orb_name: gen-circleci-orb
           binary_name: gen_circleci_orb_mcp
-          version: << pipeline.git.tag >>
-          release_tag: << pipeline.git.tag >>
+          version: "$CRATE_VERSION_GEN_CIRCLECI_ORB"
+          release_tag: "v$WORKSPACE_VERSION"
           prime_history: true
           prime_earliest_version: "0.0.11"
           prime_tag_prefix: v
+          pre-steps:
+            - attach_workspace:
+                at: /tmp/release-versions
+            - run:
+                name: Load approved versions
+                command: |
+                  source /tmp/release-versions/versions.env
+                  echo "export CRATE_VERSION_GEN_CIRCLECI_ORB=${CRATE_VERSION_GEN_CIRCLECI_ORB}" >> "$BASH_ENV"
+                  echo "export WORKSPACE_VERSION=${WORKSPACE_VERSION}" >> "$BASH_ENV"
+          requires:
+            - release-prlog
           context:
             - bot-check
             - release
             - pcu-app
-          filters:
-            tags:
-              only: /^v.*/
-            branches:
-              ignore: /.*/
