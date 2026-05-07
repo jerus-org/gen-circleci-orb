@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- orb: pass parameters to scripts via environment vars(pr [#39])
+
 ## [0.0.14] - 2026-05-07
 
 ### Added
@@ -144,6 +150,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#36]: https://github.com/jerus-org/gen-circleci-orb/pull/36
 [#37]: https://github.com/jerus-org/gen-circleci-orb/pull/37
 [#38]: https://github.com/jerus-org/gen-circleci-orb/pull/38
+[#39]: https://github.com/jerus-org/gen-circleci-orb/pull/39
+[Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.14...HEAD
 [0.0.14]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.13...v0.0.14
 [0.0.13]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.12...v0.0.13
 [0.0.12]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.11...v0.0.12
