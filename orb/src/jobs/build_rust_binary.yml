@@ -1,0 +1,25 @@
+description: Build a Rust binary from a workspace package and persist it to workspace for use in subsequent jobs.
+parameters:
+  package:
+    type: string
+    description: Cargo package name within the workspace (passed to --package)
+  binary:
+    type: string
+    description: Binary target name if it differs from the package name; defaults to package name
+    default: ''
+  rust_image:
+    type: string
+    description: Docker image to use for the Rust build
+    default: rust:latest
+  cargo_args:
+    type: string
+    description: Additional arguments passed to cargo build --release
+    default: ''
+docker:
+  - image: << parameters.rust_image >>
+steps:
+  - checkout
+  - build_rust_binary:
+      package: << parameters.package >>
+      binary: << parameters.binary >>
+      cargo_args: << parameters.cargo_args >>
