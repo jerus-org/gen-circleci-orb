@@ -64,3 +64,20 @@ steps:
 - run:
     name: init
     command: <<include(scripts/init.sh)>>
+    environment:
+      BINARY: << parameters.binary >>
+      PUBLIC_ORB_NAMESPACE: << parameters.public_orb_namespace >>
+      PRIVATE_ORB_NAMESPACE: << parameters.private_orb_namespace >>
+      BUILD_WORKFLOW: << parameters.build_workflow >>
+      RELEASE_WORKFLOW: << parameters.release_workflow >>
+      REQUIRES_JOB: << parameters.requires_job >>
+      RELEASE_AFTER_JOB: << parameters.release_after_job >>
+      ORB_DIR: << parameters.orb_dir >>
+      CI_DIR: << parameters.ci_dir >>
+      ORB_TOOLS_VERSION: << parameters.orb_tools_version >>
+      DOCKER_ORB_VERSION: << parameters.docker_orb_version >>
+      DOCKER_NAMESPACE: << parameters.docker_namespace >>
+      DOCKER_CONTEXT: << parameters.docker_context >>
+      ORB_CONTEXT: << parameters.orb_context >>
+      MCP: << parameters.mcp >>
+      DRY_RUN: << parameters.dry_run >>

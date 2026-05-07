@@ -1,10 +1,13 @@
-gen-circleci-orb generate \
-  --binary "<< parameters.binary >>" \
-  --orb-namespace "<< parameters.orb_namespace >>" \
-  <<# parameters.output >>--output "<< parameters.output >>"<</ parameters.output >> \
-  <<# parameters.install_method >>--install-method "<< parameters.install_method >>"<</ parameters.install_method >> \
-  <<# parameters.base_image >>--base-image "<< parameters.base_image >>"<</ parameters.base_image >> \
-  <<# parameters.home_url >>--home-url "<< parameters.home_url >>"<</ parameters.home_url >> \
-  <<# parameters.source_url >>--source-url "<< parameters.source_url >>"<</ parameters.source_url >> \
-  <<# parameters.orb_dir >>--orb-dir "<< parameters.orb_dir >>"<</ parameters.orb_dir >> \
-  <<# parameters.dry_run >>--dry-run<</ parameters.dry_run >>
+set -- gen-circleci-orb generate \
+  --binary "${BINARY}" \
+  --orb-namespace "${ORB_NAMESPACE}" \
+  --output "${OUTPUT}" \
+  --install-method "${INSTALL_METHOD}" \
+  --base-image "${BASE_IMAGE}" \
+  --orb-dir "${ORB_DIR}"
+
+[ -n "${HOME_URL:-}" ]   && set -- "$@" --home-url "${HOME_URL}"
+[ -n "${SOURCE_URL:-}" ] && set -- "$@" --source-url "${SOURCE_URL}"
+[ "${DRY_RUN:-false}" = "true" ] && set -- "$@" --dry-run
+
+"$@"

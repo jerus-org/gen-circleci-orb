@@ -41,3 +41,13 @@ steps:
 - run:
     name: generate
     command: <<include(scripts/generate.sh)>>
+    environment:
+      BINARY: << parameters.binary >>
+      ORB_NAMESPACE: << parameters.orb_namespace >>
+      OUTPUT: << parameters.output >>
+      INSTALL_METHOD: << parameters.install_method >>
+      BASE_IMAGE: << parameters.base_image >>
+      HOME_URL: << parameters.home_url >>
+      SOURCE_URL: << parameters.source_url >>
+      ORB_DIR: << parameters.orb_dir >>
+      DRY_RUN: << parameters.dry_run >>
