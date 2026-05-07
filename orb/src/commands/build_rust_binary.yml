@@ -1,0 +1,17 @@
+description: Build a Rust binary with cargo and persist it to workspace.
+parameters:
+  binary:
+    type: string
+    description: Name of the binary to build (cargo package name / binary target name)
+  cargo_args:
+    type: string
+    description: Additional arguments passed to cargo build --release
+    default: ''
+steps:
+  - run:
+      name: Build << parameters.binary >> binary
+      command: cargo build --release << parameters.cargo_args >>
+  - persist_to_workspace:
+      root: target/release
+      paths:
+        - << parameters.binary >>
