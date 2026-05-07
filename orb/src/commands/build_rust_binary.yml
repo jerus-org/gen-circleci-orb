@@ -1,17 +1,29 @@
-description: Build a Rust binary with cargo and persist it to workspace.
+description: Build a Rust binary from a workspace package and persist it to workspace.
 parameters:
+  package:
+    type: string
+    description: Cargo package name within the workspace (passed to --package)
   binary:
     type: string
-    description: Name of the binary to build (cargo package name / binary target name)
+    description: Binary target name if it differs from the package name; defaults to package name
+    default: ''
   cargo_args:
     type: string
     description: Additional arguments passed to cargo build --release
     default: ''
 steps:
   - run:
-      name: Build << parameters.binary >> binary
-      command: cargo build --release << parameters.cargo_args >>
+      name: Build << parameters.package >> binary
+      command: cargo build --release --package << parameters.package >> << parameters.cargo_args >>
+  - run:
+      name: Persist binary to workspace
+      command: |
+        BINARY="${BINARY_OVERRIDE:-<< parameters.package >>}"
+        mkdir -p /tmp/workspace
+        cp "target/release/$BINARY" "/tmp/workspace/$BINARY"
+      environment:
+        BINARY_OVERRIDE: << parameters.binary >>
   - persist_to_workspace:
-      root: target/release
+      root: /tmp/workspace
       paths:
-        - << parameters.binary >>
+        - .
