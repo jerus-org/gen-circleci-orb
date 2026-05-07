@@ -1,17 +1,20 @@
-gen-circleci-orb init \
-  --binary "<< parameters.binary >>" \
-  <<# parameters.public_orb_namespace >>--public-orb-namespace "<< parameters.public_orb_namespace >>"<</ parameters.public_orb_namespace >> \
-  <<# parameters.private_orb_namespace >>--private-orb-namespace "<< parameters.private_orb_namespace >>"<</ parameters.private_orb_namespace >> \
-  --build-workflow "<< parameters.build_workflow >>" \
-  --release-workflow "<< parameters.release_workflow >>" \
-  <<# parameters.requires_job >>--requires-job "<< parameters.requires_job >>"<</ parameters.requires_job >> \
-  <<# parameters.release_after_job >>--release-after-job "<< parameters.release_after_job >>"<</ parameters.release_after_job >> \
-  <<# parameters.orb_dir >>--orb-dir "<< parameters.orb_dir >>"<</ parameters.orb_dir >> \
-  <<# parameters.ci_dir >>--ci-dir "<< parameters.ci_dir >>"<</ parameters.ci_dir >> \
-  <<# parameters.orb_tools_version >>--orb-tools-version "<< parameters.orb_tools_version >>"<</ parameters.orb_tools_version >> \
-  <<# parameters.docker_orb_version >>--docker-orb-version "<< parameters.docker_orb_version >>"<</ parameters.docker_orb_version >> \
-  --docker-namespace "<< parameters.docker_namespace >>" \
-  <<# parameters.docker_context >>--docker-context "<< parameters.docker_context >>"<</ parameters.docker_context >> \
-  <<# parameters.orb_context >>--orb-context "<< parameters.orb_context >>"<</ parameters.orb_context >> \
-  <<# parameters.mcp >>--mcp<</ parameters.mcp >> \
-  <<# parameters.dry_run >>--dry-run<</ parameters.dry_run >>
+set -- gen-circleci-orb init \
+  --binary "${BINARY}" \
+  --build-workflow "${BUILD_WORKFLOW}" \
+  --release-workflow "${RELEASE_WORKFLOW}" \
+  --orb-dir "${ORB_DIR}" \
+  --ci-dir "${CI_DIR}" \
+  --orb-tools-version "${ORB_TOOLS_VERSION}" \
+  --docker-orb-version "${DOCKER_ORB_VERSION}" \
+  --docker-namespace "${DOCKER_NAMESPACE}" \
+  --docker-context "${DOCKER_CONTEXT}" \
+  --orb-context "${ORB_CONTEXT}"
+
+[ -n "${PUBLIC_ORB_NAMESPACE:-}" ]  && set -- "$@" --public-orb-namespace "${PUBLIC_ORB_NAMESPACE}"
+[ -n "${PRIVATE_ORB_NAMESPACE:-}" ] && set -- "$@" --private-orb-namespace "${PRIVATE_ORB_NAMESPACE}"
+[ -n "${REQUIRES_JOB:-}" ]          && set -- "$@" --requires-job "${REQUIRES_JOB}"
+[ -n "${RELEASE_AFTER_JOB:-}" ]     && set -- "$@" --release-after-job "${RELEASE_AFTER_JOB}"
+[ "${MCP:-false}" = "true" ]        && set -- "$@" --mcp
+[ "${DRY_RUN:-false}" = "true" ]    && set -- "$@" --dry-run
+
+"$@"
