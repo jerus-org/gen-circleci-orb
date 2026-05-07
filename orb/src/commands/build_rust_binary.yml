@@ -14,13 +14,10 @@ parameters:
 steps:
   - run:
       name: Build << parameters.package >> binary
-      command: cargo build --release --package << parameters.package >> << parameters.cargo_args >>
+      command: <<include(scripts/build_rust_binary.sh)>>
   - run:
       name: Persist binary to workspace
-      command: |
-        BINARY="${BINARY_OVERRIDE:-<< parameters.package >>}"
-        mkdir -p /tmp/workspace
-        cp "target/release/$BINARY" "/tmp/workspace/$BINARY"
+      command: <<include(scripts/persist_binary.sh)>>
       environment:
         BINARY_OVERRIDE: << parameters.binary >>
   - persist_to_workspace:

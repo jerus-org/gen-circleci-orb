@@ -55,7 +55,7 @@ steps:
           at: << parameters.workspace_root >>
       - run:
           name: Add workspace binaries to PATH
-          command: echo 'export PATH="<< parameters.workspace_root >>:$PATH"' >> "$BASH_ENV"
+          command: <<include(scripts/add_workspace_to_path.sh)>>
 - generate:
     binary: << parameters.binary >>
     orb_namespace: << parameters.orb_namespace >>
