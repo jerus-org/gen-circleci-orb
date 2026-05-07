@@ -1,1 +1,1 @@
-cargo build --release --package << parameters.package >> << parameters.cargo_args >>
+cargo build --release --package "${PACKAGE}" ${CARGO_ARGS:-}

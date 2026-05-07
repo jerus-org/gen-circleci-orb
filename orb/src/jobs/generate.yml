@@ -56,6 +56,8 @@ steps:
       - run:
           name: Add workspace binaries to PATH
           command: <<include(scripts/add_workspace_to_path.sh)>>
+          environment:
+            WORKSPACE_ROOT: << parameters.workspace_root >>
 - generate:
     binary: << parameters.binary >>
     orb_namespace: << parameters.orb_namespace >>
