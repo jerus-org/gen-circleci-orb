@@ -162,33 +162,32 @@ fn build_command_orb_parameters(sub: &SubCommand) -> IndexMap<String, OrbParamet
     params
 }
 
-/// Build the CLI invocation string for a command's script file.
-/// Uses the renamed orb parameter name for interpolation but keeps the original CLI flag.
+/// Build the shell script body for a command.
+/// Parameters are received as uppercased env vars (set via the YAML environment: block).
 fn render_command_script_content(sub: &SubCommand, binary: &str) -> String {
-    let mut cmd_parts: Vec<String> = vec![format!("{} {}", binary, sub.name.replace('_', "-"))];
+    let mut lines: Vec<String> = vec![format!("set -- {} {}", binary, sub.name.replace('_', "-"))];
 
     for p in &sub.parameters {
         let orb_name = resolve_command_param_name(&sub.name, &p.long_name);
+        let env_var = orb_name.to_uppercase();
         let flag = format!("--{}", p.long_name.replace('_', "-"));
-        match &p.param_type {
+        let line = match &p.param_type {
             ParamType::Boolean => {
-                cmd_parts.push(format!(
-                    "<<# parameters.{orb_name} >>{flag}<</ parameters.{orb_name} >>"
-                ));
+                format!(r#"[ "${{{env_var}:-false}}" = "true" ] && set -- "$@" {flag}"#)
             }
             _ => {
                 if p.required {
-                    cmd_parts.push(format!("{flag} \"<< parameters.{orb_name} >>\""));
+                    format!(r#"set -- "$@" {flag} "${{{env_var}}}""#)
                 } else {
-                    cmd_parts.push(format!(
-                        "<<# parameters.{orb_name} >>{flag} \"<< parameters.{orb_name} >>\"<</ parameters.{orb_name} >>"
-                    ));
+                    format!(r#"[ -n "${{{env_var}:-}}" ] && set -- "$@" {flag} "${{{env_var}}}""#)
                 }
             }
-        }
+        };
+        lines.push(line);
     }
 
-    cmd_parts.join(" \\\n  ")
+    lines.push(r#""$@""#.to_string());
+    lines.join("\n")
 }
 
 fn render_job(sub: &SubCommand) -> String {
@@ -313,6 +312,7 @@ fn build_orb_parameters(sub: &SubCommand, skip: &[&str]) -> IndexMap<String, Orb
 }
 
 /// Build the `run:` step for a command, referencing the script file (RC009 compliance).
+/// Adds an `environment:` block so the script can read params as uppercased env vars.
 fn build_run_step(sub: &SubCommand) -> serde_yaml::Value {
     serde_yaml::Value::Mapping({
         let mut m = serde_yaml::Mapping::new();
@@ -325,6 +325,21 @@ fn build_run_step(sub: &SubCommand) -> serde_yaml::Value {
             serde_yaml::Value::String("command".to_string()),
             serde_yaml::Value::String(format!("<<include(scripts/{}.sh)>>", sub.name)),
         );
+        if !sub.parameters.is_empty() {
+            let mut env_map = serde_yaml::Mapping::new();
+            for p in &sub.parameters {
+                let orb_name = resolve_command_param_name(&sub.name, &p.long_name);
+                let env_var = orb_name.to_uppercase();
+                env_map.insert(
+                    serde_yaml::Value::String(env_var),
+                    serde_yaml::Value::String(format!("<< parameters.{orb_name} >>")),
+                );
+            }
+            run_map.insert(
+                serde_yaml::Value::String("environment".to_string()),
+                serde_yaml::Value::Mapping(env_map),
+            );
+        }
         m.insert(
             serde_yaml::Value::String("run".to_string()),
             serde_yaml::Value::Mapping(run_map),
@@ -626,12 +641,12 @@ mod tests {
         let files = generate(&cli, &default_opts());
         let script = &files[&PathBuf::from("src/scripts/generate.sh")];
         assert!(
-            script.contains("--orb-path \"<< parameters.orb_path >>\""),
-            "script must contain required param flag:\n{script}"
+            script.contains("set -- \"$@\" --orb-path \"${ORB_PATH}\""),
+            "script must append required param via env var:\n{script}"
         );
         assert!(
-            !script.contains("<<# parameters.orb_path >>"),
-            "required param in script should not use conditional:\n{script}"
+            !script.contains("<<"),
+            "script must not contain unsubstituted << parameters >> literals:\n{script}"
         );
     }
 
@@ -650,8 +665,8 @@ mod tests {
         let files = generate(&cli, &default_opts());
         let script = &files[&PathBuf::from("src/scripts/generate.sh")];
         assert!(
-            script.contains("<<# parameters.output >>"),
-            "optional param in script must use mustache conditional:\n{script}"
+            script.contains("[ -n \"${OUTPUT:-}\" ]") && script.contains("--output \"${OUTPUT}\""),
+            "optional param in script must use shell conditional on env var:\n{script}"
         );
     }
 
@@ -670,8 +685,46 @@ mod tests {
         let files = generate(&cli, &default_opts());
         let script = &files[&PathBuf::from("src/scripts/generate.sh")];
         assert!(
-            script.contains("<<# parameters.force >>--force<</ parameters.force >>"),
-            "boolean flag in script rendered incorrectly:\n{script}"
+            script.contains("[ \"${FORCE:-false}\" = \"true\" ]") && script.contains("--force"),
+            "boolean flag in script must use shell conditional on env var:\n{script}"
+        );
+    }
+
+    #[test]
+    fn command_run_step_has_environment_block() {
+        let params = vec![
+            Parameter {
+                long_name: "orb_path".to_string(),
+                short: None,
+                param_type: ParamType::String,
+                default: None,
+                required: true,
+                description: "Path to orb.".to_string(),
+            },
+            Parameter {
+                long_name: "force".to_string(),
+                short: None,
+                param_type: ParamType::Boolean,
+                default: None,
+                required: false,
+                description: "Force.".to_string(),
+            },
+        ];
+        let sub = make_leaf("generate", params);
+        let cli = make_cli("mytool", vec![sub]);
+        let files = generate(&cli, &default_opts());
+        let content = &files[&PathBuf::from("src/commands/generate.yml")];
+        assert!(
+            content.contains("environment:"),
+            "command run step must have environment block:\n{content}"
+        );
+        assert!(
+            content.contains("ORB_PATH: << parameters.orb_path >>"),
+            "environment must map ORB_PATH:\n{content}"
+        );
+        assert!(
+            content.contains("FORCE: << parameters.force >>"),
+            "environment must map FORCE:\n{content}"
         );
     }
 
@@ -699,7 +752,7 @@ mod tests {
 
     #[test]
     fn required_param_renders_without_conditional() {
-        // CLI invocation lives in the script file; command YAML only holds parameters + include.
+        // Required params are always appended — no guard needed.
         let params = vec![Parameter {
             long_name: "orb_path".to_string(),
             short: Some('p'),
@@ -713,17 +766,17 @@ mod tests {
         let files = generate(&cli, &default_opts());
         let script = &files[&PathBuf::from("src/scripts/generate.sh")];
         assert!(
-            script.contains("--orb-path \"<< parameters.orb_path >>\""),
-            "required param not rendered correctly in script:\n{script}"
+            script.contains("set -- \"$@\" --orb-path \"${ORB_PATH}\""),
+            "required param must unconditionally append via env var:\n{script}"
         );
         assert!(
-            !script.contains("<<# parameters.orb_path >>"),
-            "required param should not use conditional in script:\n{script}"
+            !script.contains("[ -n") || !script.contains("ORB_PATH"),
+            "required param must not use conditional guard:\n{script}"
         );
     }
 
     #[test]
-    fn optional_string_param_renders_with_mustache_conditional() {
+    fn optional_string_param_renders_with_env_var_conditional() {
         let params = vec![Parameter {
             long_name: "output".to_string(),
             short: Some('o'),
@@ -737,13 +790,13 @@ mod tests {
         let files = generate(&cli, &default_opts());
         let script = &files[&PathBuf::from("src/scripts/generate.sh")];
         assert!(
-            script.contains("<<# parameters.output >>"),
-            "optional param should use mustache conditional in script:\n{script}"
+            script.contains("[ -n \"${OUTPUT:-}\" ]"),
+            "optional param should use shell conditional on env var:\n{script}"
         );
     }
 
     #[test]
-    fn boolean_flag_renders_with_mustache_conditional_no_value() {
+    fn boolean_flag_renders_with_env_var_conditional() {
         let params = vec![Parameter {
             long_name: "force".to_string(),
             short: None,
@@ -757,8 +810,8 @@ mod tests {
         let files = generate(&cli, &default_opts());
         let script = &files[&PathBuf::from("src/scripts/generate.sh")];
         assert!(
-            script.contains("<<# parameters.force >>--force<</ parameters.force >>"),
-            "boolean flag rendered incorrectly in script:\n{script}"
+            script.contains("[ \"${FORCE:-false}\" = \"true\" ]"),
+            "boolean flag must use shell conditional on env var:\n{script}"
         );
     }
 
@@ -966,10 +1019,10 @@ mod tests {
         );
 
         let script = &files[&PathBuf::from("src/scripts/generate.sh")];
-        // Script interpolates via the renamed orb parameter …
+        // Script uses the uppercased env var for the renamed orb parameter …
         assert!(
-            script.contains("parameters.generate_name"),
-            "script must reference 'generate_name' parameter:\n{script}"
+            script.contains("GENERATE_NAME"),
+            "script must reference 'GENERATE_NAME' env var:\n{script}"
         );
         // … but still emits the original CLI flag to the binary
         assert!(
