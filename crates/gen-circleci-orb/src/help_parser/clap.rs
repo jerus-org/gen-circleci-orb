@@ -18,10 +18,23 @@ pub fn parse_top_level(binary: &str, help_text: &str) -> Result<CliDefinition> {
     }
 
     Ok(CliDefinition {
-        binary_name: binary.to_string(),
+        binary_name: normalize_binary_name(binary),
         description,
         subcommands,
     })
+}
+
+/// Extract the filename stem from a binary path, returning just the bare name.
+///
+/// `./target/release/gen-orb-mcp` → `gen-orb-mcp`
+/// `/usr/local/bin/gen-orb-mcp`   → `gen-orb-mcp`
+/// `gen-orb-mcp`                  → `gen-orb-mcp`
+fn normalize_binary_name(binary: &str) -> String {
+    std::path::Path::new(binary)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(binary)
+        .to_string()
 }
 
 fn parse_subcommand(name: &str, help_text: &str, binary: &str) -> Result<SubCommand> {
@@ -740,5 +753,33 @@ Options:
         );
         assert_eq!(fmt.default, Some("source".to_string()));
         assert!(!fmt.required);
+    }
+
+    // ── binary name normalisation ──────────────────────────────────────────
+
+    #[test]
+    fn normalize_binary_name_relative_path_extracts_stem() {
+        assert_eq!(
+            normalize_binary_name("./target/release/gen-orb-mcp"),
+            "gen-orb-mcp"
+        );
+    }
+
+    #[test]
+    fn normalize_binary_name_absolute_path_extracts_stem() {
+        assert_eq!(
+            normalize_binary_name("/usr/local/bin/gen-orb-mcp"),
+            "gen-orb-mcp"
+        );
+    }
+
+    #[test]
+    fn normalize_binary_name_plain_name_unchanged() {
+        assert_eq!(normalize_binary_name("gen-orb-mcp"), "gen-orb-mcp");
+    }
+
+    #[test]
+    fn normalize_binary_name_nested_relative_path() {
+        assert_eq!(normalize_binary_name("../../some/path/mytool"), "mytool");
     }
 }
