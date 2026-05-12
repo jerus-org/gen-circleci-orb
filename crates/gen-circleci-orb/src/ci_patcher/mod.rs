@@ -468,8 +468,15 @@ fn ensure_orb_registered_job_for(ns: &str, binary: &str, private: bool) -> Vec<S
         "          name: Ensure orb is registered".to_string(),
         "          command: |".to_string(),
         "            circleci setup --token \"${CIRCLE_TOKEN}\" --host https://circleci.com --no-prompt".to_string(),
-        format!("            circleci orb info {ns}/{binary} > /dev/null 2>&1 || \\"),
-        format!("              circleci orb create {ns}/{binary} {create_flags}"),
+        format!("            if ! circleci orb info {ns}/{binary} > /dev/null 2>&1; then"),
+        format!("              create_output=$(circleci orb create {ns}/{binary} {create_flags} 2>&1)"),
+        "              create_exit=$?".to_string(),
+        "              echo \"${create_output}\"".to_string(),
+        "              if [ \"${create_exit}\" -ne 0 ] && ! echo \"${create_output}\" | grep -q \"already exists\"; then".to_string(),
+        "                exit \"${create_exit}\"".to_string(),
+        "              fi".to_string(),
+        "            fi".to_string(),
+        "            echo \"Orb is registered.\"".to_string(),
     ]
 }
 
@@ -1465,6 +1472,23 @@ workflows:
         assert!(
             !block.contains("|| true"),
             "must not use `|| true` — real failures (wrong token, wrong namespace) must surface:\n{block}"
+        );
+    }
+
+    #[test]
+    fn ensure_orb_registered_job_handles_already_exists_gracefully() {
+        // `circleci orb info` can return non-zero even when the orb exists (e.g. auth scope,
+        // CLI version quirk). The create command then fails with "already exists". The script
+        // must treat that outcome as success rather than a hard failure.
+        let (output, _) = patch_release(RELEASE_FIXTURE, &make_opts());
+        let block = job_block(&output, "ensure-orb-registered-my-org");
+        assert!(
+            block.contains("already exists"),
+            "ensure job must handle 'already exists' error from circleci orb create:\n{block}"
+        );
+        assert!(
+            !block.contains("|| \\"),
+            "ensure job must not use single-line || fallback — use captured exit-code check instead:\n{block}"
         );
     }
 
