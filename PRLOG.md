@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - generator: emit env var patterns in generated scripts(pr [#41])
+- normalise binary path to stem in CliDefinition(pr [#43])
 
 ## [0.0.16] - 2026-05-07
 
@@ -165,6 +166,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#39]: https://github.com/jerus-org/gen-circleci-orb/pull/39
 [#40]: https://github.com/jerus-org/gen-circleci-orb/pull/40
 [#41]: https://github.com/jerus-org/gen-circleci-orb/pull/41
+[#43]: https://github.com/jerus-org/gen-circleci-orb/pull/43
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.16...HEAD
 [0.0.16]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.15...v0.0.16
 [0.0.15]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.14...v0.0.15
