@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- handle circleci setup exit 255 without burying genuine errors(pr [#50])
+
 ## [0.0.21] - 2026-05-13
 
 ### Fixed
@@ -188,6 +194,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#44]: https://github.com/jerus-org/gen-circleci-orb/pull/44
 [#45]: https://github.com/jerus-org/gen-circleci-orb/pull/45
 [#46]: https://github.com/jerus-org/gen-circleci-orb/pull/46
+[#50]: https://github.com/jerus-org/gen-circleci-orb/pull/50
+[Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.21...HEAD
 [0.0.21]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.19...v0.0.21
 [0.0.19]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.18...v0.0.19
 [0.0.18]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.17...v0.0.18
