@@ -11,7 +11,7 @@ pub struct PatchOpts {
     pub build_workflow: String,
     pub release_workflow: String,
     pub requires_job: Option<String>,
-    pub release_after_job: Option<String>,
+    pub release_after_job: String,
     pub orb_tools_version: String,
     pub docker_orb_version: String,
     pub docker_context: String,
@@ -237,23 +237,6 @@ pub fn patch_release(content: &str, opts: &PatchOpts) -> (String, PatchReport) {
             }
         }
         report.insertions.push("release workflow steps".to_string());
-    }
-
-    // 4. Re-wire toolkit/release_crate to require all publish-orb-<ns> jobs
-    //    so crates.io is published after ALL orb namespaces (Docker → orb → crates.io ordering).
-    let publish_jobs: Vec<String> = opts
-        .namespaces
-        .iter()
-        .map(|ns| format!("publish-orb-{ns}"))
-        .collect();
-    if rewire_release_crate_requires(&mut lines, &opts.release_workflow, &publish_jobs) {
-        report
-            .insertions
-            .push("release_crate rewire to require orb publish".to_string());
-    } else {
-        report
-            .skipped
-            .push("release_crate rewire (already wired or no requires line)".to_string());
     }
 
     let mut output = lines.join("\n");
@@ -521,11 +504,7 @@ fn release_workflow_steps(opts: &PatchOpts) -> Vec<String> {
     // release_after_job is the approval gate; build-binary-release, pack-orb-release, and
     // all ensure-orb-registered-<ns> jobs require it so they run in parallel immediately
     // after the gate clears.
-    let requires = opts
-        .release_after_job
-        .as_deref()
-        .map(|r| format!("[{r}]"))
-        .unwrap_or_default();
+    let requires = format!("[{}]", opts.release_after_job);
     // Variable name: CRATE_VERSION_ + binary uppercased with hyphens replaced by underscores.
     // This matches the format written by toolkit/calculate_versions into versions.env.
     let version_var = format!("CRATE_VERSION_{}", binary.to_uppercase().replace('-', "_"));
@@ -533,17 +512,13 @@ fn release_workflow_steps(opts: &PatchOpts) -> Vec<String> {
 
     // build-binary-release: compile the release binary, persist to workspace
     steps.push("      - build-binary-release:".to_string());
-    if !requires.is_empty() {
-        steps.push(format!("          requires: {requires}"));
-    }
+    steps.push(format!("          requires: {requires}"));
 
     // Pack orb source (parallel with build-binary-release; both require the approval gate)
     steps.push("      - orb-tools/pack:".to_string());
     steps.push("          name: pack-orb-release".to_string());
     steps.push(format!("          source_dir: {orb_dir}/src"));
-    if !requires.is_empty() {
-        steps.push(format!("          requires: {requires}"));
-    }
+    steps.push(format!("          requires: {requires}"));
 
     // build-container: requires binary from workspace → sequential after build-binary-release
     steps.push("      - build-container:".to_string());
@@ -557,9 +532,7 @@ fn release_workflow_steps(opts: &PatchOpts) -> Vec<String> {
     for ns in &opts.namespaces {
         // ensure-orb-registered-<ns>: dedicated job (not a pre-step — see job definition comment)
         steps.push(format!("      - ensure-orb-registered-{ns}:"));
-        if !requires.is_empty() {
-            steps.push(format!("          requires: {requires}"));
-        }
+        steps.push(format!("          requires: {requires}"));
         steps.push(format!("          context: [{orb_ctx}]"));
 
         // orb-tools/publish: inject CIRCLE_TAG via pre-steps (pipeline is approval-triggered,
@@ -589,60 +562,6 @@ fn release_workflow_steps(opts: &PatchOpts) -> Vec<String> {
     steps
 }
 
-/// Find `toolkit/release_crate:` in the named release workflow and update its
-/// `requires:` line to list all `publish_jobs`. Returns true if a change was made.
-/// Idempotent: returns false if all publish jobs are already present, or if no requires line.
-fn rewire_release_crate_requires(
-    lines: &mut [String],
-    workflow: &str,
-    publish_jobs: &[String],
-) -> bool {
-    // Locate the named workflow
-    let wf_line = format!("  {workflow}:");
-    let Some(wf_idx) = lines
-        .iter()
-        .position(|l| l.trim_end() == wf_line.trim_end())
-    else {
-        return false;
-    };
-
-    // Find the `- toolkit/release_crate:` entry (6-space indent) inside the workflow
-    let mut rc_idx = None;
-    for (i, l) in lines.iter().enumerate().skip(wf_idx + 1) {
-        if !l.starts_with("  ") && !l.is_empty() {
-            break; // left the workflow block
-        }
-        if l.starts_with("      - toolkit/release_crate:") {
-            rc_idx = Some(i);
-            break;
-        }
-    }
-    let Some(rc_idx) = rc_idx else {
-        return false;
-    };
-
-    // Scan the job properties until the next sibling entry or end of workflow
-    let scan_start = rc_idx + 1;
-    for (offset, l) in lines[scan_start..].iter().enumerate() {
-        if l.starts_with("      - ") {
-            break; // next workflow job — left this block
-        }
-        if !l.is_empty() && !l.starts_with("  ") {
-            break; // left the workflow section entirely
-        }
-        if l.contains("requires:") {
-            // Already correct if every publish job appears in the requires line
-            if publish_jobs.iter().all(|j| l.contains(j.as_str())) {
-                return false;
-            }
-            let joined = publish_jobs.join(", ");
-            lines[scan_start + offset] = format!("          requires: [{joined}]");
-            return true;
-        }
-    }
-    false
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -658,7 +577,7 @@ mod tests {
             requires_job: Some("common-tests".to_string()),
             // The approval gate job that binary build and orb pack run after.
             // Docker/orb publish run before crates.io to establish the correct release order.
-            release_after_job: Some("approve-release".to_string()),
+            release_after_job: "approve-release".to_string(),
             orb_tools_version: "12.3.3".to_string(),
             docker_orb_version: "3.0.1".to_string(),
             docker_context: "docker".to_string(),
@@ -1572,53 +1491,32 @@ workflows:
     }
 
     // ── release_crate rewiring ─────────────────────────────────────────────────
-    // toolkit/release_crate must require publish-orb-<namespace> so crates.io is
-    // published after the orb (same ordering established in gen-circleci-orb itself).
 
     #[test]
-    fn patch_release_rewires_release_crate_requires_to_orb_publish() {
-        let (output, _) = patch_release(RELEASE_FIXTURE_WITH_RELEASE_CRATE, &make_opts());
+    fn patch_release_does_not_rewire_toolkit_release_crate_requires() {
+        // The pipeline topology — which jobs gate the crate release — is the caller's
+        // responsibility, expressed via --release-after-job. The patcher must NOT
+        // automatically rewire toolkit/release_crate to require publish-orb-<ns> because
+        // that creates a cycle when the caller's topology already sequences the crate
+        // release BEFORE the container build and orb publish.
+        let (output, report) = patch_release(RELEASE_FIXTURE_WITH_RELEASE_CRATE, &make_opts());
         let wf_section = output.split("workflows:").nth(1).unwrap_or("");
         let after_rc = wf_section
             .split("- toolkit/release_crate:")
             .nth(1)
             .expect("no toolkit/release_crate step");
-        // Get the block for this job only (up to next same-level entry)
         let block = after_rc.split("\n      - ").next().unwrap_or(after_rc);
         assert!(
-            block.contains("publish-orb-my-org"),
-            "toolkit/release_crate requires must be updated to publish-orb-my-org:\n{block}"
+            block.contains("approve-release"),
+            "toolkit/release_crate requires must remain [approve-release] — patcher must not rewire it:\n{block}"
         );
         assert!(
-            !block.contains("approve-release"),
-            "toolkit/release_crate must no longer require approve-release:\n{block}"
+            !block.contains("publish-orb"),
+            "patcher must not inject publish-orb into release_crate requires:\n{block}"
         );
-    }
-
-    #[test]
-    fn patch_release_rewire_is_idempotent() {
-        let (first, _) = patch_release(RELEASE_FIXTURE_WITH_RELEASE_CRATE, &make_opts());
-        let (second, report) = patch_release(&first, &make_opts());
-        assert_eq!(first, second, "second run must not change output");
         assert!(
-            report
-                .skipped
-                .iter()
-                .any(|s| s.contains("release_crate rewire")),
-            "idempotent rewire must appear in skipped report:\n{:?}",
-            report.skipped
-        );
-    }
-
-    #[test]
-    fn patch_release_rewire_reports_insertion() {
-        let (_, report) = patch_release(RELEASE_FIXTURE_WITH_RELEASE_CRATE, &make_opts());
-        assert!(
-            report
-                .insertions
-                .iter()
-                .any(|s| s.contains("release_crate rewire")),
-            "rewire must appear in insertions report:\n{:?}",
+            !report.insertions.iter().any(|s| s.contains("rewire")),
+            "no rewire insertion should be reported:\n{:?}",
             report.insertions
         );
     }
@@ -1684,25 +1582,6 @@ workflows:
         assert!(
             other_org_block.contains("ensure-orb-registered-other-org"),
             "publish-orb-other-org must require ensure-orb-registered-other-org:\n{other_org_block}"
-        );
-    }
-
-    #[test]
-    fn rewire_requires_all_publish_jobs_for_multiple_namespaces() {
-        let (output, _) = patch_release(RELEASE_FIXTURE_WITH_RELEASE_CRATE, &make_opts_two_ns());
-        let wf_section = output.split("workflows:").nth(1).unwrap_or("");
-        let after_rc = wf_section
-            .split("- toolkit/release_crate:")
-            .nth(1)
-            .expect("no toolkit/release_crate step");
-        let block = after_rc.split("\n      - ").next().unwrap_or(after_rc);
-        assert!(
-            block.contains("publish-orb-my-org"),
-            "requires must include publish-orb-my-org:\n{block}"
-        );
-        assert!(
-            block.contains("publish-orb-other-org"),
-            "requires must include publish-orb-other-org:\n{block}"
         );
     }
 
@@ -1787,6 +1666,27 @@ workflows:
         assert!(
             other_org_block.contains("circleci orb create other-org/mytool --private --no-prompt"),
             "other-org is private — create must have --private:\n{other_org_block}"
+        );
+    }
+
+    #[test]
+    fn release_workflow_steps_always_requires_release_after_job() {
+        // release_after_job is a required String field — no default, cannot be omitted.
+        // Every generated workflow step must have a requires: clause referencing it.
+        let opts = make_opts(); // release_after_job = "approve-release"
+        let (output, _) = patch_release(RELEASE_FIXTURE, &opts);
+        let wf = output.split("workflows:").nth(1).unwrap_or("");
+        let after_build = wf
+            .split("- build-binary-release:")
+            .nth(1)
+            .expect("no build-binary-release step");
+        let block = after_build
+            .split("\n      - ")
+            .next()
+            .unwrap_or(after_build);
+        assert!(
+            block.contains("requires: [approve-release]"),
+            "build-binary-release must have requires: [approve-release]:\n{block}"
         );
     }
 }
