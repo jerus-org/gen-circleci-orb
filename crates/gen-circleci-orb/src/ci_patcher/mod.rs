@@ -450,21 +450,31 @@ fn ensure_orb_registered_job_for(ns: &str, binary: &str, private: bool) -> Vec<S
         "      - run:".to_string(),
         "          name: Ensure orb is registered".to_string(),
         "          command: |".to_string(),
-        // circleci setup exits 255 in newer CLI versions (orb-tools executor) even when
-        // setup succeeds ("Setup complete." is printed). With -eo pipefail a bare call would
-        // kill the script. Capture exit code and treat non-zero as a genuine failure only if
-        // the output does NOT contain "Setup complete" — this surfaces real errors (bad token,
-        // network) while tolerating the known 255 quirk.
-        "            setup_exit=0".to_string(),
-        "            setup_output=$(circleci setup --token \"${CIRCLE_TOKEN}\" --host https://circleci.com --no-prompt 2>&1) || setup_exit=$?".to_string(),
-        "            echo \"${setup_output}\"".to_string(),
-        "            if [ \"${setup_exit}\" -ne 0 ] && ! echo \"${setup_output}\" | grep -q \"Setup complete\"; then".to_string(),
+        // circleci setup exits 255 in newer CLI versions (orb-tools executor) even on success.
+        // It writes progress to /dev/tty — $(... 2>&1) capture returns empty string, so
+        // output-grep patterns don't work. Validated fix: set +e, run bare, capture $?,
+        // set -e, then accept both 0 and 255; fail only on any other non-zero exit.
+        "            set +e".to_string(),
+        "            circleci setup --token \"${CIRCLE_TOKEN}\" --host https://circleci.com --no-prompt".to_string(),
+        "            setup_exit=$?".to_string(),
+        "            set -e".to_string(),
+        "            if [ \"${setup_exit}\" -ne 0 ] && [ \"${setup_exit}\" -ne 255 ]; then".to_string(),
         "              echo \"circleci setup failed with exit ${setup_exit}\" >&2".to_string(),
         "              exit \"${setup_exit}\"".to_string(),
         "            fi".to_string(),
-        format!("            if ! circleci orb info {ns}/{binary} > /dev/null 2>&1; then"),
+        // circleci orb info also exits 255 for registered orbs in newer CLI versions.
+        // Validated in gen-orb-mcp release pipeline: exit 255 = orb exists.
+        // Only enter the create block when exit is non-zero AND not 255.
+        "            set +e".to_string(),
+        format!("            circleci orb info {ns}/{binary}"),
+        "            orb_info_exit=$?".to_string(),
+        "            set -e".to_string(),
+        "            echo \"orb info exit: ${orb_info_exit}\"".to_string(),
+        "            if [ \"${orb_info_exit}\" -ne 0 ] && [ \"${orb_info_exit}\" -ne 255 ]; then".to_string(),
+        "              set +e".to_string(),
         format!("              create_output=$(circleci orb create {ns}/{binary} {create_flags} 2>&1)"),
         "              create_exit=$?".to_string(),
+        "              set -e".to_string(),
         "              echo \"${create_output}\"".to_string(),
         "              if [ \"${create_exit}\" -ne 0 ] && ! echo \"${create_output}\" | grep -q \"already exists\"; then".to_string(),
         "                exit \"${create_exit}\"".to_string(),
@@ -1388,25 +1398,52 @@ workflows:
     }
 
     #[test]
-    fn circleci_setup_captures_exit_and_checks_output_for_genuine_failure() {
+    fn circleci_setup_uses_set_plus_e_and_accepts_255() {
         // `circleci setup --no-prompt` in newer CLI versions (orb-tools executor) exits 255
-        // even when setup completed successfully ("Setup complete." is printed).
-        // The script must NOT rely on the exit code alone: with `#!/bin/bash -eo pipefail`,
-        // a bare `circleci setup` line kills the script on exit 255 before any orb commands run.
+        // even on success. It writes progress to /dev/tty (not capturable via $(... 2>&1)).
         //
-        // Correct pattern: capture exit code via `|| setup_exit=$?`, emit the output, then
-        // check that "Setup complete" appears in the output. Only fail if exit is non-zero
-        // AND the setup did not complete — this surfaces genuine failures (bad token, network)
-        // while tolerating the known 255 quirk.
+        // Correct pattern: `set +e` before the call, capture exit via `$?`, `set -e` after,
+        // then accept both 0 and 255. Only fail for any other non-zero exit.
         let (output, _) = patch_release(RELEASE_FIXTURE, &make_opts());
         let block = job_block(&output, "ensure-orb-registered-my-org");
         assert!(
-            block.contains("setup_exit"),
-            "setup must capture exit code into setup_exit to prevent -eo pipefail from aborting on exit 255:\n{block}"
+            block.contains("set +e") && block.contains("set -e"),
+            "setup must use set +e / set -e to prevent -eo pipefail from aborting on exit 255:\n{block}"
         );
         assert!(
-            block.contains("Setup complete"),
-            "setup must check output for 'Setup complete' to distinguish the known 255 quirk from genuine failures:\n{block}"
+            block.contains("setup_exit"),
+            "setup must capture exit code into setup_exit:\n{block}"
+        );
+        assert!(
+            block.contains("-ne 255"),
+            "setup must explicitly accept exit 255 as non-failure:\n{block}"
+        );
+        assert!(
+            !block.contains("Setup complete"),
+            "setup must NOT grep output for 'Setup complete' — circleci CLI writes to /dev/tty, not capturable:\n{block}"
+        );
+    }
+
+    #[test]
+    fn circleci_orb_info_accepts_exit_255_as_registered() {
+        // `circleci orb info` exits 255 for registered orbs in newer CLI versions.
+        // Validated in gen-orb-mcp release pipeline: exit 255 = orb is registered.
+        //
+        // Correct pattern: `set +e`, capture exit via orb_info_exit, `set -e`,
+        // then only enter the create block when exit is non-zero AND not 255.
+        let (output, _) = patch_release(RELEASE_FIXTURE, &make_opts());
+        let block = job_block(&output, "ensure-orb-registered-my-org");
+        assert!(
+            block.contains("orb_info_exit"),
+            "orb info exit must be captured into orb_info_exit:\n{block}"
+        );
+        assert!(
+            block.contains("-ne 255"),
+            "orb info check must accept exit 255 as 'registered' — not trigger create:\n{block}"
+        );
+        assert!(
+            !block.contains("if ! circleci orb info"),
+            "must not use `if ! circleci orb info` — exit 255 is treated as failure by that pattern:\n{block}"
         );
     }
 

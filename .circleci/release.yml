@@ -55,16 +55,24 @@ jobs:
       - run:
           name: Ensure orb is registered
           command: |
-            setup_exit=0
-            setup_output=$(circleci setup --token "${CIRCLE_TOKEN}" --host https://circleci.com --no-prompt 2>&1) || setup_exit=$?
-            echo "${setup_output}"
-            if [ "${setup_exit}" -ne 0 ] && ! echo "${setup_output}" | grep -q "Setup complete"; then
+            set +e
+            circleci setup --token "${CIRCLE_TOKEN}" --host https://circleci.com --no-prompt
+            setup_exit=$?
+            set -e
+            if [ "${setup_exit}" -ne 0 ] && [ "${setup_exit}" -ne 255 ]; then
               echo "circleci setup failed with exit ${setup_exit}" >&2
               exit "${setup_exit}"
             fi
-            if ! circleci orb info jerus-org/gen-circleci-orb > /dev/null 2>&1; then
+            set +e
+            circleci orb info jerus-org/gen-circleci-orb
+            orb_info_exit=$?
+            set -e
+            echo "orb info exit: ${orb_info_exit}"
+            if [ "${orb_info_exit}" -ne 0 ] && [ "${orb_info_exit}" -ne 255 ]; then
+              set +e
               create_output=$(circleci orb create jerus-org/gen-circleci-orb --no-prompt 2>&1)
               create_exit=$?
+              set -e
               echo "${create_output}"
               if [ "${create_exit}" -ne 0 ] && ! echo "${create_output}" | grep -q "already exists"; then
                 exit "${create_exit}"
