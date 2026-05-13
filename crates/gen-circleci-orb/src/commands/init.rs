@@ -3,6 +3,8 @@ use std::path::PathBuf;
 
 use crate::{ci_patcher, commands::generate::Generate};
 
+pub const DEFAULT_DOCKER_ORB_VERSION: &str = "3.0.1";
+
 /// Wire orb generation into an existing repo's CI configuration.
 #[derive(Debug, clap::Args)]
 pub struct Init {
@@ -53,7 +55,7 @@ pub struct Init {
     pub orb_tools_version: String,
 
     /// circleci/docker orb version to pin in generated CI.
-    #[arg(long, default_value = "3.2.0")]
+    #[arg(long, default_value = DEFAULT_DOCKER_ORB_VERSION)]
     pub docker_orb_version: String,
 
     /// Docker Hub (or registry) namespace for the built container image.
@@ -131,5 +133,20 @@ impl Init {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DEFAULT_DOCKER_ORB_VERSION;
+
+    #[test]
+    fn default_docker_orb_version_matches_registry() {
+        // The CircleCI registry has circleci/docker@3.0.1 as latest.
+        // 3.2.0 does not exist and causes "Cannot find circleci/docker@3.2.0" errors.
+        assert_eq!(
+            DEFAULT_DOCKER_ORB_VERSION, "3.0.1",
+            "DEFAULT_DOCKER_ORB_VERSION must be the registry-available version"
+        );
     }
 }
