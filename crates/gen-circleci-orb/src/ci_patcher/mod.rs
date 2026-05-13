@@ -450,7 +450,18 @@ fn ensure_orb_registered_job_for(ns: &str, binary: &str, private: bool) -> Vec<S
         "      - run:".to_string(),
         "          name: Ensure orb is registered".to_string(),
         "          command: |".to_string(),
-        "            circleci setup --token \"${CIRCLE_TOKEN}\" --host https://circleci.com --no-prompt".to_string(),
+        // circleci setup exits 255 in newer CLI versions (orb-tools executor) even when
+        // setup succeeds ("Setup complete." is printed). With -eo pipefail a bare call would
+        // kill the script. Capture exit code and treat non-zero as a genuine failure only if
+        // the output does NOT contain "Setup complete" — this surfaces real errors (bad token,
+        // network) while tolerating the known 255 quirk.
+        "            setup_exit=0".to_string(),
+        "            setup_output=$(circleci setup --token \"${CIRCLE_TOKEN}\" --host https://circleci.com --no-prompt 2>&1) || setup_exit=$?".to_string(),
+        "            echo \"${setup_output}\"".to_string(),
+        "            if [ \"${setup_exit}\" -ne 0 ] && ! echo \"${setup_output}\" | grep -q \"Setup complete\"; then".to_string(),
+        "              echo \"circleci setup failed with exit ${setup_exit}\" >&2".to_string(),
+        "              exit \"${setup_exit}\"".to_string(),
+        "            fi".to_string(),
         format!("            if ! circleci orb info {ns}/{binary} > /dev/null 2>&1; then"),
         format!("              create_output=$(circleci orb create {ns}/{binary} {create_flags} 2>&1)"),
         "              create_exit=$?".to_string(),
@@ -1373,6 +1384,29 @@ workflows:
         assert!(
             block.contains("circleci setup") && block.contains("CIRCLE_TOKEN"),
             "ensure-orb-registered-my-org must run circleci setup --token ${{CIRCLE_TOKEN}}:\n{block}"
+        );
+    }
+
+    #[test]
+    fn circleci_setup_captures_exit_and_checks_output_for_genuine_failure() {
+        // `circleci setup --no-prompt` in newer CLI versions (orb-tools executor) exits 255
+        // even when setup completed successfully ("Setup complete." is printed).
+        // The script must NOT rely on the exit code alone: with `#!/bin/bash -eo pipefail`,
+        // a bare `circleci setup` line kills the script on exit 255 before any orb commands run.
+        //
+        // Correct pattern: capture exit code via `|| setup_exit=$?`, emit the output, then
+        // check that "Setup complete" appears in the output. Only fail if exit is non-zero
+        // AND the setup did not complete — this surfaces genuine failures (bad token, network)
+        // while tolerating the known 255 quirk.
+        let (output, _) = patch_release(RELEASE_FIXTURE, &make_opts());
+        let block = job_block(&output, "ensure-orb-registered-my-org");
+        assert!(
+            block.contains("setup_exit"),
+            "setup must capture exit code into setup_exit to prevent -eo pipefail from aborting on exit 255:\n{block}"
+        );
+        assert!(
+            block.contains("Setup complete"),
+            "setup must check output for 'Setup complete' to distinguish the known 255 quirk from genuine failures:\n{block}"
         );
     }
 
