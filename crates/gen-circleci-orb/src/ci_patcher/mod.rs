@@ -11,7 +11,7 @@ pub struct PatchOpts {
     pub build_workflow: String,
     pub release_workflow: String,
     pub requires_job: Option<String>,
-    pub release_after_job: Option<String>,
+    pub release_after_job: String,
     pub orb_tools_version: String,
     pub docker_orb_version: String,
     pub docker_context: String,
@@ -504,11 +504,7 @@ fn release_workflow_steps(opts: &PatchOpts) -> Vec<String> {
     // release_after_job is the approval gate; build-binary-release, pack-orb-release, and
     // all ensure-orb-registered-<ns> jobs require it so they run in parallel immediately
     // after the gate clears.
-    let requires = opts
-        .release_after_job
-        .as_deref()
-        .map(|r| format!("[{r}]"))
-        .unwrap_or_default();
+    let requires = format!("[{}]", opts.release_after_job);
     // Variable name: CRATE_VERSION_ + binary uppercased with hyphens replaced by underscores.
     // This matches the format written by toolkit/calculate_versions into versions.env.
     let version_var = format!("CRATE_VERSION_{}", binary.to_uppercase().replace('-', "_"));
@@ -516,17 +512,13 @@ fn release_workflow_steps(opts: &PatchOpts) -> Vec<String> {
 
     // build-binary-release: compile the release binary, persist to workspace
     steps.push("      - build-binary-release:".to_string());
-    if !requires.is_empty() {
-        steps.push(format!("          requires: {requires}"));
-    }
+    steps.push(format!("          requires: {requires}"));
 
     // Pack orb source (parallel with build-binary-release; both require the approval gate)
     steps.push("      - orb-tools/pack:".to_string());
     steps.push("          name: pack-orb-release".to_string());
     steps.push(format!("          source_dir: {orb_dir}/src"));
-    if !requires.is_empty() {
-        steps.push(format!("          requires: {requires}"));
-    }
+    steps.push(format!("          requires: {requires}"));
 
     // build-container: requires binary from workspace → sequential after build-binary-release
     steps.push("      - build-container:".to_string());
@@ -540,9 +532,7 @@ fn release_workflow_steps(opts: &PatchOpts) -> Vec<String> {
     for ns in &opts.namespaces {
         // ensure-orb-registered-<ns>: dedicated job (not a pre-step — see job definition comment)
         steps.push(format!("      - ensure-orb-registered-{ns}:"));
-        if !requires.is_empty() {
-            steps.push(format!("          requires: {requires}"));
-        }
+        steps.push(format!("          requires: {requires}"));
         steps.push(format!("          context: [{orb_ctx}]"));
 
         // orb-tools/publish: inject CIRCLE_TAG via pre-steps (pipeline is approval-triggered,
@@ -587,7 +577,7 @@ mod tests {
             requires_job: Some("common-tests".to_string()),
             // The approval gate job that binary build and orb pack run after.
             // Docker/orb publish run before crates.io to establish the correct release order.
-            release_after_job: Some("approve-release".to_string()),
+            release_after_job: "approve-release".to_string(),
             orb_tools_version: "12.3.3".to_string(),
             docker_orb_version: "3.0.1".to_string(),
             docker_context: "docker".to_string(),
@@ -1676,6 +1666,27 @@ workflows:
         assert!(
             other_org_block.contains("circleci orb create other-org/mytool --private --no-prompt"),
             "other-org is private — create must have --private:\n{other_org_block}"
+        );
+    }
+
+    #[test]
+    fn release_workflow_steps_always_requires_release_after_job() {
+        // release_after_job is a required String field — no default, cannot be omitted.
+        // Every generated workflow step must have a requires: clause referencing it.
+        let opts = make_opts(); // release_after_job = "approve-release"
+        let (output, _) = patch_release(RELEASE_FIXTURE, &opts);
+        let wf = output.split("workflows:").nth(1).unwrap_or("");
+        let after_build = wf
+            .split("- build-binary-release:")
+            .nth(1)
+            .expect("no build-binary-release step");
+        let block = after_build
+            .split("\n      - ")
+            .next()
+            .unwrap_or(after_build);
+        assert!(
+            block.contains("requires: [approve-release]"),
+            "build-binary-release must have requires: [approve-release]:\n{block}"
         );
     }
 }

@@ -33,9 +33,12 @@ pub struct Init {
     #[arg(long)]
     pub requires_job: Option<String>,
 
-    /// Job in the release workflow after which build-container should run.
+    /// Job in the release workflow after which the generated release jobs
+    /// (build-binary-release, pack-orb-release, build-container, ensure-orb-registered)
+    /// should be gated. This is the sole mechanism for specifying where the generated
+    /// jobs plug into the existing pipeline topology.
     #[arg(long)]
-    pub release_after_job: Option<String>,
+    pub release_after_job: String,
 
     /// Output directory for the generated orb source (relative to repo root).
     #[arg(long, default_value = "orb")]
