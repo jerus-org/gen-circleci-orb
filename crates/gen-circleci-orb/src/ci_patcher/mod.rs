@@ -440,6 +440,14 @@ fn orb_release_ensure_registered_job_for(ns: &str, binary: &str, private: bool) 
     ]
 }
 
+fn push_tag_filters(lines: &mut Vec<String>, only_tag: &str, ignore_branches: &str) {
+    lines.push("          filters:".to_string());
+    lines.push("            tags:".to_string());
+    lines.push(only_tag.to_string());
+    lines.push("            branches:".to_string());
+    lines.push(ignore_branches.to_string());
+}
+
 /// Generate the complete `orb-release:` workflow section for config.yml.
 /// This is a tag-triggered workflow (filters on `crate_tag_prefix*`; ignores all branches).
 fn orb_release_workflow_section(opts: &PatchOpts) -> Vec<String> {
@@ -452,19 +460,13 @@ fn orb_release_workflow_section(opts: &PatchOpts) -> Vec<String> {
     let only_tag = format!("              only: /^{prefix}.*/");
     let ignore_branches = "              ignore: /.*/".to_string();
 
-    let mut lines: Vec<String> = vec![];
-    lines.push(String::new()); // blank line before new workflow
-
-    lines.push("  orb-release:".to_string());
-    lines.push("    jobs:".to_string());
-
-    // orb-release-binary
-    lines.push("      - orb-release-binary:".to_string());
-    lines.push("          filters:".to_string());
-    lines.push("            tags:".to_string());
-    lines.push(only_tag.clone());
-    lines.push("            branches:".to_string());
-    lines.push(ignore_branches.clone());
+    let mut lines = vec![
+        String::new(), // blank line before new workflow
+        "  orb-release:".to_string(),
+        "    jobs:".to_string(),
+        "      - orb-release-binary:".to_string(),
+    ];
+    push_tag_filters(&mut lines, &only_tag, &ignore_branches);
     lines.push(String::new());
 
     // orb-tools/pack (checkout: false + pre-steps for version injection)
@@ -487,33 +489,21 @@ fn orb_release_workflow_section(opts: &PatchOpts) -> Vec<String> {
     lines.push(format!(
         "                  cat {orb_dir}/src/executors/default.yml"
     ));
-    lines.push("          filters:".to_string());
-    lines.push("            tags:".to_string());
-    lines.push(only_tag.clone());
-    lines.push("            branches:".to_string());
-    lines.push(ignore_branches.clone());
+    push_tag_filters(&mut lines, &only_tag, &ignore_branches);
     lines.push(String::new());
 
     // orb-release-container
     lines.push("      - orb-release-container:".to_string());
     lines.push("          requires: [orb-release-binary]".to_string());
     lines.push(format!("          context: [{docker_ctx}]"));
-    lines.push("          filters:".to_string());
-    lines.push("            tags:".to_string());
-    lines.push(only_tag.clone());
-    lines.push("            branches:".to_string());
-    lines.push(ignore_branches.clone());
+    push_tag_filters(&mut lines, &only_tag, &ignore_branches);
     lines.push(String::new());
 
     // Per-namespace: ensure + publish
     for ns in &opts.namespaces {
         lines.push(format!("      - orb-release-ensure-registered-{ns}:"));
         lines.push(format!("          context: [{orb_ctx}]"));
-        lines.push("          filters:".to_string());
-        lines.push("            tags:".to_string());
-        lines.push(only_tag.clone());
-        lines.push("            branches:".to_string());
-        lines.push(ignore_branches.clone());
+        push_tag_filters(&mut lines, &only_tag, &ignore_branches);
         lines.push(String::new());
 
         lines.push("      - orb-tools/publish:".to_string());
@@ -534,11 +524,7 @@ fn orb_release_workflow_section(opts: &PatchOpts) -> Vec<String> {
         lines.push("          enable_pr_comment: false".to_string());
         lines.push(format!("          requires: [orb-release-container, orb-release-pack, orb-release-ensure-registered-{ns}]"));
         lines.push(format!("          context: [{orb_ctx}]"));
-        lines.push("          filters:".to_string());
-        lines.push("            tags:".to_string());
-        lines.push(only_tag.clone());
-        lines.push("            branches:".to_string());
-        lines.push(ignore_branches.clone());
+        push_tag_filters(&mut lines, &only_tag, &ignore_branches);
         if ns != opts.namespaces.last().unwrap() {
             lines.push(String::new());
         }
