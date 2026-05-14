@@ -42,131 +42,161 @@ pub fn patch_build(content: &str, opts: &PatchOpts) -> (String, PatchReport) {
     };
     let mut lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
 
-    // 1. Add orb-tools to orbs section
-    let orb_entry = format!("  orb-tools: circleci/orb-tools@{}", opts.orb_tools_version);
-    if content.contains("orb-tools:") {
-        report.skipped.push("orb-tools orb".to_string());
-    } else if let Some(pos) = find_section_end(&lines, "orbs:") {
-        lines.insert(pos, orb_entry);
-        report.insertions.push("orb-tools orb".to_string());
-    }
-
-    // 2. Add jobs section if missing, then add build-binary + regenerate-orb jobs
-    let jobs_present = content.contains("build-binary:") && content.contains("regenerate-orb:");
-    if jobs_present {
-        report
-            .skipped
-            .push("build-binary and regenerate-orb jobs".to_string());
-    } else {
-        let build_block = build_binary_job(opts);
-        let regen_block = regenerate_orb_job(opts);
-        if let Some(pos) = find_section_end(&lines, "jobs:") {
-            for (i, l) in build_block.iter().enumerate() {
-                lines.insert(pos + i, l.clone());
-            }
-            let after_build = pos + build_block.len();
-            for (i, l) in regen_block.iter().enumerate() {
-                lines.insert(after_build + i, l.clone());
-            }
-        } else {
-            // No jobs section — insert before workflows:
-            if let Some(wf_pos) = find_top_level(&lines, "workflows:") {
-                lines.insert(wf_pos, String::new());
-                lines.insert(wf_pos, String::new());
-                // Insert regen block first (it goes last in jobs), then build block before it
-                let regen_len = regen_block.len();
-                for (i, _) in regen_block.iter().rev().enumerate() {
-                    lines.insert(wf_pos, regen_block[regen_len - 1 - i].clone());
-                }
-                let build_len = build_block.len();
-                for (i, _) in build_block.iter().rev().enumerate() {
-                    lines.insert(wf_pos, build_block[build_len - 1 - i].clone());
-                }
-                lines.insert(wf_pos, "jobs:".to_string());
-            }
-        }
-        report
-            .insertions
-            .push("build-binary and regenerate-orb jobs".to_string());
-    }
-
-    // 3. Add workflow steps (regenerate-orb, orb-tools/pack, orb-tools/validate)
-    if content.contains("orb-tools/pack:") {
-        report.skipped.push("workflow steps".to_string());
-    } else {
-        let step_block = pack_validate_steps(opts);
-        if let Some(pos) = find_workflow_jobs_end(&lines, &opts.build_workflow) {
-            for (i, l) in step_block.iter().enumerate() {
-                lines.insert(pos + i, l.clone());
-            }
-        }
-        report.insertions.push("workflow steps".to_string());
-    }
-
-    // 4. Add orb-release-binary, orb-release-container, orb-release-ensure-registered-<ns> jobs
-    let has_orb_release_binary = content.contains("orb-release-binary:");
-    let missing_ensure_release_ns: Vec<&String> = opts
-        .namespaces
-        .iter()
-        .filter(|ns| !content.contains(&format!("  orb-release-ensure-registered-{ns}:")))
-        .collect();
-    let has_orb_release_container = content.contains("orb-release-container:");
-    if has_orb_release_binary && missing_ensure_release_ns.is_empty() && has_orb_release_container {
-        report.skipped.push("orb-release jobs".to_string());
-    } else {
-        // By this point a jobs: section always exists (created in step 2 if needed).
-        if let Some(pos) = find_section_end(&lines, "jobs:") {
-            let mut insert_pos = pos;
-            if !has_orb_release_binary {
-                let block = orb_release_binary_job(opts);
-                let len = block.len();
-                for (i, l) in block.into_iter().enumerate() {
-                    lines.insert(insert_pos + i, l);
-                }
-                insert_pos += len;
-            }
-            if !has_orb_release_container {
-                let block = orb_release_container_job(opts);
-                let len = block.len();
-                for (i, l) in block.into_iter().enumerate() {
-                    lines.insert(insert_pos + i, l);
-                }
-                insert_pos += len;
-            }
-            for ns in &missing_ensure_release_ns {
-                let block = orb_release_ensure_registered_job_for(
-                    ns,
-                    &opts.binary,
-                    opts.private_namespaces.contains(ns),
-                );
-                let len = block.len();
-                for (i, l) in block.into_iter().enumerate() {
-                    lines.insert(insert_pos + i, l);
-                }
-                insert_pos += len;
-            }
-        }
-        report.insertions.push("orb-release jobs".to_string());
-    }
-
-    // 5. Add orb-release: workflow section (tag-triggered)
-    if content.contains("  orb-release:") {
-        report.skipped.push("orb-release workflow".to_string());
-    } else {
-        let wf_block = orb_release_workflow_section(opts);
-        if let Some(pos) = find_section_end(&lines, "workflows:") {
-            for (i, l) in wf_block.iter().enumerate() {
-                lines.insert(pos + i, l.clone());
-            }
-        }
-        report.insertions.push("orb-release workflow".to_string());
-    }
+    patch_step1_orb_tools(content, &mut lines, opts, &mut report);
+    patch_step2_build_regen_jobs(content, &mut lines, opts, &mut report);
+    patch_step3_pack_validate(content, &mut lines, opts, &mut report);
+    patch_step4_orb_release_jobs(content, &mut lines, opts, &mut report);
+    patch_step5_orb_release_workflow(content, &mut lines, opts, &mut report);
 
     let mut output = lines.join("\n");
     if content.ends_with('\n') {
         output.push('\n');
     }
     (output, report)
+}
+
+fn insert_block_at(lines: &mut Vec<String>, pos: usize, block: &[String]) {
+    for (i, l) in block.iter().enumerate() {
+        lines.insert(pos + i, l.clone());
+    }
+}
+
+fn patch_step1_orb_tools(
+    content: &str,
+    lines: &mut Vec<String>,
+    opts: &PatchOpts,
+    report: &mut PatchReport,
+) {
+    let orb_entry = format!("  orb-tools: circleci/orb-tools@{}", opts.orb_tools_version);
+    if content.contains("orb-tools:") {
+        report.skipped.push("orb-tools orb".to_string());
+    } else if let Some(pos) = find_section_end(lines, "orbs:") {
+        lines.insert(pos, orb_entry);
+        report.insertions.push("orb-tools orb".to_string());
+    }
+}
+
+fn patch_step2_build_regen_jobs(
+    content: &str,
+    lines: &mut Vec<String>,
+    opts: &PatchOpts,
+    report: &mut PatchReport,
+) {
+    if content.contains("build-binary:") && content.contains("regenerate-orb:") {
+        report
+            .skipped
+            .push("build-binary and regenerate-orb jobs".to_string());
+        return;
+    }
+    let build_block = build_binary_job(opts);
+    let regen_block = regenerate_orb_job(opts);
+    if let Some(pos) = find_section_end(lines, "jobs:") {
+        insert_block_at(lines, pos, &build_block);
+        insert_block_at(lines, pos + build_block.len(), &regen_block);
+    } else {
+        insert_jobs_before_workflows(lines, &build_block, &regen_block);
+    }
+    report
+        .insertions
+        .push("build-binary and regenerate-orb jobs".to_string());
+}
+
+fn insert_jobs_before_workflows(
+    lines: &mut Vec<String>,
+    build_block: &[String],
+    regen_block: &[String],
+) {
+    let Some(wf_pos) = find_top_level(lines, "workflows:") else {
+        return;
+    };
+    let mut block = vec!["jobs:".to_string()];
+    block.extend_from_slice(build_block);
+    block.extend_from_slice(regen_block);
+    block.push(String::new());
+    block.push(String::new());
+    for (i, l) in block.into_iter().enumerate() {
+        lines.insert(wf_pos + i, l);
+    }
+}
+
+fn patch_step3_pack_validate(
+    content: &str,
+    lines: &mut Vec<String>,
+    opts: &PatchOpts,
+    report: &mut PatchReport,
+) {
+    if content.contains("orb-tools/pack:") {
+        report.skipped.push("workflow steps".to_string());
+        return;
+    }
+    let step_block = pack_validate_steps(opts);
+    if let Some(pos) = find_workflow_jobs_end(lines, &opts.build_workflow) {
+        insert_block_at(lines, pos, &step_block);
+    }
+    report.insertions.push("workflow steps".to_string());
+}
+
+fn patch_step4_orb_release_jobs(
+    content: &str,
+    lines: &mut Vec<String>,
+    opts: &PatchOpts,
+    report: &mut PatchReport,
+) {
+    let has_binary = content.contains("orb-release-binary:");
+    let has_container = content.contains("orb-release-container:");
+    let missing_ns: Vec<&String> = opts
+        .namespaces
+        .iter()
+        .filter(|ns| !content.contains(&format!("  orb-release-ensure-registered-{ns}:")))
+        .collect();
+    if has_binary && has_container && missing_ns.is_empty() {
+        report.skipped.push("orb-release jobs".to_string());
+        return;
+    }
+    let Some(pos) = find_section_end(lines, "jobs:") else {
+        return;
+    };
+    let mut insert_pos = pos;
+    if !has_binary {
+        let block = orb_release_binary_job(opts);
+        let len = block.len();
+        insert_block_at(lines, insert_pos, &block);
+        insert_pos += len;
+    }
+    if !has_container {
+        let block = orb_release_container_job(opts);
+        let len = block.len();
+        insert_block_at(lines, insert_pos, &block);
+        insert_pos += len;
+    }
+    for ns in &missing_ns {
+        let block = orb_release_ensure_registered_job_for(
+            ns,
+            &opts.binary,
+            opts.private_namespaces.contains(ns),
+        );
+        let len = block.len();
+        insert_block_at(lines, insert_pos, &block);
+        insert_pos += len;
+    }
+    report.insertions.push("orb-release jobs".to_string());
+}
+
+fn patch_step5_orb_release_workflow(
+    content: &str,
+    lines: &mut Vec<String>,
+    opts: &PatchOpts,
+    report: &mut PatchReport,
+) {
+    if content.contains("  orb-release:") {
+        report.skipped.push("orb-release workflow".to_string());
+        return;
+    }
+    let wf_block = orb_release_workflow_section(opts);
+    if let Some(pos) = find_section_end(lines, "workflows:") {
+        insert_block_at(lines, pos, &wf_block);
+    }
+    report.insertions.push("orb-release workflow".to_string());
 }
 
 /// Patch a release CircleCI config string.
