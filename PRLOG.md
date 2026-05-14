@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- tag-triggered orb-release workflow in config.yml(pr [#53])
+
 ### Fixed
 
 - use set +e pattern for circleci CLI calls(pr [#52])
@@ -202,6 +206,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#46]: https://github.com/jerus-org/gen-circleci-orb/pull/46
 [#50]: https://github.com/jerus-org/gen-circleci-orb/pull/50
 [#52]: https://github.com/jerus-org/gen-circleci-orb/pull/52
+[#53]: https://github.com/jerus-org/gen-circleci-orb/pull/53
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.22...HEAD
 [0.0.22]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.21...v0.0.22
 [0.0.21]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.19...v0.0.21
