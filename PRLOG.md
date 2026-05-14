@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - tag-triggered orb-release workflow in config.yml(pr [#53])
+- tag-triggered orb release + --mcp flag(pr [#54])
 
 ### Fixed
 
@@ -207,6 +208,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#50]: https://github.com/jerus-org/gen-circleci-orb/pull/50
 [#52]: https://github.com/jerus-org/gen-circleci-orb/pull/52
 [#53]: https://github.com/jerus-org/gen-circleci-orb/pull/53
+[#54]: https://github.com/jerus-org/gen-circleci-orb/pull/54
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.22...HEAD
 [0.0.22]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.21...v0.0.22
 [0.0.21]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.19...v0.0.21
