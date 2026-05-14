@@ -25,7 +25,7 @@ pub enum Commands {
     /// Generate orb source files from a CLI binary's --help output.
     Generate(commands::generate::Generate),
     /// Wire orb generation into an existing repo's CI configuration.
-    Init(commands::init::Init),
+    Init(Box<commands::init::Init>),
 }
 
 impl Cli {

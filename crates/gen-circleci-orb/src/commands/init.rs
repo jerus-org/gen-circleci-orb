@@ -4,6 +4,9 @@ use std::path::PathBuf;
 use crate::{ci_patcher, commands::generate::Generate};
 
 pub const DEFAULT_DOCKER_ORB_VERSION: &str = "3.0.1";
+/// The gen-orb-mcp orb version to pin when `--mcp` is enabled.
+/// Update this when a new gen-orb-mcp orb release is published.
+pub const DEFAULT_GEN_ORB_MCP_ORB_VERSION: &str = "0.1.13";
 
 /// Wire orb generation into an existing repo's CI configuration.
 #[derive(Debug, clap::Args)]
@@ -76,9 +79,18 @@ pub struct Init {
     #[arg(long, default_value = "orb-publishing")]
     pub orb_context: String,
 
-    /// Wire in toolkit/build_mcp_server after orb publish (requires jerus-org/circleci-toolkit).
+    /// Wire in gen-orb-mcp MCP server generation + publish after orb publish.
     #[arg(long)]
     pub mcp: bool,
+
+    /// jerus-org/gen-orb-mcp orb version to pin when --mcp is enabled.
+    #[arg(long, default_value = DEFAULT_GEN_ORB_MCP_ORB_VERSION)]
+    pub gen_orb_mcp_version: String,
+
+    /// CircleCI context providing push authority for MCP server publish and save steps.
+    /// Only used when --mcp is enabled.
+    #[arg(long, default_value = "pcu-app")]
+    pub mcp_context: String,
 
     /// Show planned changes without modifying any files.
     #[arg(long)]
@@ -126,6 +138,8 @@ impl Init {
             orb_context: self.orb_context.clone(),
             private_namespaces: self.private_orb_namespaces.clone(),
             mcp: self.mcp,
+            gen_orb_mcp_version: self.gen_orb_mcp_version.clone(),
+            mcp_context: self.mcp_context.clone(),
         };
 
         let summary = ci_patcher::apply_patches(&self.ci_dir, &opts, self.dry_run)?;
