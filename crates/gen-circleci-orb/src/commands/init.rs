@@ -35,6 +35,12 @@ pub struct Init {
     #[arg(long)]
     pub requires_job: Option<String>,
 
+    /// Tag prefix used by `toolkit/release_crate` for the crate (e.g. `gen-orb-mcp-v`).
+    /// Used to filter the `orb-release:` workflow trigger in config.yml and to normalise
+    /// `CIRCLE_TAG` for `orb-tools/publish`.
+    #[arg(long)]
+    pub crate_tag_prefix: String,
+
     /// Job in the release workflow after which the generated release jobs
     /// (build-binary-release, pack-orb-release, build-container, ensure-orb-registered)
     /// should be gated. This is the sole mechanism for specifying where the generated
@@ -112,6 +118,7 @@ impl Init {
             build_workflow: self.build_workflow.clone(),
             release_workflow: self.release_workflow.clone(),
             requires_job: self.requires_job.clone(),
+            crate_tag_prefix: self.crate_tag_prefix.clone(),
             release_after_job: self.release_after_job.clone(),
             orb_tools_version: self.orb_tools_version.clone(),
             docker_orb_version: self.docker_orb_version.clone(),
