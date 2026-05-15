@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - tag-triggered orb-release workflow in config.yml(pr [#53])
 - tag-triggered orb release + --mcp flag(pr [#54])
+- move orb-release jobs into the orb (closes #51, #48, #49)(pr [#56])
 
 ### Changed
 
@@ -214,6 +215,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#53]: https://github.com/jerus-org/gen-circleci-orb/pull/53
 [#54]: https://github.com/jerus-org/gen-circleci-orb/pull/54
 [#55]: https://github.com/jerus-org/gen-circleci-orb/pull/55
+[#56]: https://github.com/jerus-org/gen-circleci-orb/pull/56
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.22...HEAD
 [0.0.22]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.21...v0.0.22
 [0.0.21]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.19...v0.0.21
