@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - chore-bump DEFAULT_GEN_ORB_MCP_ORB_VERSION to 0.1.14(pr [#55])
 - docs-add version management philosophy(pr [#57])
+- docs-update README and getting-started for current architecture(pr [#58])
 
 ### Fixed
 
@@ -218,6 +219,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#55]: https://github.com/jerus-org/gen-circleci-orb/pull/55
 [#56]: https://github.com/jerus-org/gen-circleci-orb/pull/56
 [#57]: https://github.com/jerus-org/gen-circleci-orb/pull/57
+[#58]: https://github.com/jerus-org/gen-circleci-orb/pull/58
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.22...HEAD
 [0.0.22]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.21...v0.0.22
 [0.0.21]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.19...v0.0.21
