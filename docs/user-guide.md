@@ -523,14 +523,13 @@ orbs:
 
 ### Recommended: Renovate
 
-Renovate with the `github>digital-prstv/renovate-config` preset (or any config that
-includes the CircleCI orb datasource) will automatically track and bump all three entries.
-Once the PR is raised you get a diff showing exactly what changed in each orb before
-merging.
+Renovate's default configuration includes the CircleCI orb datasource and will
+automatically track and bump all three entries. Once the PR is raised you get a diff
+showing exactly what changed in each orb before merging.
 
 ```json
 {
-  "extends": ["config:base", "github>digital-prstv/renovate-config"]
+  "extends": ["config:base"]
 }
 ```
 
