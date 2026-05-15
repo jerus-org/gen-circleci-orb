@@ -464,41 +464,97 @@ silently skipped.
 ### Idempotency
 
 `init` checks for existing entries before inserting. Running it twice produces identical
-output. Specific checks for `release.yml`:
+output. Key idempotency checks for `config.yml`:
 
-- `  docker: circleci/` in `orbs:` → skip docker orb insertion
-- `  orb-tools: circleci/` in `orbs:` → skip orb-tools orb insertion
-- `build-binary-release:` in content → skip job definition
-- `ensure-orb-registered-<ns>:` present for every namespace → skip job definitions
-- `build-container:` in content → skip job definition
-- `pack-orb-release` + `- build-binary-release:` + `- build-container:` + all per-namespace
-  `ensure-orb-registered-<ns>:` and `publish-orb-<ns>` entries present → skip workflow steps
-- `toolkit/release_crate:` `requires:` already lists all `publish-orb-<ns>` jobs → skip rewire
+- `gen-circleci-orb:` in `orbs:` → skip gen-circleci-orb orb entry
+- `orb-tools:` in `orbs:` → skip orb-tools orb entry
+- `build-binary:` and `regenerate-orb:` in content → skip inline job definitions
+- `orb-tools/pack:` in content → skip validation workflow steps
+- `  orb-release:` in content → skip entire tag-triggered release workflow
+
+The idempotency check is presence-based: if the key exists, the entry is left unchanged.
+Version updates are handled separately — see [Keeping CI up to date](#keeping-ci-up-to-date).
 
 ### Design principle
 
-`init` uses only public orbs (`circleci/orb-tools`, `circleci/docker`) for container
-builds and orb publishing. The `regenerate-orb` job uses the `jerusdp/gen-circleci-orb`
-Docker image (pre-installed tool, no runtime installation) and does not require the orb
-being generated to be published yet.
+The release pipeline in `config.yml` uses only public orbs:
 
-**Exception**: step 4 (release ordering rewire) assumes `toolkit/release_crate` is the
-crates.io publish job. This step is skipped silently for projects that do not use
-`toolkit/release_crate`. It is intentional for projects that use the `circleci-toolkit` orb — the toolkit is the
-standard crates.io publish mechanism for repos built around it.
+- `circleci/orb-tools` — pack, review, publish
+- `jerus-org/gen-circleci-orb` — binary build, Docker image build, orb registration
+
+The `regenerate-orb` job uses the `jerusdp/gen-circleci-orb` Docker image with
+`gen-circleci-orb` pre-installed and does not require the orb being generated to be
+published yet — there is no circular dependency at init time.
+
+Container builds and orb registration logic live in the gen-circleci-orb orb itself
+(`build_container`, `ensure_orb_registered` jobs). This means bug fixes and improvements
+to those steps propagate to all consumers via a Renovate bump to the
+`gen-circleci-orb:` pin — no re-running `init` required.
 
 ## Bootstrapping sequence
 
 The first release after running `init` triggers this sequence automatically:
 
-1. CI runs `regenerate-orb` on every push → keeps orb source in sync with the binary
-2. On release approval: `build-binary-release`, `orb-tools/pack`, and all
-   `ensure-orb-registered-<ns>` jobs run in parallel
-3. `build-container` builds and pushes the Docker image (requires compiled binary)
-4. Each `orb-tools/publish: name: publish-orb-<ns>` fans in from `build-container`,
-   `pack-orb-release`, and its namespace's `ensure-orb-registered-<ns>`
-5. `toolkit/release_crate` publishes to crates.io after all `publish-orb-*` jobs finish
+1. A `<crate-tag-prefix>*` git tag triggers the `orb-release:` workflow in `config.yml`
+2. `gen-circleci-orb/build_rust_binary` compiles the binary and persists it to workspace
+3. `orb-tools/pack` checks out the repo, injects the release version into the executor
+   `default.yml`, and packs the orb source
+4. `gen-circleci-orb/build_container` pulls the binary from workspace, builds and pushes
+   the Docker image tagged `:<version>` and `:latest`
+5. `gen-circleci-orb/ensure_orb_registered` creates the orb in each namespace if it does
+   not already exist
+6. `orb-tools/publish` publishes the packed orb to each namespace after container, pack,
+   and registration all succeed
 
-There is no circular dependency: `regenerate-orb` uses the `jerusdp/gen-circleci-orb`
-image with `gen-circleci-orb` pre-installed, and does not depend on the orb being
-published first.
+There is no circular dependency: `regenerate-orb` (in the build workflow) uses the
+`jerusdp/gen-circleci-orb` Docker image and does not depend on the orb being published.
+
+## Keeping CI up to date
+
+`init` writes current orb versions on the first run. After that, **three orb entries in
+`config.yml` can become stale** as new versions are released:
+
+```yaml
+orbs:
+  gen-circleci-orb: jerus-org/gen-circleci-orb@<version>  # set to running binary version
+  orb-tools: circleci/orb-tools@<version>                 # set via --orb-tools-version
+  gen-orb-mcp: jerus-org/gen-orb-mcp@<version>            # if --mcp, set via --gen-orb-mcp-version
+```
+
+### Recommended: Renovate
+
+Renovate's default configuration includes the CircleCI orb datasource and will
+automatically track and bump all three entries. Once the PR is raised you get a diff
+showing exactly what changed in each orb before merging.
+
+```json
+{
+  "extends": ["config:base"]
+}
+```
+
+This is the recommended approach because it handles all orb versions uniformly — not just
+the ones `gen-circleci-orb` introduced — and requires no manual tracking.
+
+### Alternative: MCP-assisted updates
+
+If Renovate is not in use, the gen-circleci-orb MCP server can assist. Once your orb is
+published, install the MCP server (`gen-orb-mcp generate --orb-path orb/src/@orb.yml`)
+and connect it to your AI coding assistant. The MCP server exposes the orb's jobs,
+commands, and conformance rules as resources, enabling the assistant to:
+
+- Identify which orb versions are pinned in your CI config
+- Suggest or apply version bumps with awareness of breaking changes
+- Walk you through any required migration steps if a new orb version introduces renamed
+  or restructured jobs
+
+This path suits teams that prefer AI-assisted, on-demand maintenance over automated
+dependency bots, or that need guidance through a migration alongside the version bump.
+
+**Worth using `--mcp` even without an AI assistant.** When `gen-circleci-orb init` is run
+with `--mcp`, it wires a `toolkit/build_mcp_server` step into the release pipeline. Each
+release of the orb then generates a `migrations/<version>.json` file in the repository,
+recording any renamed or restructured jobs in a structured, human-readable format. This
+file can be consulted directly — without an AI tool — when manually upgrading consumers
+from one orb version to another. Passing `--mcp` now means the migration trail exists if
+it is ever needed, regardless of whether AI tooling is in use at the time.
