@@ -9,8 +9,8 @@ Generate a CircleCI orb to provide the facilities offered by a CLI program.
 ## Overview
 
 **gen-circleci-orb** reads the `--help` output of any CLI binary and generates a complete
-CircleCI orb: one command and one job per subcommand, an executor, a Dockerfile, and optionally
-the CI configuration to keep the orb in sync with the binary automatically.
+CircleCI orb: one command and one job per subcommand, an executor, a Dockerfile, and
+optionally the CI configuration to keep the orb in sync with the binary automatically.
 
 ## Installation
 
@@ -37,40 +37,25 @@ This writes orb source into an `orb/` subdirectory (the default `--orb-dir`):
 - `orb/src/executors/default.yml` — Docker executor with a `tag` parameter
 - `orb/Dockerfile` — image that pre-installs your binary
 
-The orb source is always isolated in its own subdirectory so it cannot be confused
-with existing project source. If the target directory already exists but doesn't
-contain a CircleCI orb, an error is raised.
-
 **Step 2 — wire orb generation into CI:**
 
 ```bash
-# Public orb in a single namespace
 gen-circleci-orb init \
   --binary my-tool \
   --public-orb-namespace my-org \
   --docker-namespace my-docker-org \
   --build-workflow validation \
   --release-workflow release \
-  --requires-job common-tests \
-  --release-after-job release-my-tool
-
-# Mixed: production namespace public, pre-production namespace private
-gen-circleci-orb init \
-  --binary my-tool \
-  --public-orb-namespace my-org \
-  --private-orb-namespace my-org-preprod \
-  --docker-namespace my-docker-org \
-  --build-workflow validation \
-  --release-workflow release \
+  --crate-tag-prefix my-tool-v \
   --requires-job common-tests \
   --release-after-job release-my-tool
 ```
 
-This patches `.circleci/config.yml` and `.circleci/release.yml` to add:
-- A `regenerate-orb` job that re-runs `generate` on every build
-- `orb-tools/pack` + `orb-tools/review` steps to verify the generated orb
-- A `build-container` job in the release workflow to publish the Docker image
-- An `orb-tools/publish` step to publish the orb to the CircleCI registry
+This patches `.circleci/config.yml` to add:
+- A `build-binary` + `regenerate-orb` job pair that rebuilds and re-generates the orb on every build
+- `orb-tools/pack` + `orb-tools/review` steps to validate the generated orb
+- A tag-triggered `orb-release:` workflow that builds the container, registers the orb,
+  and publishes it to the CircleCI registry on each crate release tag
 
 ## `generate` reference
 
@@ -92,30 +77,43 @@ Options:
 ## `init` reference
 
 ```
-gen-circleci-orb init [OPTIONS] --binary <BINARY>
-                                 --public-orb-namespace <NS> | --private-orb-namespace <NS>
-                                 --docker-namespace <NS>
-                                 --build-workflow <WF> --release-workflow <WF>
+gen-circleci-orb init [OPTIONS]
+    --binary <BINARY>
+    --public-orb-namespace <NS> | --private-orb-namespace <NS>
+    --docker-namespace <NS>
+    --build-workflow <WF>
+    --release-workflow <WF>
+    --crate-tag-prefix <PREFIX>
+    --release-after-job <JOB>
 
 Required:
   --binary <BINARY>                   Binary to introspect (must be on PATH)
-  --public-orb-namespace <NS>         CircleCI orb namespace, registered public (repeatable)
-  --private-orb-namespace <NS>        CircleCI orb namespace, registered private (repeatable)
+  --public-orb-namespace <NS>         CircleCI orb namespace, public (repeatable)
+  --private-orb-namespace <NS>        CircleCI orb namespace, private (repeatable)
   --docker-namespace <NS>             Docker Hub (or registry) namespace for the container image
-  --build-workflow <WF>           Validation workflow name to patch
-  --release-workflow <WF>         Release workflow name to patch
+  --build-workflow <WF>               Validation workflow name to patch
+  --release-workflow <WF>             Release workflow name to patch
+  --crate-tag-prefix <PREFIX>         Crate release tag prefix (e.g. my-tool-v); filters the
+                                      orb-release: workflow trigger
+  --release-after-job <JOB>           Job in the release workflow after which orb release jobs run
 
 Options:
-  --requires-job <JOB>            Job regenerate-orb should require
-  --release-after-job <JOB>       Job build-container should require
-  --orb-dir <DIR>                 Orb output directory [default: orb]
-  --ci-dir <DIR>                  CircleCI config directory [default: .circleci]
-  --orb-tools-version <VER>       circleci/orb-tools pin [default: 12.3.3]
-  --docker-orb-version <VER>      circleci/docker pin [default: 3.2.0]
-  --docker-context <CTX>          CircleCI context for Docker Hub credentials [default: docker-credentials]
-  --orb-context <CTX>             CircleCI context for orb publish credentials [default: orb-publishing]
-  --mcp                           Wire in toolkit/build_mcp_server (jerus-org toolkit only)
-  --dry-run                       Print planned changes, write nothing
+  --requires-job <JOB>                Job that regenerate-orb should require
+  --orb-dir <DIR>                     Orb output directory [default: orb]
+  --ci-dir <DIR>                      CircleCI config directory [default: .circleci]
+  --orb-tools-version <VER>           circleci/orb-tools pin [default: 12.3.3]
+  --gen-circleci-orb-version <VER>    jerus-org/gen-circleci-orb orb pin
+                                      [default: running binary version]
+  --docker-context <CTX>              CircleCI context for Docker Hub credentials
+                                      [default: docker-credentials]
+  --orb-context <CTX>                 CircleCI context for orb publish credentials
+                                      [default: orb-publishing]
+  --mcp                               Wire in gen-orb-mcp MCP server generation + publish
+  --gen-orb-mcp-version <VER>         jerus-org/gen-orb-mcp orb pin (used with --mcp)
+                                      [default: 0.1.14]
+  --mcp-context <CTX>                 CircleCI context for MCP server publish (used with --mcp)
+                                      [default: pcu-app]
+  --dry-run                           Print planned changes, write nothing
 ```
 
 ## Generated artifacts
@@ -160,6 +158,14 @@ such as `--crate-version` or `--output-version` instead.
 |------|---------|
 | The target binary | Must be on `PATH` for `--help` introspection |
 | `circleci` CLI | To pack/validate the generated orb (optional, for local testing) |
+
+## Keeping orb versions up to date
+
+`init` writes current orb versions on first run and does not update them on re-runs.
+The recommended approach for ongoing updates is [Renovate](https://docs.renovatebot.com/)
+with the CircleCI orb datasource (`config:base` includes it). See
+[docs/user-guide.md](https://github.com/jerus-org/gen-circleci-orb/blob/main/docs/user-guide.md#keeping-ci-up-to-date)
+for alternatives including MCP-assisted updates.
 
 ## License
 
