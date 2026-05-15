@@ -6,7 +6,7 @@ use crate::{ci_patcher, commands::generate::Generate};
 pub const DEFAULT_DOCKER_ORB_VERSION: &str = "3.0.1";
 /// The gen-orb-mcp orb version to pin when `--mcp` is enabled.
 /// Update this when a new gen-orb-mcp orb release is published.
-pub const DEFAULT_GEN_ORB_MCP_ORB_VERSION: &str = "0.1.13";
+pub const DEFAULT_GEN_ORB_MCP_ORB_VERSION: &str = "0.1.14";
 
 /// Wire orb generation into an existing repo's CI configuration.
 #[derive(Debug, clap::Args)]
