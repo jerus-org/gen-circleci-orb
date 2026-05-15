@@ -3,7 +3,7 @@ use anyhow::Result;
 pub struct PatchOpts {
     pub binary: String,
     /// One or more CircleCI namespaces to publish the orb under.
-    /// Each namespace gets its own `orb-release-ensure-registered-<ns>` job and
+    /// Each namespace gets its own `gen-circleci-orb/ensure_orb_registered` workflow step and
     /// `orb-tools/publish: name: publish-orb-<ns>` workflow step.
     pub namespaces: Vec<String>,
     pub docker_namespace: String,
@@ -21,10 +21,11 @@ pub struct PatchOpts {
     pub docker_context: String,
     pub orb_context: String,
     /// Namespaces that should be registered as private orbs.
-    /// A namespace listed here gets `--private` in its `circleci orb create` command.
-    /// Namespaces not listed are registered as public.
+    /// A namespace listed here gets `private: true` in its `ensure_orb_registered` step.
     /// Visibility is set at orb creation time and cannot be changed afterwards.
     pub private_namespaces: Vec<String>,
+    /// Version of jerus-org/gen-circleci-orb orb to pin in the orbs section.
+    pub gen_circleci_orb_version: String,
     pub mcp: bool,
     /// Version of the jerus-org/gen-orb-mcp orb to pin in the orbs section.
     /// Only used when `mcp` is true.
@@ -48,10 +49,10 @@ pub fn patch_build(content: &str, opts: &PatchOpts) -> (String, PatchReport) {
     };
     let mut lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
 
+    patch_step0_gen_circleci_orb_orb(content, &mut lines, opts, &mut report);
     patch_step1_orb_tools(content, &mut lines, opts, &mut report);
     patch_step2_build_regen_jobs(content, &mut lines, opts, &mut report);
     patch_step3_pack_validate(content, &mut lines, opts, &mut report);
-    patch_step4_orb_release_jobs(content, &mut lines, opts, &mut report);
     patch_step5_orb_release_workflow(content, &mut lines, opts, &mut report);
     patch_step6_mcp_orb(content, &mut lines, opts, &mut report);
     patch_step7_mcp_binary_job(content, &mut lines, opts, &mut report);
@@ -66,6 +67,22 @@ pub fn patch_build(content: &str, opts: &PatchOpts) -> (String, PatchReport) {
 fn insert_block_at(lines: &mut Vec<String>, pos: usize, block: &[String]) {
     for (i, l) in block.iter().enumerate() {
         lines.insert(pos + i, l.clone());
+    }
+}
+
+fn patch_step0_gen_circleci_orb_orb(
+    content: &str,
+    lines: &mut Vec<String>,
+    opts: &PatchOpts,
+    report: &mut PatchReport,
+) {
+    let version = &opts.gen_circleci_orb_version;
+    let orb_entry = format!("  gen-circleci-orb: jerus-org/gen-circleci-orb@{version}");
+    if content.contains("gen-circleci-orb:") {
+        report.skipped.push("gen-circleci-orb orb".to_string());
+    } else if let Some(pos) = find_section_end(lines, "orbs:") {
+        lines.insert(pos, orb_entry);
+        report.insertions.push("gen-circleci-orb orb".to_string());
     }
 }
 
@@ -142,52 +159,6 @@ fn patch_step3_pack_validate(
         insert_block_at(lines, pos, &step_block);
     }
     report.insertions.push("workflow steps".to_string());
-}
-
-fn patch_step4_orb_release_jobs(
-    content: &str,
-    lines: &mut Vec<String>,
-    opts: &PatchOpts,
-    report: &mut PatchReport,
-) {
-    let has_binary = content.contains("orb-release-binary:");
-    let has_container = content.contains("orb-release-container:");
-    let missing_ns: Vec<&String> = opts
-        .namespaces
-        .iter()
-        .filter(|ns| !content.contains(&format!("  orb-release-ensure-registered-{ns}:")))
-        .collect();
-    if has_binary && has_container && missing_ns.is_empty() {
-        report.skipped.push("orb-release jobs".to_string());
-        return;
-    }
-    let Some(pos) = find_section_end(lines, "jobs:") else {
-        return;
-    };
-    let mut insert_pos = pos;
-    if !has_binary {
-        let block = orb_release_binary_job(opts);
-        let len = block.len();
-        insert_block_at(lines, insert_pos, &block);
-        insert_pos += len;
-    }
-    if !has_container {
-        let block = orb_release_container_job(opts);
-        let len = block.len();
-        insert_block_at(lines, insert_pos, &block);
-        insert_pos += len;
-    }
-    for ns in &missing_ns {
-        let block = orb_release_ensure_registered_job_for(
-            ns,
-            &opts.binary,
-            opts.private_namespaces.contains(ns),
-        );
-        let len = block.len();
-        insert_block_at(lines, insert_pos, &block);
-        insert_pos += len;
-    }
-    report.insertions.push("orb-release jobs".to_string());
 }
 
 fn patch_step5_orb_release_workflow(
@@ -449,94 +420,6 @@ fn build_mcp_binary_job(opts: &PatchOpts) -> Vec<String> {
     ]
 }
 
-fn orb_release_binary_job(opts: &PatchOpts) -> Vec<String> {
-    let binary = &opts.binary;
-    vec![
-        "  orb-release-binary:".to_string(),
-        "    docker:".to_string(),
-        "      - image: rust:latest".to_string(),
-        "    steps:".to_string(),
-        "      - checkout".to_string(),
-        "      - run:".to_string(),
-        "          name: Build release binary".to_string(),
-        format!("          command: cargo build --release -p {binary}"),
-        "      - persist_to_workspace:".to_string(),
-        "          root: target/release".to_string(),
-        format!("          paths: [{binary}]"),
-    ]
-}
-
-fn orb_release_container_job(opts: &PatchOpts) -> Vec<String> {
-    let binary = &opts.binary;
-    let docker_ns = &opts.docker_namespace;
-    let orb_dir = &opts.orb_dir;
-    let prefix = &opts.crate_tag_prefix;
-    // Tag-triggered pipeline: CIRCLE_TAG is set by CircleCI when the tag filter matches.
-    // Strip the crate tag prefix to get the bare semver (e.g. "gen-orb-mcp-v0.1.5" → "0.1.5").
-    vec![
-        "  orb-release-container:".to_string(),
-        "    docker:".to_string(),
-        "      - image: cimg/base:stable".to_string(),
-        "    steps:".to_string(),
-        "      - checkout".to_string(),
-        "      - setup_remote_docker".to_string(),
-        "      - attach_workspace:".to_string(),
-        "          at: /tmp/bin".to_string(),
-        "      - run:".to_string(),
-        "          name: Build and push Docker image".to_string(),
-        "          command: |".to_string(),
-        format!("            VERSION=${{CIRCLE_TAG#{prefix}}}"),
-        format!("            cp /tmp/bin/{binary} {orb_dir}/{binary}"),
-        format!("            docker build -t {docker_ns}/{binary}:${{VERSION}} -t {docker_ns}/{binary}:latest {orb_dir}"),
-        "            echo \"${DOCKERHUB_PASSWORD}\" | docker login -u \"${DOCKERHUB_USERNAME}\" --password-stdin".to_string(),
-        format!("            docker push {docker_ns}/{binary}:${{VERSION}}"),
-        format!("            docker push {docker_ns}/{binary}:latest"),
-    ]
-}
-
-/// Build the `orb-release-ensure-registered-<ns>` job definition for config.yml.
-/// Identical logic to `ensure_orb_registered_job_for` but with the `orb-release-` prefix
-/// so it doesn't conflict with any existing jobs in the same file.
-fn orb_release_ensure_registered_job_for(ns: &str, binary: &str, private: bool) -> Vec<String> {
-    let create_flags = if private {
-        "--private --no-prompt"
-    } else {
-        "--no-prompt"
-    };
-    vec![
-        format!("  orb-release-ensure-registered-{ns}:"),
-        "    executor: orb-tools/default".to_string(),
-        "    steps:".to_string(),
-        "      - run:".to_string(),
-        "          name: Ensure orb is registered".to_string(),
-        "          command: |".to_string(),
-        "            set +e".to_string(),
-        "            circleci setup --token \"${CIRCLE_TOKEN}\" --host https://circleci.com --no-prompt".to_string(),
-        "            setup_exit=$?".to_string(),
-        "            set -e".to_string(),
-        "            if [ \"${setup_exit}\" -ne 0 ] && [ \"${setup_exit}\" -ne 255 ]; then".to_string(),
-        "              echo \"circleci setup failed with exit ${setup_exit}\" >&2".to_string(),
-        "              exit \"${setup_exit}\"".to_string(),
-        "            fi".to_string(),
-        "            set +e".to_string(),
-        format!("            circleci orb info {ns}/{binary}"),
-        "            orb_info_exit=$?".to_string(),
-        "            set -e".to_string(),
-        "            echo \"orb info exit: ${orb_info_exit}\"".to_string(),
-        "            if [ \"${orb_info_exit}\" -ne 0 ] && [ \"${orb_info_exit}\" -ne 255 ]; then".to_string(),
-        "              set +e".to_string(),
-        format!("              create_output=$(circleci orb create {ns}/{binary} {create_flags} 2>&1)"),
-        "              create_exit=$?".to_string(),
-        "              set -e".to_string(),
-        "              echo \"${create_output}\"".to_string(),
-        "              if [ \"${create_exit}\" -ne 0 ] && ! echo \"${create_output}\" | grep -q \"already exists\"; then".to_string(),
-        "                exit \"${create_exit}\"".to_string(),
-        "              fi".to_string(),
-        "            fi".to_string(),
-        "            echo \"Orb is registered.\"".to_string(),
-    ]
-}
-
 fn push_tag_filters(lines: &mut Vec<String>, only_tag: &str, ignore_branches: &str) {
     lines.push("          filters:".to_string());
     lines.push("            tags:".to_string());
@@ -546,10 +429,12 @@ fn push_tag_filters(lines: &mut Vec<String>, only_tag: &str, ignore_branches: &s
 }
 
 /// Generate the complete `orb-release:` workflow section for config.yml.
-/// This is a tag-triggered workflow (filters on `crate_tag_prefix*`; ignores all branches).
+/// Uses orb job references (gen-circleci-orb/build_rust_binary, build_container,
+/// ensure_orb_registered) instead of inline job definitions.
 fn orb_release_workflow_section(opts: &PatchOpts) -> Vec<String> {
     let prefix = &opts.crate_tag_prefix;
     let orb_dir = &opts.orb_dir;
+    let docker_ns = &opts.docker_namespace;
     let docker_ctx = &opts.docker_context;
     let orb_ctx = &opts.orb_context;
     let binary = &opts.binary;
@@ -558,10 +443,12 @@ fn orb_release_workflow_section(opts: &PatchOpts) -> Vec<String> {
     let ignore_branches = "              ignore: /.*/".to_string();
 
     let mut lines = vec![
-        String::new(), // blank line before new workflow
+        String::new(),
         "  orb-release:".to_string(),
         "    jobs:".to_string(),
-        "      - orb-release-binary:".to_string(),
+        "      - gen-circleci-orb/build_rust_binary:".to_string(),
+        "          name: orb-release-binary".to_string(),
+        format!("          package: {binary}"),
     ];
     push_tag_filters(&mut lines, &only_tag, &ignore_branches);
     lines.push(String::new());
@@ -589,16 +476,29 @@ fn orb_release_workflow_section(opts: &PatchOpts) -> Vec<String> {
     push_tag_filters(&mut lines, &only_tag, &ignore_branches);
     lines.push(String::new());
 
-    // orb-release-container
-    lines.push("      - orb-release-container:".to_string());
+    // gen-circleci-orb/build_container — Docker build + push via orb job
+    lines.push("      - gen-circleci-orb/build_container:".to_string());
+    lines.push("          name: orb-release-container".to_string());
+    lines.push(format!("          binary: {binary}"));
+    lines.push(format!("          docker_namespace: {docker_ns}"));
+    lines.push(format!("          orb_dir: {orb_dir}"));
+    lines.push(format!("          crate_tag_prefix: {prefix}"));
     lines.push("          requires: [orb-release-binary]".to_string());
     lines.push(format!("          context: [{docker_ctx}]"));
     push_tag_filters(&mut lines, &only_tag, &ignore_branches);
     lines.push(String::new());
 
-    // Per-namespace: ensure + publish
+    // Per-namespace: ensure_orb_registered + publish
     for ns in &opts.namespaces {
-        lines.push(format!("      - orb-release-ensure-registered-{ns}:"));
+        let is_private = opts.private_namespaces.contains(ns);
+        lines.push("      - gen-circleci-orb/ensure_orb_registered:".to_string());
+        lines.push(format!(
+            "          name: orb-release-ensure-registered-{ns}"
+        ));
+        lines.push(format!("          orb_name: {ns}/{binary}"));
+        if is_private {
+            lines.push("          private: true".to_string());
+        }
         lines.push(format!("          context: [{orb_ctx}]"));
         push_tag_filters(&mut lines, &only_tag, &ignore_branches);
         lines.push(String::new());
@@ -720,6 +620,7 @@ mod tests {
             docker_context: "docker".to_string(),
             orb_context: "orb-publishing".to_string(),
             private_namespaces: vec![],
+            gen_circleci_orb_version: "0.0.1".to_string(),
             mcp: false,
             gen_orb_mcp_version: "0.1.13".to_string(),
             mcp_context: "pcu-app".to_string(),
@@ -767,177 +668,251 @@ mod tests {
 
     // ── patch_build: orb-release jobs in config.yml ───────────────────────────
 
+    // ── gen-circleci-orb orb entry ────────────────────────────────────────────
+
     #[test]
-    fn patch_build_adds_orb_release_binary_job_to_jobs_section() {
-        let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
+    fn patch_build_adds_gen_circleci_orb_to_orbs_section() {
+        let (output, report) = patch_build(BUILD_FIXTURE, &make_opts());
         assert!(
-            output.contains("  orb-release-binary:"),
-            "missing orb-release-binary job definition:\n{output}"
+            output.contains("gen-circleci-orb: jerus-org/gen-circleci-orb@0.0.1"),
+            "missing gen-circleci-orb orb entry:\n{output}"
         );
+        let orbs_pos = output.find("orbs:").expect("no orbs: section");
         let jobs_pos = output.find("\njobs:").expect("no jobs: section");
-        let workflows_pos = output.find("\nworkflows:").expect("no workflows: section");
         let pos = output
-            .find("  orb-release-binary:")
-            .expect("no orb-release-binary job");
+            .find("gen-circleci-orb: jerus-org")
+            .expect("no gen-circleci-orb entry");
         assert!(
-            pos > jobs_pos && pos < workflows_pos,
-            "orb-release-binary must be defined in the jobs section:\n{output}"
+            pos > orbs_pos && pos < jobs_pos,
+            "gen-circleci-orb must be inside orbs section:\n{output}"
+        );
+        assert!(
+            report
+                .insertions
+                .iter()
+                .any(|s| s.contains("gen-circleci-orb orb")),
+            "report missing gen-circleci-orb insertion"
         );
     }
 
+    #[test]
+    fn gen_circleci_orb_version_uses_opts_value() {
+        let opts = PatchOpts {
+            gen_circleci_orb_version: "9.8.7".to_string(),
+            ..make_opts()
+        };
+        let (output, _) = patch_build(BUILD_FIXTURE, &opts);
+        assert!(
+            output.contains("gen-circleci-orb: jerus-org/gen-circleci-orb@9.8.7"),
+            "gen-circleci-orb orb must use version from opts:\n{output}"
+        );
+    }
+
+    #[test]
+    fn gen_circleci_orb_orb_entry_is_idempotent() {
+        let (first, _) = patch_build(BUILD_FIXTURE, &make_opts());
+        let (second, second_report) = patch_build(&first, &make_opts());
+        assert_eq!(first, second, "second patch changed content");
+        assert!(
+            second_report
+                .skipped
+                .iter()
+                .any(|s| s.contains("gen-circleci-orb orb")),
+            "expected gen-circleci-orb orb skipped on second run:\n{:?}",
+            second_report.skipped
+        );
+    }
+
+    // ── orb-release workflow: orb job references (no inline job defs) ─────────
+
+    #[test]
+    fn no_inline_orb_release_jobs_in_jobs_section() {
+        let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
+        let jobs_end = output.find("\nworkflows:").expect("no workflows: section");
+        let jobs_section = &output[..jobs_end];
+        assert!(
+            !jobs_section.contains("  orb-release-binary:"),
+            "orb-release-binary must NOT be an inline job definition:\n{jobs_section}"
+        );
+        assert!(
+            !jobs_section.contains("  orb-release-container:"),
+            "orb-release-container must NOT be an inline job definition:\n{jobs_section}"
+        );
+        assert!(
+            !jobs_section.contains("  orb-release-ensure-registered-"),
+            "ensure-registered must NOT be an inline job definition:\n{jobs_section}"
+        );
+    }
+
+    #[test]
+    fn orb_release_workflow_uses_build_rust_binary_orb_job() {
+        let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
+        let after_wf = output
+            .split("  orb-release:")
+            .nth(1)
+            .expect("no orb-release workflow");
+        assert!(
+            after_wf.contains("gen-circleci-orb/build_rust_binary:"),
+            "orb-release must use gen-circleci-orb/build_rust_binary orb job:\n{after_wf}"
+        );
+        assert!(
+            after_wf.contains("name: orb-release-binary"),
+            "build_rust_binary step must be named orb-release-binary:\n{after_wf}"
+        );
+        assert!(
+            after_wf.contains("package: mytool"),
+            "build_rust_binary step must set package: mytool:\n{after_wf}"
+        );
+    }
+
+    #[test]
+    fn orb_release_workflow_uses_build_container_orb_job() {
+        let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
+        let after_wf = output
+            .split("  orb-release:")
+            .nth(1)
+            .expect("no orb-release workflow");
+        assert!(
+            after_wf.contains("gen-circleci-orb/build_container:"),
+            "orb-release must use gen-circleci-orb/build_container orb job:\n{after_wf}"
+        );
+        assert!(
+            after_wf.contains("name: orb-release-container"),
+            "build_container step must be named orb-release-container:\n{after_wf}"
+        );
+    }
+
+    #[test]
+    fn build_container_step_has_binary_docker_and_prefix_params() {
+        let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
+        let after_container = output
+            .split("name: orb-release-container")
+            .nth(1)
+            .expect("no orb-release-container step");
+        let step = after_container
+            .split("\n      - ")
+            .next()
+            .unwrap_or(after_container);
+        assert!(
+            step.contains("binary: mytool"),
+            "build_container step must pass binary param:\n{step}"
+        );
+        assert!(
+            step.contains("docker_namespace: my-docker-org"),
+            "build_container step must pass docker_namespace param:\n{step}"
+        );
+        assert!(
+            step.contains("crate_tag_prefix: mytool-v"),
+            "build_container step must pass crate_tag_prefix param:\n{step}"
+        );
+        assert!(
+            step.contains("requires: [orb-release-binary]"),
+            "build_container step must require orb-release-binary:\n{step}"
+        );
+        assert!(
+            step.contains("context: [docker]"),
+            "build_container step must set docker context:\n{step}"
+        );
+    }
+
+    #[test]
+    fn orb_release_workflow_uses_ensure_orb_registered_orb_job() {
+        let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
+        let after_wf = output
+            .split("  orb-release:")
+            .nth(1)
+            .expect("no orb-release workflow");
+        assert!(
+            after_wf.contains("gen-circleci-orb/ensure_orb_registered:"),
+            "orb-release must use gen-circleci-orb/ensure_orb_registered orb job:\n{after_wf}"
+        );
+        assert!(
+            after_wf.contains("name: orb-release-ensure-registered-my-org"),
+            "ensure_orb_registered step must be named correctly:\n{after_wf}"
+        );
+    }
+
+    #[test]
+    fn ensure_orb_registered_step_has_orb_name() {
+        let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
+        let after_ensure = output
+            .split("name: orb-release-ensure-registered-my-org")
+            .nth(1)
+            .expect("no ensure-registered step");
+        let step = after_ensure
+            .split("\n      - ")
+            .next()
+            .unwrap_or(after_ensure);
+        assert!(
+            step.contains("orb_name: my-org/mytool"),
+            "ensure_orb_registered step must set orb_name:\n{step}"
+        );
+        assert!(
+            step.contains("context: [orb-publishing]"),
+            "ensure_orb_registered step must set orb context:\n{step}"
+        );
+    }
+
+    #[test]
+    fn ensure_orb_registered_step_sets_private_for_private_ns() {
+        let opts = PatchOpts {
+            namespaces: vec!["private-ns".to_string()],
+            private_namespaces: vec!["private-ns".to_string()],
+            ..make_opts()
+        };
+        let (output, _) = patch_build(BUILD_FIXTURE, &opts);
+        let after_ensure = output
+            .split("name: orb-release-ensure-registered-private-ns")
+            .nth(1)
+            .expect("no ensure-registered step for private-ns");
+        let step = after_ensure
+            .split("\n      - ")
+            .next()
+            .unwrap_or(after_ensure);
+        assert!(
+            step.contains("private: true"),
+            "ensure_orb_registered step must set private: true for private namespace:\n{step}"
+        );
+    }
+
+    #[test]
+    fn ensure_orb_registered_step_omits_private_for_public_ns() {
+        let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
+        let after_ensure = output
+            .split("name: orb-release-ensure-registered-my-org")
+            .nth(1)
+            .expect("no ensure-registered step");
+        let step = after_ensure
+            .split("\n      - ")
+            .next()
+            .unwrap_or(after_ensure);
+        assert!(
+            !step.contains("private:"),
+            "public namespace ensure step must NOT set private:\n{step}"
+        );
+    }
+
+    // (kept for backwards compat shape — now tests orb job refs in workflow)
     #[test]
     fn orb_release_binary_job_uses_cargo_build_with_package_flag() {
+        // With orb jobs, the build logic lives in the orb; the workflow step
+        // just passes the package parameter to gen-circleci-orb/build_rust_binary.
         let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
-        let block = job_block(&output, "orb-release-binary");
+        let after_wf = output
+            .split("  orb-release:")
+            .nth(1)
+            .expect("no orb-release workflow");
         assert!(
-            block.contains("cargo build --release -p mytool"),
-            "orb-release-binary must compile with -p <binary>:\n{block}"
+            after_wf.contains("package: mytool"),
+            "build_rust_binary step must pass package: mytool:\n{after_wf}"
         );
         assert!(
-            block.contains("rust:latest"),
-            "orb-release-binary must use public rust:latest image:\n{block}"
+            !after_wf.contains("cargo build --release -p mytool"),
+            "inline cargo command must not appear in workflow YAML:\n{after_wf}"
         );
     }
 
-    #[test]
-    fn orb_release_binary_job_persists_binary_to_workspace() {
-        let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
-        let block = job_block(&output, "orb-release-binary");
-        assert!(
-            block.contains("persist_to_workspace"),
-            "orb-release-binary must persist binary to workspace:\n{block}"
-        );
-        assert!(
-            block.contains("paths: [mytool]"),
-            "orb-release-binary must persist the binary by name:\n{block}"
-        );
-    }
-
-    #[test]
-    fn patch_build_adds_orb_release_container_job_to_jobs_section() {
-        let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
-        assert!(
-            output.contains("  orb-release-container:"),
-            "missing orb-release-container job definition:\n{output}"
-        );
-        let jobs_pos = output.find("\njobs:").expect("no jobs: section");
-        let workflows_pos = output.find("\nworkflows:").expect("no workflows: section");
-        let pos = output
-            .find("  orb-release-container:")
-            .expect("no orb-release-container job");
-        assert!(
-            pos > jobs_pos && pos < workflows_pos,
-            "orb-release-container must be in jobs section:\n{output}"
-        );
-    }
-
-    #[test]
-    fn orb_release_container_uses_circle_tag_not_versions_env() {
-        let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
-        let block = job_block(&output, "orb-release-container");
-        // Tag-triggered pipeline: version comes from CIRCLE_TAG, not versions.env
-        assert!(
-            block.contains("CIRCLE_TAG"),
-            "orb-release-container must derive version from CIRCLE_TAG:\n{block}"
-        );
-        assert!(
-            !block.contains("versions.env"),
-            "orb-release-container must NOT use versions.env (approval-triggered pattern):\n{block}"
-        );
-        // Strip the crate tag prefix to get the bare semver
-        assert!(
-            block.contains("CIRCLE_TAG#mytool-v"),
-            "orb-release-container must strip crate_tag_prefix from CIRCLE_TAG:\n{block}"
-        );
-    }
-
-    #[test]
-    fn orb_release_container_copies_workspace_binary() {
-        let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
-        let block = job_block(&output, "orb-release-container");
-        assert!(
-            block.contains("attach_workspace"),
-            "orb-release-container must attach workspace to get the binary:\n{block}"
-        );
-        assert!(
-            block.contains("at: /tmp/bin"),
-            "orb-release-container must attach workspace at /tmp/bin:\n{block}"
-        );
-        assert!(
-            block.contains("cp /tmp/bin/mytool orb/mytool"),
-            "orb-release-container must copy binary from workspace into Docker build context:\n{block}"
-        );
-    }
-
-    #[test]
-    fn orb_release_container_pushes_versioned_and_latest_tags() {
-        let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
-        let block = job_block(&output, "orb-release-container");
-        assert!(
-            block.contains("docker push my-docker-org/mytool"),
-            "orb-release-container must push Docker image:\n{block}"
-        );
-        assert!(
-            block.contains(":latest"),
-            "orb-release-container must push a :latest tag:\n{block}"
-        );
-        assert!(
-            block.contains("docker login -u \"${DOCKERHUB_USERNAME}\""),
-            "orb-release-container must login to Docker Hub:\n{block}"
-        );
-        assert!(
-            block.contains("--password-stdin"),
-            "orb-release-container must use --password-stdin:\n{block}"
-        );
-    }
-
-    #[test]
-    fn patch_build_adds_orb_release_ensure_registered_jobs() {
-        let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
-        assert!(
-            output.contains("  orb-release-ensure-registered-my-org:"),
-            "missing orb-release-ensure-registered-my-org job definition:\n{output}"
-        );
-        let jobs_pos = output.find("\njobs:").expect("no jobs: section");
-        let workflows_pos = output.find("\nworkflows:").expect("no workflows: section");
-        let pos = output
-            .find("  orb-release-ensure-registered-my-org:")
-            .expect("no orb-release-ensure-registered-my-org job");
-        assert!(
-            pos > jobs_pos && pos < workflows_pos,
-            "orb-release-ensure-registered-my-org must be in jobs section:\n{output}"
-        );
-    }
-
-    #[test]
-    fn orb_release_ensure_registered_job_has_correct_circleci_commands() {
-        let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
-        let block = job_block(&output, "orb-release-ensure-registered-my-org");
-        assert!(
-            block.contains("executor: orb-tools/default"),
-            "orb-release-ensure-registered must use orb-tools/default executor:\n{block}"
-        );
-        assert!(
-            block.contains("circleci setup") && block.contains("CIRCLE_TOKEN"),
-            "ensure job must run circleci setup --token ${{CIRCLE_TOKEN}}:\n{block}"
-        );
-        assert!(
-            block.contains("circleci orb info my-org/mytool"),
-            "ensure job must check if orb is registered:\n{block}"
-        );
-        assert!(
-            block.contains("set +e") && block.contains("set -e"),
-            "ensure job must use set +e / set -e for circleci CLI exit-255 handling:\n{block}"
-        );
-        assert!(
-            block.contains("-ne 255"),
-            "ensure job must accept exit 255 as non-failure:\n{block}"
-        );
-        assert!(
-            block.contains("already exists"),
-            "ensure job must handle 'already exists' gracefully:\n{block}"
-        );
-    }
+    // (orb_release_binary_job_persists_binary_to_workspace: now lives in the orb script)
 
     // ── patch_build: orb-release workflow section ─────────────────────────────
 
@@ -1166,12 +1141,12 @@ mod tests {
     fn patch_build_orb_release_works_when_no_jobs_section() {
         let (output, _) = patch_build(BUILD_FIXTURE_NO_JOBS, &make_opts());
         assert!(
-            output.contains("  orb-release-binary:"),
-            "orb-release-binary job missing when no pre-existing jobs section:\n{output}"
+            output.contains("gen-circleci-orb/build_rust_binary:"),
+            "build_rust_binary orb job ref missing when no pre-existing jobs section:\n{output}"
         );
         assert!(
-            output.contains("  orb-release-container:"),
-            "orb-release-container job missing when no pre-existing jobs section:\n{output}"
+            output.contains("gen-circleci-orb/build_container:"),
+            "build_container orb job ref missing when no pre-existing jobs section:\n{output}"
         );
         assert!(
             output.contains("  orb-release:"),
@@ -1182,14 +1157,14 @@ mod tests {
     #[test]
     fn patch_build_per_namespace_orb_release_ensure_and_publish() {
         let (output, _) = patch_build(BUILD_FIXTURE, &make_opts_two_ns());
-        // Both namespaces get their own ensure job and publish step
+        // Both namespaces get their own ensure_orb_registered step and publish step
         assert!(
-            output.contains("  orb-release-ensure-registered-my-org:"),
-            "missing ensure job for my-org:\n{output}"
+            output.contains("name: orb-release-ensure-registered-my-org"),
+            "missing ensure step for my-org:\n{output}"
         );
         assert!(
-            output.contains("  orb-release-ensure-registered-other-org:"),
-            "missing ensure job for other-org:\n{output}"
+            output.contains("name: orb-release-ensure-registered-other-org"),
+            "missing ensure step for other-org:\n{output}"
         );
         assert!(
             output.contains("name: publish-orb-my-org"),

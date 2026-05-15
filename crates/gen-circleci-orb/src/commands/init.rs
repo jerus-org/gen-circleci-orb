@@ -79,6 +79,11 @@ pub struct Init {
     #[arg(long, default_value = "orb-publishing")]
     pub orb_context: String,
 
+    /// Version of the jerus-org/gen-circleci-orb orb to pin in generated CI.
+    /// Defaults to the version of this binary (orb and crate are released together).
+    #[arg(long, default_value = env!("CARGO_PKG_VERSION"))]
+    pub gen_circleci_orb_version: String,
+
     /// Wire in gen-orb-mcp MCP server generation + publish after orb publish.
     #[arg(long)]
     pub mcp: bool,
@@ -137,6 +142,7 @@ impl Init {
             docker_context: self.docker_context.clone(),
             orb_context: self.orb_context.clone(),
             private_namespaces: self.private_orb_namespaces.clone(),
+            gen_circleci_orb_version: self.gen_circleci_orb_version.clone(),
             mcp: self.mcp,
             gen_orb_mcp_version: self.gen_orb_mcp_version.clone(),
             mcp_context: self.mcp_context.clone(),

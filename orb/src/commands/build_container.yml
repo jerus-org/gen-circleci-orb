@@ -1,0 +1,27 @@
+description: Build and push a Docker image for a CLI binary, copying the binary from workspace.
+parameters:
+  binary:
+    type: string
+    description: Name of the binary (used for the Docker image name and binary filename)
+  docker_namespace:
+    type: string
+    description: Docker Hub namespace (e.g. jerusdp)
+  orb_dir:
+    type: string
+    description: Directory containing the Dockerfile
+    default: orb
+  crate_tag_prefix:
+    type: string
+    description: Tag prefix to strip from CIRCLE_TAG to get the bare semver version
+steps:
+  - attach_workspace:
+      at: /tmp/bin
+  - setup_remote_docker
+  - run:
+      name: Build and push Docker image
+      command: <<include(scripts/build_container.sh)>>
+      environment:
+        BINARY: << parameters.binary >>
+        DOCKER_NAMESPACE: << parameters.docker_namespace >>
+        ORB_DIR: << parameters.orb_dir >>
+        CRATE_TAG_PREFIX: << parameters.crate_tag_prefix >>
