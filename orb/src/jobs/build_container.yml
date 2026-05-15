@@ -1,0 +1,24 @@
+description: Build and push a Docker image for a CLI binary.
+docker:
+  - image: cimg/base:stable
+parameters:
+  binary:
+    type: string
+    description: Name of the binary (used for the Docker image name)
+  docker_namespace:
+    type: string
+    description: Docker Hub namespace (e.g. jerusdp)
+  orb_dir:
+    type: string
+    description: Directory containing the Dockerfile
+    default: orb
+  crate_tag_prefix:
+    type: string
+    description: Tag prefix to strip from CIRCLE_TAG to get the bare semver version
+steps:
+  - checkout
+  - build_container:
+      binary: << parameters.binary >>
+      docker_namespace: << parameters.docker_namespace >>
+      orb_dir: << parameters.orb_dir >>
+      crate_tag_prefix: << parameters.crate_tag_prefix >>
