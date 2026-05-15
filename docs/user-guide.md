@@ -550,3 +550,11 @@ commands, and conformance rules as resources, enabling the assistant to:
 
 This path suits teams that prefer AI-assisted, on-demand maintenance over automated
 dependency bots, or that need guidance through a migration alongside the version bump.
+
+**Worth using `--mcp` even without an AI assistant.** When `gen-circleci-orb init` is run
+with `--mcp`, it wires a `toolkit/build_mcp_server` step into the release pipeline. Each
+release of the orb then generates a `migrations/<version>.json` file in the repository,
+recording any renamed or restructured jobs in a structured, human-readable format. This
+file can be consulted directly — without an AI tool — when manually upgrading consumers
+from one orb version to another. Passing `--mcp` now means the migration trail exists if
+it is ever needed, regardless of whether AI tooling is in use at the time.
