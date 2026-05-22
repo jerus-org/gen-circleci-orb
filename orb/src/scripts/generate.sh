@@ -8,6 +8,7 @@ set -- gen-circleci-orb generate \
 
 [ -n "${HOME_URL:-}" ]   && set -- "$@" --home-url "${HOME_URL}"
 [ -n "${SOURCE_URL:-}" ] && set -- "$@" --source-url "${SOURCE_URL}"
+[ -n "${GIT_PUSH_SUBCOMMAND:-}" ] && set -- "$@" --git-push-subcommand "${GIT_PUSH_SUBCOMMAND}"
 [ "${DRY_RUN:-false}" = "true" ] && set -- "$@" --dry-run
 
 "$@"
