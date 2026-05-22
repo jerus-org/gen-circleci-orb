@@ -7,11 +7,11 @@ description: >
 docker:
   - image: jerusdp/gen-orb-mcp:<< parameters.gen_orb_mcp_tag >>
 parameters:
-  name:
+  binary_name:
     type: string
     description: >
       Binary name (e.g. "my-tool"). Used to locate the compiled MCP binary at
-      target/release/{name_underscored}_mcp and to name the GitHub release asset.
+      target/release/{binary_name_underscored}_mcp and to name the GitHub release asset.
   tag_prefix:
     type: string
     description: >
@@ -47,7 +47,7 @@ steps:
       name: Set up git and environment
       command: <<include(scripts/build_mcp_server_setup.sh)>>
       environment:
-        NAME: << parameters.name >>
+        NAME: << parameters.binary_name >>
         TAG_PREFIX: << parameters.tag_prefix >>
         WORKSPACE_BIN_PATH: << parameters.workspace_bin_path >>
   - set_https_remote
@@ -62,7 +62,7 @@ steps:
       name: Generate and compile MCP server
       command: <<include(scripts/build_mcp_server_generate.sh)>>
       environment:
-        NAME: << parameters.name >>
+        NAME: << parameters.binary_name >>
         ORB_PATH: << parameters.orb_path >>
         PRIOR_VERSIONS_DIR: << parameters.prior_versions_dir >>
         MIGRATIONS_DIR: << parameters.migrations_dir >>
@@ -70,7 +70,7 @@ steps:
       name: Publish MCP server binary to GitHub release
       command: <<include(scripts/build_mcp_server_publish.sh)>>
       environment:
-        NAME: << parameters.name >>
+        NAME: << parameters.binary_name >>
   - run:
       name: Commit back generated artifacts
       command: <<include(scripts/build_mcp_server_save.sh)>>
