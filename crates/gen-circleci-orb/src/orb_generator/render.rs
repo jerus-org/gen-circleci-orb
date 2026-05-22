@@ -13,6 +13,9 @@ pub struct GenerateOpts {
     pub source_url: Option<String>,
     /// Binary name included in generated run-step commands.
     pub binary_name: String,
+    /// Subcommand names whose generated jobs should include a `set_https_remote` step.
+    /// Use for subcommands that push to git (e.g. "save").
+    pub git_push_subcommands: Vec<String>,
 }
 
 /// Generate all orb artifact strings keyed by their relative output path.
@@ -30,7 +33,7 @@ pub fn generate(cli: &CliDefinition, opts: &GenerateOpts) -> HashMap<PathBuf, St
 
     // commands/<name>.yml and jobs/<name>.yml for each leaf subcommand
     for sub in &cli.subcommands {
-        render_subcommand(sub, &cli.binary_name, &mut files);
+        render_subcommand(sub, &cli.binary_name, opts, &mut files);
     }
 
     // Dockerfile
@@ -63,7 +66,12 @@ fn render_orb_root(cli: &CliDefinition, opts: &GenerateOpts) -> String {
     out
 }
 
-fn render_subcommand(sub: &SubCommand, binary: &str, files: &mut HashMap<PathBuf, String>) {
+fn render_subcommand(
+    sub: &SubCommand,
+    binary: &str,
+    opts: &GenerateOpts,
+    files: &mut HashMap<PathBuf, String>,
+) {
     if sub.is_leaf {
         files.insert(
             PathBuf::from(format!("src/commands/{}.yml", sub.name)),
@@ -71,7 +79,7 @@ fn render_subcommand(sub: &SubCommand, binary: &str, files: &mut HashMap<PathBuf
         );
         files.insert(
             PathBuf::from(format!("src/jobs/{}.yml", sub.name)),
-            render_job(sub),
+            render_job(sub, opts),
         );
         files.insert(
             PathBuf::from(format!("src/scripts/{}.sh", sub.name)),
@@ -79,7 +87,7 @@ fn render_subcommand(sub: &SubCommand, binary: &str, files: &mut HashMap<PathBuf
         );
     }
     for child in &sub.subcommands {
-        render_subcommand(child, binary, files);
+        render_subcommand(child, binary, opts, files);
     }
 }
 
@@ -190,15 +198,20 @@ fn render_command_script_content(sub: &SubCommand, binary: &str) -> String {
     lines.join("\n")
 }
 
-fn render_job(sub: &SubCommand) -> String {
+fn render_job(sub: &SubCommand, opts: &GenerateOpts) -> String {
     let parameters = build_orb_parameters(sub, RESERVED_JOB_PARAMS);
     let checkout_step: serde_yaml::Value = serde_yaml::Value::String("checkout".to_string());
     let invoke_step = build_invoke_step(sub, RESERVED_JOB_PARAMS);
+    let mut steps = vec![checkout_step];
+    if opts.git_push_subcommands.contains(&sub.name) {
+        steps.push(serde_yaml::Value::String("set_https_remote".to_string()));
+    }
+    steps.push(invoke_step);
     let job = OrbJob {
         description: format!("Run {} {} in a dedicated job.", sub.name, "command"),
         executor: "default".to_string(),
         parameters,
-        steps: vec![checkout_step, invoke_step],
+        steps,
     };
     serde_yaml::to_string(&job).unwrap()
 }
@@ -401,6 +414,7 @@ mod tests {
             home_url: None,
             source_url: None,
             binary_name: "mytool".to_string(),
+            git_push_subcommands: vec![],
         }
     }
 
@@ -1045,6 +1059,73 @@ mod tests {
         assert!(
             dockerfile.contains("ca-certificates libssl-dev pkg-config"),
             "builder packages must be sorted: ca-certificates libssl-dev pkg-config\n{dockerfile}"
+        );
+    }
+
+    // ── set_https_remote in push jobs ───────────────────────────────────────
+
+    #[test]
+    fn push_subcommand_job_has_set_https_remote_step() {
+        let sub = make_leaf("save", vec![]);
+        let cli = make_cli("mytool", vec![sub]);
+        let opts = GenerateOpts {
+            git_push_subcommands: vec!["save".to_string()],
+            ..default_opts()
+        };
+        let files = generate(&cli, &opts);
+        let job = &files[&PathBuf::from("src/jobs/save.yml")];
+        assert!(
+            job.contains("set_https_remote"),
+            "save job must include set_https_remote step when listed in git_push_subcommands:\n{job}"
+        );
+    }
+
+    #[test]
+    fn push_subcommand_job_set_https_remote_placed_between_checkout_and_invoke() {
+        let sub = make_leaf("save", vec![]);
+        let cli = make_cli("mytool", vec![sub]);
+        let opts = GenerateOpts {
+            git_push_subcommands: vec!["save".to_string()],
+            ..default_opts()
+        };
+        let files = generate(&cli, &opts);
+        let job = &files[&PathBuf::from("src/jobs/save.yml")];
+        let checkout_pos = job.find("- checkout").expect("checkout step missing");
+        let https_pos = job
+            .find("set_https_remote")
+            .expect("set_https_remote step missing");
+        let invoke_pos = job.find("save:").expect("save invoke step missing");
+        assert!(
+            checkout_pos < https_pos && https_pos < invoke_pos,
+            "set_https_remote must appear after checkout and before the invoke step:\n{job}"
+        );
+    }
+
+    #[test]
+    fn non_push_subcommand_job_has_no_set_https_remote() {
+        let sub = make_leaf("validate", vec![]);
+        let cli = make_cli("mytool", vec![sub]);
+        let opts = GenerateOpts {
+            git_push_subcommands: vec!["save".to_string()],
+            ..default_opts()
+        };
+        let files = generate(&cli, &opts);
+        let job = &files[&PathBuf::from("src/jobs/validate.yml")];
+        assert!(
+            !job.contains("set_https_remote"),
+            "validate job must not have set_https_remote (not a push subcommand):\n{job}"
+        );
+    }
+
+    #[test]
+    fn job_with_no_push_subcommands_has_no_set_https_remote() {
+        let sub = make_leaf("save", vec![]);
+        let cli = make_cli("mytool", vec![sub]);
+        let files = generate(&cli, &default_opts());
+        let job = &files[&PathBuf::from("src/jobs/save.yml")];
+        assert!(
+            !job.contains("set_https_remote"),
+            "save job must not include set_https_remote when git_push_subcommands is empty:\n{job}"
         );
     }
 

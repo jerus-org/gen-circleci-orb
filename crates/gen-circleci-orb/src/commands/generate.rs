@@ -47,6 +47,11 @@ pub struct Generate {
     #[arg(long, default_value = "orb")]
     pub orb_dir: String,
 
+    /// Subcommand name(s) whose generated jobs should include a set_https_remote step
+    /// (repeatable). Use for subcommands that push to git, e.g. --git-push-subcommand save.
+    #[arg(long = "git-push-subcommand")]
+    pub git_push_subcommands: Vec<String>,
+
     /// Show planned output without writing any files.
     #[arg(long)]
     pub dry_run: bool,
@@ -131,6 +136,7 @@ impl Generate {
             home_url,
             source_url,
             binary_name: cli_def.binary_name.clone(),
+            git_push_subcommands: self.git_push_subcommands.clone(),
         };
 
         let files = orb_generator::generate(&cli_def, &opts);

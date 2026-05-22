@@ -122,6 +122,7 @@ impl Init {
             base_image: crate::commands::generate::DEFAULT_BASE_IMAGE.to_string(),
             home_url: None,
             source_url: None,
+            git_push_subcommands: vec![],
             dry_run: self.dry_run,
         };
         gen.run()?;
