@@ -33,6 +33,12 @@ parameters:
     type: string
     description: 'Subdirectory within --output where orb source is written (default: orb)'
     default: orb
+  git_push_subcommand:
+    type: string
+    description: >
+      Subcommand name to inject a set_https_remote step into its generated job.
+      Use for subcommands that push to git (e.g. save). Pass empty string to skip.
+    default: ''
   dry_run:
     type: boolean
     description: Show planned output without writing any files
@@ -50,4 +56,5 @@ steps:
       HOME_URL: << parameters.home_url >>
       SOURCE_URL: << parameters.source_url >>
       ORB_DIR: << parameters.orb_dir >>
+      GIT_PUSH_SUBCOMMAND: << parameters.git_push_subcommand >>
       DRY_RUN: << parameters.dry_run >>
