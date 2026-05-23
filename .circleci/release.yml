@@ -14,6 +14,8 @@ orbs:
   toolkit: jerus-org/circleci-toolkit@6.2.0
   orb-tools: circleci/orb-tools@12.3.3
   docker: circleci/docker@3.0.1
+  # renovate: datasource=circleci-orb depName=jerus-org/gen-circleci-orb
+  gen-circleci-orb: jerus-org/gen-circleci-orb@0.0.24
 
 jobs:
   build-binary-release:
@@ -148,25 +150,19 @@ workflows:
             - bot-check
             - pcu-app
 
-      - toolkit/build_mcp_server:
+      - gen-circleci-orb/build_mcp_server:
           name: build-mcp-server
-          orb_path: orb/src/@orb.yml
-          orb_name: gen-circleci-orb
-          binary_name: gen_circleci_orb_mcp
-          version: "$CRATE_VERSION_GEN_CIRCLECI_ORB"
-          release_tag: "v$WORKSPACE_VERSION"
-          prime_history: true
-          prime_earliest_version: "0.0.11"
-          prime_tag_prefix: v
+          binary_name: gen-circleci-orb
+          tag_prefix: v
+          earliest_version: "0.0.11"
           pre-steps:
             - attach_workspace:
                 at: /tmp/release-versions
             - run:
-                name: Load approved versions
+                name: Set CIRCLE_TAG from workspace versions
                 command: |
                   source /tmp/release-versions/versions.env
-                  echo "export CRATE_VERSION_GEN_CIRCLECI_ORB=${CRATE_VERSION_GEN_CIRCLECI_ORB}" >> "$BASH_ENV"
-                  echo "export WORKSPACE_VERSION=${WORKSPACE_VERSION}" >> "$BASH_ENV"
+                  echo "export CIRCLE_TAG=v${WORKSPACE_VERSION}" >> "$BASH_ENV"
           requires:
             - release-prlog
           context:
