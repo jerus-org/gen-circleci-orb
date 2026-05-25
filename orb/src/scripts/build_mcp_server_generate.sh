@@ -4,7 +4,7 @@ gen-orb-mcp generate \
   --name "${NAME}" \
   --orb-path "${ORB_PATH}" \
   --output /tmp/mcp-server \
-  --version "${VERSION}" \
+  --crate-version "${VERSION}" \
   --force \
   --prior-versions "${PRIOR_VERSIONS_DIR}" \
   --migrations "${MIGRATIONS_DIR}"
