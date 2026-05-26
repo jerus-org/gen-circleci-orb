@@ -27,10 +27,11 @@ pub struct PatchOpts {
     /// Version of jerus-org/gen-circleci-orb orb to pin in the orbs section.
     pub gen_circleci_orb_version: String,
     pub mcp: bool,
-    /// Version of the jerus-org/gen-orb-mcp orb to pin in the orbs section.
+    /// Earliest orb version to include when priming prior-version snapshots.
+    /// Passed to `gen-circleci-orb/build_mcp_server` as `earliest_version`.
     /// Only used when `mcp` is true.
-    pub gen_orb_mcp_version: String,
-    /// CircleCI context providing push authority for MCP server publish + save steps.
+    pub mcp_earliest_version: String,
+    /// CircleCI context providing push authority for MCP server build + publish + save steps.
     /// Only used when `mcp` is true.
     pub mcp_context: String,
 }
@@ -54,8 +55,6 @@ pub fn patch_build(content: &str, opts: &PatchOpts) -> (String, PatchReport) {
     patch_step2_build_regen_jobs(content, &mut lines, opts, &mut report);
     patch_step3_pack_validate(content, &mut lines, opts, &mut report);
     patch_step5_orb_release_workflow(content, &mut lines, opts, &mut report);
-    patch_step6_mcp_orb(content, &mut lines, opts, &mut report);
-    patch_step7_mcp_binary_job(content, &mut lines, opts, &mut report);
 
     let mut output = lines.join("\n");
     if content.ends_with('\n') {
@@ -107,7 +106,13 @@ fn patch_step2_build_regen_jobs(
     opts: &PatchOpts,
     report: &mut PatchReport,
 ) {
-    if content.contains("build-binary:") && content.contains("regenerate-orb:") {
+    // Detect either the old inline-job approach ("build-binary:" top-level job) or the
+    // newer orb-reference approach ("gen-circleci-orb/build_rust_binary:" in workflow).
+    let has_build = content.contains("build-binary:")
+        || content.contains("gen-circleci-orb/build_rust_binary:");
+    let has_regen =
+        content.contains("regenerate-orb:") || content.contains("gen-circleci-orb/generate:");
+    if has_build && has_regen {
         report
             .skipped
             .push("build-binary and regenerate-orb jobs".to_string());
@@ -176,46 +181,6 @@ fn patch_step5_orb_release_workflow(
         insert_block_at(lines, pos, &wf_block);
     }
     report.insertions.push("orb-release workflow".to_string());
-}
-
-fn patch_step6_mcp_orb(
-    content: &str,
-    lines: &mut Vec<String>,
-    opts: &PatchOpts,
-    report: &mut PatchReport,
-) {
-    if !opts.mcp {
-        return;
-    }
-    let version = &opts.gen_orb_mcp_version;
-    let orb_entry = format!("  gen-orb-mcp: jerus-org/gen-orb-mcp@{version}");
-    if content.contains("gen-orb-mcp:") {
-        report.skipped.push("gen-orb-mcp orb".to_string());
-    } else if let Some(pos) = find_section_end(lines, "orbs:") {
-        lines.insert(pos, orb_entry);
-        report.insertions.push("gen-orb-mcp orb".to_string());
-    }
-}
-
-fn patch_step7_mcp_binary_job(
-    content: &str,
-    lines: &mut Vec<String>,
-    opts: &PatchOpts,
-    report: &mut PatchReport,
-) {
-    if !opts.mcp {
-        return;
-    }
-    if content.contains("  build-mcp-binary:") {
-        report.skipped.push("build-mcp-binary job".to_string());
-        return;
-    }
-    let Some(pos) = find_section_end(lines, "jobs:") else {
-        return;
-    };
-    let block = build_mcp_binary_job(opts);
-    insert_block_at(lines, pos, &block);
-    report.insertions.push("build-mcp-binary job".to_string());
 }
 
 /// Patch a release CircleCI config string.
@@ -401,25 +366,6 @@ fn pack_validate_steps(opts: &PatchOpts) -> Vec<String> {
 
 // ── orb-release helpers (tag-triggered, lives in config.yml) ─────────────────
 
-fn build_mcp_binary_job(opts: &PatchOpts) -> Vec<String> {
-    let binary = &opts.binary;
-    vec![
-        "  build-mcp-binary:".to_string(),
-        "    docker:".to_string(),
-        "      - image: rust:latest".to_string(),
-        "    steps:".to_string(),
-        "      - attach_workspace:".to_string(),
-        "          at: /tmp/mcp-src".to_string(),
-        "      - run:".to_string(),
-        "          name: Build MCP server binary".to_string(),
-        "          command: cargo build --release".to_string(),
-        "          working_directory: /tmp/mcp-src".to_string(),
-        "      - persist_to_workspace:".to_string(),
-        "          root: /tmp/mcp-src/target/release".to_string(),
-        format!("          paths: [{binary}-mcp]"),
-    ]
-}
-
 fn push_tag_filters(lines: &mut Vec<String>, only_tag: &str, ignore_branches: &str) {
     lines.push("          filters:".to_string());
     lines.push("            tags:".to_string());
@@ -545,6 +491,7 @@ fn push_mcp_workflow_steps(
     let orb_dir = &opts.orb_dir;
     let prefix = &opts.crate_tag_prefix;
     let mcp_ctx = &opts.mcp_context;
+    let earliest = &opts.mcp_earliest_version;
 
     // Build the requires list from all publish-orb-<ns> steps
     let requires: Vec<String> = opts
@@ -554,48 +501,14 @@ fn push_mcp_workflow_steps(
         .collect();
     let requires_str = requires.join(", ");
 
-    // gen-orb-mcp/generate — generates MCP server source; persists to workspace
-    lines.push("      - gen-orb-mcp/generate:".to_string());
-    lines.push("          name: generate-mcp-server".to_string());
-    lines.push(format!("          orb_path: {orb_dir}/src/@orb.yml"));
-    lines.push(format!("          generate_name: {binary}-mcp"));
-    lines.push("          force: true".to_string());
+    // gen-circleci-orb/build_mcp_server — primes, generates, compiles, publishes, saves
+    lines.push("      - gen-circleci-orb/build_mcp_server:".to_string());
+    lines.push("          name: build-mcp-server".to_string());
+    lines.push(format!("          binary_name: {binary}"));
     lines.push(format!("          tag_prefix: {prefix}"));
-    lines.push("          post-steps:".to_string());
-    lines.push("            - persist_to_workspace:".to_string());
-    lines.push("                root: dist".to_string());
-    lines.push("                paths: [.]".to_string());
+    lines.push(format!("          orb_path: {orb_dir}/src/@orb.yml"));
+    lines.push(format!("          earliest_version: \"{earliest}\""));
     lines.push(format!("          requires: [{requires_str}]"));
-    push_tag_filters(lines, only_tag, ignore_branches);
-    lines.push(String::new());
-
-    // build-mcp-binary — inline Rust compile job (uses rust:latest executor)
-    lines.push("      - build-mcp-binary:".to_string());
-    lines.push("          requires: [generate-mcp-server]".to_string());
-    push_tag_filters(lines, only_tag, ignore_branches);
-    lines.push(String::new());
-
-    // gen-orb-mcp/publish — uploads binary to GitHub release
-    lines.push("      - gen-orb-mcp/publish:".to_string());
-    lines.push("          name: publish-mcp-server".to_string());
-    lines.push(format!("          binary: /tmp/bin/{binary}-mcp"));
-    lines.push(format!("          asset_name: {binary}-mcp-linux-x86_64"));
-    lines.push("          pre-steps:".to_string());
-    lines.push("            - attach_workspace:".to_string());
-    lines.push("                at: /tmp/bin".to_string());
-    lines.push("          requires: [build-mcp-binary]".to_string());
-    lines.push(format!("          context: [{mcp_ctx}]"));
-    push_tag_filters(lines, only_tag, ignore_branches);
-    lines.push(String::new());
-
-    // gen-orb-mcp/save — commits generated source back to the repo
-    lines.push("      - gen-orb-mcp/save:".to_string());
-    lines.push("          name: save-mcp-server".to_string());
-    lines.push("          paths: dist".to_string());
-    lines.push("          pre-steps:".to_string());
-    lines.push("            - attach_workspace:".to_string());
-    lines.push("                at: dist".to_string());
-    lines.push("          requires: [generate-mcp-server]".to_string());
     lines.push(format!("          context: [{mcp_ctx}]"));
     push_tag_filters(lines, only_tag, ignore_branches);
 }
@@ -622,7 +535,7 @@ mod tests {
             private_namespaces: vec![],
             gen_circleci_orb_version: "0.0.1".to_string(),
             mcp: false,
-            gen_orb_mcp_version: "0.1.13".to_string(),
+            mcp_earliest_version: "1.0.0".to_string(),
             mcp_context: "pcu-app".to_string(),
         }
     }
@@ -1490,37 +1403,130 @@ workflows:
         );
     }
 
-    // ── --mcp: gen-orb-mcp orb integration ───────────────────────────────────
+    // ── --mcp: gen-circleci-orb/build_mcp_server integration ─────────────────
 
     #[test]
-    fn patch_build_mcp_disabled_does_not_add_gen_orb_mcp_orb() {
+    fn patch_build_mcp_disabled_does_not_add_build_mcp_server() {
         let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
+        let after_wf = output.split("  orb-release:").nth(1).unwrap_or("");
         assert!(
-            !output.contains("gen-orb-mcp: jerus-org"),
-            "gen-orb-mcp orb must not appear when --mcp is false:\n{output}"
+            !after_wf.contains("build_mcp_server:"),
+            "build_mcp_server must not appear when --mcp is false:\n{output}"
         );
     }
 
     #[test]
-    fn patch_build_mcp_adds_gen_orb_mcp_to_orbs_section() {
+    fn patch_build_mcp_uses_build_mcp_server_orb_job() {
         let (output, _) = patch_build(BUILD_FIXTURE, &make_opts_mcp());
+        let after_wf = output
+            .split("  orb-release:")
+            .nth(1)
+            .expect("no orb-release workflow");
         assert!(
-            output.contains("gen-orb-mcp: jerus-org/gen-orb-mcp@0.1.13"),
-            "missing gen-orb-mcp orb entry:\n{output}"
+            after_wf.contains("gen-circleci-orb/build_mcp_server:"),
+            "mcp must use gen-circleci-orb/build_mcp_server orb job:\n{after_wf}"
         );
-        let orbs_pos = output.find("orbs:").expect("no orbs: section");
-        let jobs_pos = output.find("\njobs:").expect("no jobs: section");
-        let pos = output
-            .find("gen-orb-mcp: jerus-org")
-            .expect("no gen-orb-mcp entry");
         assert!(
-            pos > orbs_pos && pos < jobs_pos,
-            "gen-orb-mcp orb must be inside orbs section:\n{output}"
+            after_wf.contains("name: build-mcp-server"),
+            "build_mcp_server step must be named build-mcp-server:\n{after_wf}"
         );
     }
 
     #[test]
-    fn patch_build_mcp_orb_entry_is_idempotent() {
+    fn patch_build_mcp_server_has_binary_name_and_tag_prefix() {
+        let (output, _) = patch_build(BUILD_FIXTURE, &make_opts_mcp());
+        let after_step = output
+            .split("name: build-mcp-server")
+            .nth(1)
+            .expect("no build-mcp-server step");
+        let step = after_step.split("\n      - ").next().unwrap_or(after_step);
+        assert!(
+            step.contains("binary_name: mytool"),
+            "build_mcp_server must pass binary_name:\n{step}"
+        );
+        assert!(
+            step.contains("tag_prefix: mytool-v"),
+            "build_mcp_server must pass tag_prefix:\n{step}"
+        );
+    }
+
+    #[test]
+    fn patch_build_mcp_server_has_earliest_version() {
+        let (output, _) = patch_build(BUILD_FIXTURE, &make_opts_mcp());
+        let after_step = output
+            .split("name: build-mcp-server")
+            .nth(1)
+            .expect("no build-mcp-server step");
+        let step = after_step.split("\n      - ").next().unwrap_or(after_step);
+        assert!(
+            step.contains("earliest_version: \"1.0.0\""),
+            "build_mcp_server must pass earliest_version from opts:\n{step}"
+        );
+    }
+
+    #[test]
+    fn patch_build_mcp_server_requires_publish_orb_steps() {
+        let (output, _) = patch_build(BUILD_FIXTURE, &make_opts_mcp());
+        let after_step = output
+            .split("name: build-mcp-server")
+            .nth(1)
+            .expect("no build-mcp-server step");
+        let step = after_step.split("\n      - ").next().unwrap_or(after_step);
+        assert!(
+            step.contains("requires: [publish-orb-my-org]"),
+            "build_mcp_server must require publish-orb steps:\n{step}"
+        );
+    }
+
+    #[test]
+    fn patch_build_mcp_server_requires_all_namespaces() {
+        let opts = PatchOpts {
+            mcp: true,
+            namespaces: vec!["ns-a".to_string(), "ns-b".to_string()],
+            ..make_opts()
+        };
+        let (output, _) = patch_build(BUILD_FIXTURE, &opts);
+        let after_step = output
+            .split("name: build-mcp-server")
+            .nth(1)
+            .expect("no build-mcp-server step");
+        let step = after_step.split("\n      - ").next().unwrap_or(after_step);
+        assert!(
+            step.contains("publish-orb-ns-a") && step.contains("publish-orb-ns-b"),
+            "build_mcp_server must require all publish-orb steps:\n{step}"
+        );
+    }
+
+    #[test]
+    fn patch_build_mcp_server_uses_mcp_context() {
+        let (output, _) = patch_build(BUILD_FIXTURE, &make_opts_mcp());
+        let after_step = output
+            .split("name: build-mcp-server")
+            .nth(1)
+            .expect("no build-mcp-server step");
+        let step = after_step.split("\n      - ").next().unwrap_or(after_step);
+        assert!(
+            step.contains("context: [pcu-app]"),
+            "build_mcp_server must use mcp_context:\n{step}"
+        );
+    }
+
+    #[test]
+    fn patch_build_mcp_server_has_tag_filter() {
+        let (output, _) = patch_build(BUILD_FIXTURE, &make_opts_mcp());
+        let after_step = output
+            .split("name: build-mcp-server")
+            .nth(1)
+            .expect("no build-mcp-server step");
+        let step = after_step.split("\n      - ").next().unwrap_or(after_step);
+        assert!(
+            step.contains("tags:") && step.contains("/^mytool-v.*/"),
+            "build_mcp_server step must have tag filter:\n{step}"
+        );
+    }
+
+    #[test]
+    fn patch_build_mcp_is_idempotent() {
         let (first, _) = patch_build(BUILD_FIXTURE, &make_opts_mcp());
         let (second, second_report) = patch_build(&first, &make_opts_mcp());
         assert_eq!(first, second, "second mcp patch changed content");
@@ -1528,227 +1534,78 @@ workflows:
             second_report
                 .skipped
                 .iter()
-                .any(|s| s.contains("gen-orb-mcp")),
-            "expected gen-orb-mcp skipped on second run:\n{:?}",
+                .any(|s| s.contains("orb-release")),
+            "expected orb-release skipped on second run:\n{:?}",
             second_report.skipped
         );
     }
 
     #[test]
-    fn patch_build_mcp_adds_build_mcp_binary_job_to_jobs_section() {
+    fn patch_build_mcp_does_not_add_gen_orb_mcp_orb_entry() {
         let (output, _) = patch_build(BUILD_FIXTURE, &make_opts_mcp());
         assert!(
-            output.contains("  build-mcp-binary:"),
-            "missing build-mcp-binary job definition:\n{output}"
-        );
-        let jobs_pos = output.find("\njobs:").expect("no jobs: section");
-        let workflows_pos = output.find("\nworkflows:").expect("no workflows: section");
-        let pos = output
-            .find("  build-mcp-binary:")
-            .expect("no build-mcp-binary job");
-        assert!(
-            pos > jobs_pos && pos < workflows_pos,
-            "build-mcp-binary must be in the jobs section:\n{output}"
+            !output.contains("gen-orb-mcp: jerus-org"),
+            "gen-orb-mcp orb must not appear — build_mcp_server is part of gen-circleci-orb:\n{output}"
         );
     }
 
     #[test]
-    fn patch_build_mcp_build_binary_job_uses_rust_image() {
-        let (output, _) = patch_build(BUILD_FIXTURE, &make_opts_mcp());
-        let block = job_block(&output, "build-mcp-binary");
+    fn patch_build_step2_skips_when_orb_references_present() {
+        // A config that already uses gen-circleci-orb orb references (not inline jobs)
+        // must not get duplicate inline job definitions added by step2.
+        let (first, _) = patch_build(BUILD_FIXTURE_ORB_REFS, &make_opts());
+        let (second, second_report) = patch_build(&first, &make_opts());
+        assert_eq!(
+            first, second,
+            "second patch changed content on orb-ref config"
+        );
         assert!(
-            block.contains("rust:latest"),
-            "build-mcp-binary must use rust:latest (gen-orb-mcp executor has no cargo):\n{block}"
+            second_report
+                .skipped
+                .iter()
+                .any(|s| s.contains("build-binary")),
+            "step2 must be skipped when orb references are already present:\n{:?}",
+            second_report.skipped
+        );
+        // Must not contain two build-binary job definitions
+        let count = first.matches("build-binary:").count();
+        assert!(
+            count <= 2,
+            "must not have duplicate build-binary entries (found {count}):\n{first}"
         );
     }
 
-    #[test]
-    fn patch_build_mcp_adds_generate_step_to_orb_release_workflow() {
-        let (output, _) = patch_build(BUILD_FIXTURE, &make_opts_mcp());
-        let after_wf = output
-            .split("  orb-release:")
-            .nth(1)
-            .expect("no orb-release workflow");
-        assert!(
-            after_wf.contains("gen-orb-mcp/generate:"),
-            "missing generate-mcp-server step:\n{after_wf}"
-        );
-        assert!(
-            after_wf.contains("name: generate-mcp-server"),
-            "generate step must be named generate-mcp-server:\n{after_wf}"
-        );
-        assert!(
-            after_wf.contains("force: true"),
-            "generate step must set force: true for non-interactive CI:\n{after_wf}"
-        );
-        assert!(
-            after_wf.contains("tag_prefix: mytool-v"),
-            "generate step must pass crate_tag_prefix as tag_prefix:\n{after_wf}"
-        );
-        assert!(
-            after_wf.contains("orb/src/@orb.yml"),
-            "generate step must reference orb_path:\n{after_wf}"
-        );
-    }
+    const BUILD_FIXTURE_ORB_REFS: &str = "\
+version: 2.1
 
-    #[test]
-    fn patch_build_mcp_generate_requires_all_publish_orb_steps() {
-        let (output, _) = patch_build(BUILD_FIXTURE, &make_opts_mcp());
-        let after_generate = output
-            .split("name: generate-mcp-server")
-            .nth(1)
-            .expect("no generate step");
-        let step_block = after_generate
-            .split("\n      - ")
-            .next()
-            .unwrap_or(after_generate);
-        assert!(
-            step_block.contains("requires: [publish-orb-my-org]"),
-            "generate step must require publish-orb steps:\n{step_block}"
-        );
-    }
+orbs:
+  toolkit: jerus-org/circleci-toolkit@6.0.0
+  orb-tools: circleci/orb-tools@12.4.0
+  gen-circleci-orb: jerus-org/gen-circleci-orb@0.0.1
 
-    #[test]
-    fn patch_build_mcp_generate_requires_all_namespaces_multi_ns() {
-        let opts = PatchOpts {
-            mcp: true,
-            namespaces: vec!["ns-a".to_string(), "ns-b".to_string()],
-            ..make_opts()
-        };
-        let (output, _) = patch_build(BUILD_FIXTURE, &opts);
-        let after_generate = output
-            .split("name: generate-mcp-server")
-            .nth(1)
-            .expect("no generate step");
-        let step_block = after_generate
-            .split("\n      - ")
-            .next()
-            .unwrap_or(after_generate);
-        assert!(
-            step_block.contains("publish-orb-ns-a") && step_block.contains("publish-orb-ns-b"),
-            "generate step must require all publish-orb steps:\n{step_block}"
-        );
-    }
+workflows:
+  validation:
+    jobs:
+      - toolkit/common_tests
 
-    #[test]
-    fn patch_build_mcp_adds_build_workflow_step() {
-        let (output, _) = patch_build(BUILD_FIXTURE, &make_opts_mcp());
-        let after_wf = output
-            .split("  orb-release:")
-            .nth(1)
-            .expect("no orb-release workflow");
-        assert!(
-            after_wf.contains("- build-mcp-binary:"),
-            "missing build-mcp-binary workflow step:\n{after_wf}"
-        );
-        let after_build_step = after_wf
-            .split("- build-mcp-binary:")
-            .nth(1)
-            .expect("no build-mcp-binary step");
-        let step_block = after_build_step
-            .split("\n      - ")
-            .next()
-            .unwrap_or(after_build_step);
-        assert!(
-            step_block.contains("requires: [generate-mcp-server]"),
-            "build-mcp-binary must require generate-mcp-server:\n{step_block}"
-        );
-    }
-
-    #[test]
-    fn patch_build_mcp_adds_publish_workflow_step() {
-        let (output, _) = patch_build(BUILD_FIXTURE, &make_opts_mcp());
-        let after_wf = output
-            .split("  orb-release:")
-            .nth(1)
-            .expect("no orb-release workflow");
-        assert!(
-            after_wf.contains("gen-orb-mcp/publish:"),
-            "missing publish-mcp-server step:\n{after_wf}"
-        );
-        assert!(
-            after_wf.contains("name: publish-mcp-server"),
-            "publish step must be named publish-mcp-server:\n{after_wf}"
-        );
-        let after_publish = after_wf
-            .split("name: publish-mcp-server")
-            .nth(1)
-            .expect("no publish step");
-        let step_block = after_publish
-            .split("\n      - ")
-            .next()
-            .unwrap_or(after_publish);
-        assert!(
-            step_block.contains("requires: [build-mcp-binary]"),
-            "publish step must require build-mcp-binary:\n{step_block}"
-        );
-        assert!(
-            step_block.contains("context: [pcu-app]"),
-            "publish step must use mcp_context:\n{step_block}"
-        );
-        assert!(
-            step_block.contains("asset_name: mytool-mcp-linux-x86_64"),
-            "publish step must set asset_name:\n{step_block}"
-        );
-    }
-
-    #[test]
-    fn patch_build_mcp_adds_save_workflow_step() {
-        let (output, _) = patch_build(BUILD_FIXTURE, &make_opts_mcp());
-        let after_wf = output
-            .split("  orb-release:")
-            .nth(1)
-            .expect("no orb-release workflow");
-        assert!(
-            after_wf.contains("gen-orb-mcp/save:"),
-            "missing save-mcp-server step:\n{after_wf}"
-        );
-        assert!(
-            after_wf.contains("name: save-mcp-server"),
-            "save step must be named save-mcp-server:\n{after_wf}"
-        );
-        let after_save = after_wf
-            .split("name: save-mcp-server")
-            .nth(1)
-            .expect("no save step");
-        let step_block = after_save.split("\n      - ").next().unwrap_or(after_save);
-        assert!(
-            step_block.contains("requires: [generate-mcp-server]"),
-            "save step must require generate-mcp-server:\n{step_block}"
-        );
-        assert!(
-            step_block.contains("context: [pcu-app]"),
-            "save step must use mcp_context:\n{step_block}"
-        );
-    }
-
-    #[test]
-    fn patch_build_mcp_steps_have_tag_filters() {
-        let (output, _) = patch_build(BUILD_FIXTURE, &make_opts_mcp());
-        let after_wf = output
-            .split("  orb-release:")
-            .nth(1)
-            .expect("no orb-release workflow");
-        for name in &[
-            "generate-mcp-server",
-            "build-mcp-binary",
-            "publish-mcp-server",
-            "save-mcp-server",
-        ] {
-            let after_step = after_wf
-                .split(&format!("name: {name}"))
-                .nth(1)
-                .or_else(|| after_wf.split(&format!("- {name}:")).nth(1))
-                .unwrap_or_else(|| panic!("no {name} step in orb-release workflow"));
-            let step = after_step.split("\n      - ").next().unwrap_or(after_step);
-            assert!(
-                step.contains("tags:"),
-                "step {name} must have tags: filter:\n{step}"
-            );
-            assert!(
-                step.contains("/^mytool-v.*/"),
-                "step {name} must have tag pattern:\n{step}"
-            );
-        }
-    }
+      - gen-circleci-orb/build_rust_binary:
+          name: build-binary
+          package: mytool
+          requires:
+            - toolkit/common_tests
+      - gen-circleci-orb/generate:
+          name: regenerate-orb
+          binary: mytool
+          orb_namespace: my-org
+          requires:
+            - build-binary
+      - orb-tools/pack:
+          name: pack-orb
+          source_dir: orb/src
+          requires: [regenerate-orb]
+      - orb-tools/review:
+          name: review-orb
+          source_dir: orb/src
+          requires: [pack-orb]
+";
 }
