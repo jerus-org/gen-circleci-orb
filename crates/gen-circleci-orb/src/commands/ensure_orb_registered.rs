@@ -2,9 +2,8 @@ use anyhow::{Context, Result};
 
 /// Ensure a CircleCI orb is registered, creating it if it does not exist.
 ///
-/// Authenticates the CircleCI CLI via the `CIRCLE_TOKEN` environment variable
-/// (exported as `CIRCLECI_CLI_TOKEN`) rather than calling `circleci setup`,
-/// which was removed in newer CLI releases.
+/// Uses the CircleCI GraphQL API directly so it runs in any executor that has
+/// the gen-circleci-orb binary — no `circleci` developer CLI required.
 #[derive(Debug, clap::Args)]
 pub struct EnsureOrbRegistered {
     /// The orb name to check/register (e.g. my-org/my-orb).
@@ -19,25 +18,128 @@ pub struct EnsureOrbRegistered {
     pub private: bool,
 }
 
-/// Abstraction over circleci CLI invocation for testability.
-pub(crate) trait CliRunner {
-    fn run(&self, args: &[&str], token: &str) -> Result<(i32, String, String)>;
+/// Abstraction over orb registration for testability.
+pub(crate) trait OrbRegistrar {
+    /// Returns true if the orb is already registered.
+    fn is_registered(&self, orb_name: &str) -> Result<bool>;
+    /// Creates the orb. Returns Ok if created or already exists.
+    fn create_orb(&self, orb_name: &str, private: bool) -> Result<()>;
 }
 
-pub(crate) struct ProcessRunner;
+/// Calls the CircleCI GraphQL API at https://circleci.com/graphql-unstable.
+pub(crate) struct CircleCiApi {
+    token: String,
+    client: reqwest::blocking::Client,
+}
 
-impl CliRunner for ProcessRunner {
-    fn run(&self, args: &[&str], token: &str) -> Result<(i32, String, String)> {
-        let (program, rest) = args.split_first().context("empty args")?;
-        let output = std::process::Command::new(program)
-            .args(rest)
-            .env("CIRCLECI_CLI_TOKEN", token)
-            .output()
-            .with_context(|| format!("failed to run {program}"))?;
-        let exit = output.status.code().unwrap_or(1);
-        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-        Ok((exit, stdout, stderr))
+impl CircleCiApi {
+    const URL: &'static str = "https://circleci.com/graphql-unstable";
+
+    pub fn new(token: String) -> Result<Self> {
+        let client = reqwest::blocking::Client::builder()
+            .build()
+            .context("failed to build HTTP client")?;
+        Ok(Self { token, client })
+    }
+
+    fn graphql(&self, query: &str, variables: serde_json::Value) -> Result<serde_json::Value> {
+        let resp = self
+            .client
+            .post(Self::URL)
+            .header("Authorization", &self.token)
+            .json(&serde_json::json!({ "query": query, "variables": variables }))
+            .send()
+            .context("GraphQL request failed")?;
+
+        let status = resp.status();
+        let body: serde_json::Value = resp.json().context("failed to parse GraphQL response")?;
+
+        if !status.is_success() {
+            anyhow::bail!("GraphQL HTTP {} : {}", status, body);
+        }
+
+        if let Some(errors) = body.get("errors").and_then(|e| e.as_array()) {
+            if !errors.is_empty() {
+                anyhow::bail!(
+                    "GraphQL errors: {}",
+                    errors
+                        .iter()
+                        .filter_map(|e| e["message"].as_str())
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                );
+            }
+        }
+
+        Ok(body)
+    }
+}
+
+impl OrbRegistrar for CircleCiApi {
+    fn is_registered(&self, orb_name: &str) -> Result<bool> {
+        let namespace = orb_name
+            .split('/')
+            .next()
+            .context("orb_name must be namespace/name")?;
+
+        let resp = self.graphql(
+            r#"query ($name: String!, $namespace: String) {
+                orb(name: $name) { id }
+                registryNamespace(name: $namespace) { id }
+            }"#,
+            serde_json::json!({ "name": orb_name, "namespace": namespace }),
+        )?;
+
+        Ok(resp["data"]["orb"]["id"]
+            .as_str()
+            .map(|s| !s.is_empty())
+            .unwrap_or(false))
+    }
+
+    fn create_orb(&self, orb_name: &str, private: bool) -> Result<()> {
+        let (namespace, name) = orb_name
+            .split_once('/')
+            .context("orb_name must be namespace/name")?;
+
+        let ns_resp = self.graphql(
+            r#"query($name: String!) { registryNamespace(name: $name) { id } }"#,
+            serde_json::json!({ "name": namespace }),
+        )?;
+
+        let ns_id = ns_resp["data"]["registryNamespace"]["id"]
+            .as_str()
+            .with_context(|| format!("namespace '{namespace}' not found"))?
+            .to_owned();
+
+        let create_resp = self.graphql(
+            r#"mutation($name: String!, $registryNamespaceId: UUID!, $isPrivate: Boolean!) {
+                createOrb(
+                    name: $name,
+                    registryNamespaceId: $registryNamespaceId,
+                    isPrivate: $isPrivate
+                ) {
+                    orb { id }
+                    errors { message type }
+                }
+            }"#,
+            serde_json::json!({
+                "name": name,
+                "registryNamespaceId": ns_id,
+                "isPrivate": private,
+            }),
+        )?;
+
+        if let Some(errors) = create_resp["data"]["createOrb"]["errors"].as_array() {
+            if !errors.is_empty() {
+                let msg = errors[0]["message"].as_str().unwrap_or("unknown error");
+                if msg.contains("already exists") {
+                    return Ok(());
+                }
+                anyhow::bail!("createOrb failed: {msg}");
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -45,28 +147,17 @@ impl EnsureOrbRegistered {
     pub fn run(&self) -> Result<()> {
         let token =
             std::env::var("CIRCLE_TOKEN").context("CIRCLE_TOKEN environment variable not set")?;
-        self.run_with_runner(&ProcessRunner, &token)
+        let api = CircleCiApi::new(token)?;
+        self.run_with_registrar(&api)
     }
 
-    pub(crate) fn run_with_runner<R: CliRunner>(&self, runner: &R, token: &str) -> Result<()> {
-        let (info_exit, _, _) = runner.run(&["circleci", "orb", "info", &self.orb_name], token)?;
-
-        if info_exit == 0 || info_exit == 255 {
+    pub(crate) fn run_with_registrar<R: OrbRegistrar>(&self, registrar: &R) -> Result<()> {
+        if registrar.is_registered(&self.orb_name)? {
             println!("Orb is registered.");
             return Ok(());
         }
 
-        let mut args = vec!["circleci", "orb", "create", &self.orb_name, "--no-prompt"];
-        if self.private {
-            args.push("--private");
-        }
-        let (create_exit, create_out, create_err) = runner.run(&args, token)?;
-        let combined = format!("{create_out}{create_err}");
-
-        if create_exit != 0 && create_exit != 255 && !combined.contains("already exists") {
-            anyhow::bail!("circleci orb create failed (exit {create_exit}): {combined}");
-        }
-
+        registrar.create_orb(&self.orb_name, self.private)?;
         println!("Orb is registered.");
         Ok(())
     }
@@ -75,40 +166,55 @@ impl EnsureOrbRegistered {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::RefCell;
-    use std::collections::VecDeque;
+    use std::cell::Cell;
 
-    struct FakeRunner {
-        responses: RefCell<VecDeque<(i32, String, String)>>,
-        calls: RefCell<Vec<Vec<String>>>,
+    struct FakeRegistrar {
+        registered: bool,
+        create_should_fail: bool,
+        create_call_count: Cell<u32>,
+        create_private_arg: Cell<Option<bool>>,
+        create_orb_name_arg: std::cell::RefCell<Option<String>>,
     }
 
-    impl FakeRunner {
-        fn new(responses: Vec<(i32, &str, &str)>) -> Self {
-            FakeRunner {
-                responses: RefCell::new(
-                    responses
-                        .into_iter()
-                        .map(|(e, o, er)| (e, o.to_string(), er.to_string()))
-                        .collect(),
-                ),
-                calls: RefCell::new(Vec::new()),
+    impl FakeRegistrar {
+        fn new(registered: bool) -> Self {
+            Self {
+                registered,
+                create_should_fail: false,
+                create_call_count: Cell::new(0),
+                create_private_arg: Cell::new(None),
+                create_orb_name_arg: std::cell::RefCell::new(None),
             }
         }
-        fn calls(&self) -> Vec<Vec<String>> {
-            self.calls.borrow().clone()
+        fn failing() -> Self {
+            Self {
+                create_should_fail: true,
+                ..Self::new(false)
+            }
+        }
+        fn create_call_count(&self) -> u32 {
+            self.create_call_count.get()
+        }
+        fn create_private_arg(&self) -> Option<bool> {
+            self.create_private_arg.get()
+        }
+        fn create_orb_name_arg(&self) -> Option<String> {
+            self.create_orb_name_arg.borrow().clone()
         }
     }
 
-    impl CliRunner for FakeRunner {
-        fn run(&self, args: &[&str], _token: &str) -> Result<(i32, String, String)> {
-            self.calls
-                .borrow_mut()
-                .push(args.iter().map(|s| s.to_string()).collect());
-            self.responses
-                .borrow_mut()
-                .pop_front()
-                .ok_or_else(|| anyhow::anyhow!("FakeRunner: no more responses"))
+    impl OrbRegistrar for FakeRegistrar {
+        fn is_registered(&self, _orb_name: &str) -> Result<bool> {
+            Ok(self.registered)
+        }
+        fn create_orb(&self, orb_name: &str, private: bool) -> Result<()> {
+            self.create_call_count.set(self.create_call_count.get() + 1);
+            self.create_private_arg.set(Some(private));
+            *self.create_orb_name_arg.borrow_mut() = Some(orb_name.to_owned());
+            if self.create_should_fail {
+                anyhow::bail!("create failed");
+            }
+            Ok(())
         }
     }
 
@@ -120,103 +226,60 @@ mod tests {
     }
 
     #[test]
-    fn orb_exists_exit_0_returns_ok() {
-        let runner = FakeRunner::new(vec![(0, "", "")]);
-        assert!(cmd("my-org/my-orb").run_with_runner(&runner, "tok").is_ok());
+    fn already_registered_returns_ok() {
+        let r = FakeRegistrar::new(true);
+        assert!(cmd("my-org/my-orb").run_with_registrar(&r).is_ok());
     }
 
     #[test]
-    fn orb_exists_exit_255_tls_quirk_returns_ok() {
-        let runner = FakeRunner::new(vec![(255, "", "")]);
-        assert!(cmd("my-org/my-orb").run_with_runner(&runner, "tok").is_ok());
+    fn already_registered_skips_create() {
+        let r = FakeRegistrar::new(true);
+        cmd("my-org/my-orb").run_with_registrar(&r).unwrap();
+        assert_eq!(r.create_call_count(), 0);
     }
 
     #[test]
-    fn orb_exists_only_calls_info_not_create() {
-        let runner = FakeRunner::new(vec![(0, "", "")]);
-        cmd("my-org/my-orb")
-            .run_with_runner(&runner, "tok")
-            .unwrap();
-        let calls = runner.calls();
-        assert_eq!(calls.len(), 1);
-        assert!(calls[0].contains(&"info".to_string()));
-        assert!(!calls[0].iter().any(|a| a == "create"));
+    fn not_registered_calls_create() {
+        let r = FakeRegistrar::new(false);
+        cmd("my-org/my-orb").run_with_registrar(&r).unwrap();
+        assert_eq!(r.create_call_count(), 1);
     }
 
     #[test]
-    fn orb_not_found_calls_create() {
-        let runner = FakeRunner::new(vec![(1, "", ""), (0, "", "")]);
-        cmd("my-org/my-orb")
-            .run_with_runner(&runner, "tok")
-            .unwrap();
-        assert_eq!(runner.calls().len(), 2);
-        assert!(runner.calls()[1].contains(&"create".to_string()));
+    fn create_receives_orb_name() {
+        let r = FakeRegistrar::new(false);
+        cmd("my-org/my-orb").run_with_registrar(&r).unwrap();
+        assert_eq!(r.create_orb_name_arg().as_deref(), Some("my-org/my-orb"));
     }
 
     #[test]
-    fn info_and_create_both_receive_orb_name() {
-        let runner = FakeRunner::new(vec![(1, "", ""), (0, "", "")]);
-        cmd("my-org/my-orb")
-            .run_with_runner(&runner, "tok")
-            .unwrap();
-        let calls = runner.calls();
-        assert!(
-            calls[0].contains(&"my-org/my-orb".to_string()),
-            "info must include orb name"
-        );
-        assert!(
-            calls[1].contains(&"my-org/my-orb".to_string()),
-            "create must include orb name"
-        );
-    }
-
-    #[test]
-    fn create_includes_no_prompt_flag() {
-        let runner = FakeRunner::new(vec![(1, "", ""), (0, "", "")]);
-        cmd("my-org/my-orb")
-            .run_with_runner(&runner, "tok")
-            .unwrap();
-        assert!(runner.calls()[1].contains(&"--no-prompt".to_string()));
-    }
-
-    #[test]
-    fn private_flag_adds_private_to_create() {
-        let runner = FakeRunner::new(vec![(1, "", ""), (0, "", "")]);
+    fn create_private_true_passed_through() {
+        let r = FakeRegistrar::new(false);
         EnsureOrbRegistered {
-            orb_name: "my-org/my-orb".to_string(),
+            orb_name: "my-org/my-orb".into(),
             private: true,
         }
-        .run_with_runner(&runner, "tok")
+        .run_with_registrar(&r)
         .unwrap();
-        assert!(runner.calls()[1].contains(&"--private".to_string()));
+        assert_eq!(r.create_private_arg(), Some(true));
     }
 
     #[test]
-    fn public_orb_create_omits_private_flag() {
-        let runner = FakeRunner::new(vec![(1, "", ""), (0, "", "")]);
-        cmd("my-org/my-orb")
-            .run_with_runner(&runner, "tok")
-            .unwrap();
-        assert!(!runner.calls()[1].contains(&"--private".to_string()));
+    fn create_private_false_passed_through() {
+        let r = FakeRegistrar::new(false);
+        cmd("my-org/my-orb").run_with_registrar(&r).unwrap();
+        assert_eq!(r.create_private_arg(), Some(false));
     }
 
     #[test]
-    fn create_exit_255_treated_as_success() {
-        let runner = FakeRunner::new(vec![(1, "", ""), (255, "", "")]);
-        assert!(cmd("my-org/my-orb").run_with_runner(&runner, "tok").is_ok());
+    fn create_failure_propagates_error() {
+        let r = FakeRegistrar::failing();
+        assert!(cmd("my-org/my-orb").run_with_registrar(&r).is_err());
     }
 
     #[test]
-    fn create_already_exists_in_output_treated_as_success() {
-        let runner = FakeRunner::new(vec![(1, "", ""), (1, "orb already exists", "")]);
-        assert!(cmd("my-org/my-orb").run_with_runner(&runner, "tok").is_ok());
-    }
-
-    #[test]
-    fn create_other_failure_returns_error() {
-        let runner = FakeRunner::new(vec![(1, "", ""), (1, "some other error", "")]);
-        assert!(cmd("my-org/my-orb")
-            .run_with_runner(&runner, "tok")
-            .is_err());
+    fn not_registered_returns_ok_when_create_succeeds() {
+        let r = FakeRegistrar::new(false);
+        assert!(cmd("my-org/my-orb").run_with_registrar(&r).is_ok());
     }
 }

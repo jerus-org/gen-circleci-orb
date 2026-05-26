@@ -1,7 +1,6 @@
 description: >
   Ensure a CircleCI orb is registered before publishing.
-  Runs circleci orb info; if the orb is not found, creates it.
-  Accepts circleci CLI exit 255 (TLS/network quirks) as non-fatal.
+  Calls the CircleCI GraphQL API — no circleci developer CLI required.
 parameters:
   orb_name:
     type: string
@@ -13,7 +12,11 @@ parameters:
 steps:
   - run:
       name: Ensure orb is registered
-      command: <<include(scripts/ensure_orb_registered.sh)>>
-      environment:
-        ORB_NAME: << parameters.orb_name >>
-        PRIVATE: << parameters.private >>
+      command: |
+        PRIVATE_FLAG=""
+        if [ "<< parameters.private >>" = "true" ]; then
+          PRIVATE_FLAG="--private"
+        fi
+        gen-circleci-orb ensure-orb-registered \
+          --orb-name "<< parameters.orb_name >>" \
+          $PRIVATE_FLAG

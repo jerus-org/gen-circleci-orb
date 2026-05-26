@@ -1,6 +1,5 @@
 description: Ensure a CircleCI orb is registered, creating it if it does not exist.
-docker:
-  - image: cimg/base:stable
+executor: default
 parameters:
   orb_name:
     type: string
