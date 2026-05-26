@@ -1,0 +1,817 @@
+version: '2.1'
+description: |
+  Generate a CircleCI orb to provide the facilities offered by a CLI program
+display:
+  home_url: https://github.com/jerus-org/gen-circleci-orb
+  source_url: https://github.com/jerus-org/gen-circleci-orb
+orbs: {}
+commands:
+  build_container:
+    description: Build and push a Docker image for a CLI binary, copying the binary from workspace.
+    parameters:
+      docker_namespace:
+        type: string
+        description: Docker Hub namespace (e.g. jerusdp)
+        default: null
+        enum: null
+      crate_tag_prefix:
+        type: string
+        description: Tag prefix to strip from CIRCLE_TAG to get the bare semver version
+        default: null
+        enum: null
+      orb_dir:
+        type: string
+        description: Directory containing the Dockerfile
+        default: orb
+        enum: null
+      binary:
+        type: string
+        description: Name of the binary (used for the Docker image name and binary filename)
+        default: null
+        enum: null
+    steps:
+    - attach_workspace:
+        at: /tmp/bin
+    - setup_remote_docker
+    - run:
+        command: <<include(scripts/build_container.sh)>>
+        name: Build and push Docker image
+        working_directory: null
+        environment:
+          ORB_DIR: << parameters.orb_dir >>
+          BINARY: << parameters.binary >>
+          DOCKER_NAMESPACE: << parameters.docker_namespace >>
+          CRATE_TAG_PREFIX: << parameters.crate_tag_prefix >>
+        shell: null
+        background: null
+        no_output_timeout: null
+        when: null
+  ensure_orb_registered:
+    description: |
+      Ensure a CircleCI orb is registered before publishing. Runs circleci orb info; if the orb is not found, creates it. Accepts circleci CLI exit 255 (TLS/network quirks) as non-fatal.
+    parameters:
+      orb_name:
+        type: string
+        description: The orb name to check/register (e.g. my-org/my-orb)
+        default: null
+        enum: null
+      private:
+        type: boolean
+        description: Register the orb as private when creating it
+        default: false
+        enum: null
+    steps:
+    - run:
+        command: <<include(scripts/ensure_orb_registered.sh)>>
+        name: Ensure orb is registered
+        working_directory: null
+        environment:
+          PRIVATE: << parameters.private >>
+          ORB_NAME: << parameters.orb_name >>
+        shell: null
+        background: null
+        no_output_timeout: null
+        when: null
+  init:
+    description: Wire orb generation into an existing repo's CI configuration
+    parameters:
+      dry_run:
+        type: boolean
+        description: Show planned changes without modifying any files
+        default: false
+        enum: null
+      build_workflow:
+        type: string
+        description: Name of the build/validation workflow to patch
+        default: null
+        enum: null
+      release_after_job:
+        type: string
+        description: Job in the release workflow after which build-container should run
+        default: ''
+        enum: null
+      binary:
+        type: string
+        description: Name of the binary to introspect (must be on PATH)
+        default: null
+        enum: null
+      requires_job:
+        type: string
+        description: Job in the build workflow that regenerate-orb should require
+        default: ''
+        enum: null
+      orb_context:
+        type: string
+        description: CircleCI context name holding orb publishing credentials
+        default: orb-publishing
+        enum: null
+      public_orb_namespace:
+        type: string
+        description: CircleCI namespace(s) to publish the orb under as a public orb (repeatable). Must be set correctly on first init — visibility cannot be changed after the orb is created
+        default: ''
+        enum: null
+      docker_orb_version:
+        type: string
+        description: circleci/docker orb version to pin in generated CI
+        default: 3.2.0
+        enum: null
+      docker_namespace:
+        type: string
+        description: Docker Hub (or registry) namespace for the built container image
+        default: null
+        enum: null
+      docker_context:
+        type: string
+        description: CircleCI context name holding Docker Hub credentials
+        default: docker-credentials
+        enum: null
+      release_workflow:
+        type: string
+        description: Name of the release workflow to patch
+        default: null
+        enum: null
+      ci_dir:
+        type: string
+        description: Path to the .circleci/ directory
+        default: .circleci
+        enum: null
+      private_orb_namespace:
+        type: string
+        description: CircleCI namespace(s) to publish the orb under as a private orb (repeatable). Each listed namespace gets `--private` in its `circleci orb create` command. Must be set correctly on first init — visibility cannot be changed after the orb is created
+        default: ''
+        enum: null
+      orb_dir:
+        type: string
+        description: Output directory for the generated orb source (relative to repo root)
+        default: orb
+        enum: null
+      mcp:
+        type: boolean
+        description: Wire in toolkit/build_mcp_server after orb publish (requires jerus-org/circleci-toolkit)
+        default: false
+        enum: null
+      orb_tools_version:
+        type: string
+        description: circleci/orb-tools version to pin in generated CI
+        default: 12.3.3
+        enum: null
+    steps:
+    - run:
+        command: <<include(scripts/init.sh)>>
+        name: init
+        working_directory: null
+        environment:
+          CI_DIR: << parameters.ci_dir >>
+          PRIVATE_ORB_NAMESPACE: << parameters.private_orb_namespace >>
+          DOCKER_CONTEXT: << parameters.docker_context >>
+          DRY_RUN: << parameters.dry_run >>
+          RELEASE_AFTER_JOB: << parameters.release_after_job >>
+          PUBLIC_ORB_NAMESPACE: << parameters.public_orb_namespace >>
+          ORB_CONTEXT: << parameters.orb_context >>
+          MCP: << parameters.mcp >>
+          BUILD_WORKFLOW: << parameters.build_workflow >>
+          RELEASE_WORKFLOW: << parameters.release_workflow >>
+          DOCKER_ORB_VERSION: << parameters.docker_orb_version >>
+          REQUIRES_JOB: << parameters.requires_job >>
+          DOCKER_NAMESPACE: << parameters.docker_namespace >>
+          BINARY: << parameters.binary >>
+          ORB_DIR: << parameters.orb_dir >>
+          ORB_TOOLS_VERSION: << parameters.orb_tools_version >>
+        shell: null
+        background: null
+        no_output_timeout: null
+        when: null
+  generate:
+    description: Generate orb source files from a CLI binary's --help output
+    parameters:
+      home_url:
+        type: string
+        description: Home URL for the orb registry display section
+        default: ''
+        enum: null
+      source_url:
+        type: string
+        description: Source URL for the orb registry display section
+        default: ''
+        enum: null
+      git_push_subcommand:
+        type: string
+        description: |
+          Subcommand name to inject a set_https_remote step into its generated job. Use for subcommands that push to git (e.g. save). Pass empty string to skip.
+        default: ''
+        enum: null
+      orb_namespace:
+        type: string
+        description: CircleCI orb namespace(s) to publish the orb under (repeatable)
+        default: null
+        enum: null
+      binary:
+        type: string
+        description: Name of the binary to introspect (must be on PATH)
+        default: null
+        enum: null
+      install_method:
+        type: enum
+        description: How the binary is installed in the generated Docker image
+        default: binstall
+        enum:
+        - binstall
+        - apt
+      output:
+        type: string
+        description: Project root directory (orb source is written to <output>/<orb-dir>/)
+        default: .
+        enum: null
+      orb_dir:
+        type: string
+        description: 'Subdirectory within --output where orb source is written (default: orb)'
+        default: orb
+        enum: null
+      base_image:
+        type: string
+        description: Base Docker image for the generated executor
+        default: debian:12-slim
+        enum: null
+      dry_run:
+        type: boolean
+        description: Show planned output without writing any files
+        default: false
+        enum: null
+    steps:
+    - run:
+        command: <<include(scripts/generate.sh)>>
+        name: generate
+        working_directory: null
+        environment:
+          INSTALL_METHOD: << parameters.install_method >>
+          DRY_RUN: << parameters.dry_run >>
+          ORB_NAMESPACE: << parameters.orb_namespace >>
+          SOURCE_URL: << parameters.source_url >>
+          BINARY: << parameters.binary >>
+          BASE_IMAGE: << parameters.base_image >>
+          OUTPUT: << parameters.output >>
+          HOME_URL: << parameters.home_url >>
+          ORB_DIR: << parameters.orb_dir >>
+          GIT_PUSH_SUBCOMMAND: << parameters.git_push_subcommand >>
+        shell: null
+        background: null
+        no_output_timeout: null
+        when: null
+  set_https_remote:
+    description: |
+      Remove the SSH insteadOf rewrite rule that CircleCI checkout injects and set both the fetch and push URLs for origin to HTTPS.
+      CircleCI's checkout step writes url."ssh://git@github.com".insteadOf = https://github.com into ~/.gitconfig. This causes git and libgit2 (used by pcu push_commit) to transparently rewrite every HTTPS GitHub URL back to SSH, making git remote set-url have no observable effect on the effective URL. Without this step, pcu falls back to the read-only SSH deploy key instead of authenticating with the GitHub App token.
+    parameters: {}
+    steps:
+    - run:
+        command: <<include(scripts/set_https_remote.sh)>>
+        name: Set HTTPS remote URLs (fetch and push)
+        working_directory: null
+        environment: {}
+        shell: null
+        background: null
+        no_output_timeout: null
+        when: null
+  build_rust_binary:
+    description: Build a Rust binary from a workspace package and persist it to workspace.
+    parameters:
+      cargo_args:
+        type: string
+        description: Additional arguments passed to cargo build --release
+        default: ''
+        enum: null
+      package:
+        type: string
+        description: Cargo package name within the workspace (passed to --package)
+        default: null
+        enum: null
+      binary:
+        type: string
+        description: Binary target name if it differs from the package name; defaults to package name
+        default: ''
+        enum: null
+    steps:
+    - run:
+        command: <<include(scripts/build_rust_binary.sh)>>
+        name: Build << parameters.package >> binary
+        working_directory: null
+        environment:
+          CARGO_ARGS: << parameters.cargo_args >>
+          PACKAGE: << parameters.package >>
+        shell: null
+        background: null
+        no_output_timeout: null
+        when: null
+    - run:
+        command: <<include(scripts/persist_binary.sh)>>
+        name: Persist binary to workspace
+        working_directory: null
+        environment:
+          PACKAGE: << parameters.package >>
+          BINARY_OVERRIDE: << parameters.binary >>
+        shell: null
+        background: null
+        no_output_timeout: null
+        when: null
+    - persist_to_workspace:
+        root: /tmp/workspace
+        paths:
+        - .
+jobs:
+  build_mcp_server:
+    description: |
+      Generate, compile, publish, and commit back the MCP server for a CircleCI orb. Runs after the orb is published: primes prior-version snapshots, generates and compiles the MCP server binary from the orb definition, uploads it to the GitHub release, then commits prior-versions/ and migrations/ back to the repository main branch using a signed commit via the GitHub App token.
+    executor: null
+    docker:
+    - image: jerusdp/gen-orb-mcp:<< parameters.gen_orb_mcp_tag >>
+      auth: null
+      aws_auth: null
+      name: null
+      entrypoint: null
+      command: null
+      user: null
+      environment: {}
+    machine: null
+    macos: null
+    resource_class: null
+    working_directory: null
+    environment: {}
+    shell: null
+    parameters:
+      orb_path:
+        type: string
+        description: Path to the orb source @orb.yml file
+        default: orb/src/@orb.yml
+        enum: null
+      gen_orb_mcp_tag:
+        type: string
+        description: gen-orb-mcp Docker image tag (pin to a specific version for reproducibility)
+        default: latest
+        enum: null
+      workspace_bin_path:
+        type: string
+        description: Workspace path where the binary was persisted by the build job
+        default: /tmp/bin
+        enum: null
+      migrations_dir:
+        type: string
+        description: Directory for migration rule files
+        default: migrations
+        enum: null
+      earliest_version:
+        type: string
+        description: Earliest orb version to include when priming prior-version snapshots
+        default: null
+        enum: null
+      tag_prefix:
+        type: string
+        description: |
+          Git tag prefix for VERSION extraction and prime scoping (e.g. "my-tool-v").
+        default: null
+        enum: null
+      binary_name:
+        type: string
+        description: |
+          Binary name (e.g. "my-tool"). Used to locate the compiled MCP binary at target/release/{binary_name_underscored}_mcp and to name the GitHub release asset.
+        default: null
+        enum: null
+      prior_versions_dir:
+        type: string
+        description: Directory for prior-version snapshots
+        default: prior-versions
+        enum: null
+    steps:
+    - checkout
+    - attach_workspace:
+        at: << parameters.workspace_bin_path >>
+    - run:
+        command: <<include(scripts/build_mcp_server_setup.sh)>>
+        name: Set up git and environment
+        working_directory: null
+        environment:
+          WORKSPACE_BIN_PATH: << parameters.workspace_bin_path >>
+          NAME: << parameters.binary_name >>
+          TAG_PREFIX: << parameters.tag_prefix >>
+        shell: null
+        background: null
+        no_output_timeout: null
+        when: null
+    - set_https_remote
+    - run:
+        command: <<include(scripts/build_mcp_server_prime.sh)>>
+        name: Prime prior versions and migrations
+        working_directory: null
+        environment:
+          EARLIEST_VERSION: << parameters.earliest_version >>
+          ORB_PATH: << parameters.orb_path >>
+          TAG_PREFIX: << parameters.tag_prefix >>
+        shell: null
+        background: null
+        no_output_timeout: null
+        when: null
+    - run:
+        command: <<include(scripts/build_mcp_server_generate.sh)>>
+        name: Generate and compile MCP server
+        working_directory: null
+        environment:
+          NAME: << parameters.binary_name >>
+          ORB_PATH: << parameters.orb_path >>
+          MIGRATIONS_DIR: << parameters.migrations_dir >>
+          PRIOR_VERSIONS_DIR: << parameters.prior_versions_dir >>
+        shell: null
+        background: null
+        no_output_timeout: null
+        when: null
+    - run:
+        command: <<include(scripts/build_mcp_server_publish.sh)>>
+        name: Publish MCP server binary to GitHub release
+        working_directory: null
+        environment:
+          NAME: << parameters.binary_name >>
+        shell: null
+        background: null
+        no_output_timeout: null
+        when: null
+    - run:
+        command: <<include(scripts/build_mcp_server_save.sh)>>
+        name: Commit back generated artifacts
+        working_directory: null
+        environment:
+          PRIOR_VERSIONS_DIR: << parameters.prior_versions_dir >>
+          MIGRATIONS_DIR: << parameters.migrations_dir >>
+        shell: null
+        background: null
+        no_output_timeout: null
+        when: null
+    parallelism: null
+    circleci_ip_ranges: null
+  generate:
+    description: Run generate command in a dedicated job.
+    executor: default
+    docker: null
+    machine: null
+    macos: null
+    resource_class: null
+    working_directory: null
+    environment: {}
+    shell: null
+    parameters:
+      dry_run:
+        type: boolean
+        description: Show planned output without writing any files
+        default: false
+        enum: null
+      source_url:
+        type: string
+        description: Source URL for the orb registry display section
+        default: ''
+        enum: null
+      git_push_subcommand:
+        type: string
+        description: |
+          Subcommand name to inject a set_https_remote step into its generated job. Use for subcommands that push to git (e.g. save). Pass empty string to skip.
+        default: ''
+        enum: null
+      workspace_root:
+        type: string
+        description: Path at which to attach the workspace; also prepended to PATH (only used when attach_workspace is true)
+        default: /tmp/workspace
+        enum: null
+      home_url:
+        type: string
+        description: Home URL for the orb registry display section
+        default: ''
+        enum: null
+      orb_namespace:
+        type: string
+        description: CircleCI orb namespace(s) to publish the orb under (repeatable)
+        default: null
+        enum: null
+      install_method:
+        type: enum
+        description: How the binary is installed in the generated Docker image
+        default: binstall
+        enum:
+        - binstall
+        - apt
+      output:
+        type: string
+        description: Project root directory (orb source is written to <output>/<orb-dir>/)
+        default: .
+        enum: null
+      orb_dir:
+        type: string
+        description: 'Subdirectory within --output where orb source is written (default: orb)'
+        default: orb
+        enum: null
+      binary:
+        type: string
+        description: Name of the binary to introspect (must be on PATH)
+        default: null
+        enum: null
+      attach_workspace:
+        type: boolean
+        description: Attach a workspace before running generate (use when the binary was built in a prior job)
+        default: false
+        enum: null
+      base_image:
+        type: string
+        description: Base Docker image for the generated executor
+        default: debian:12-slim
+        enum: null
+    steps:
+    - checkout
+    - when:
+        condition: << parameters.attach_workspace >>
+        steps:
+        - attach_workspace:
+            at: << parameters.workspace_root >>
+        - run:
+            command: <<include(scripts/add_workspace_to_path.sh)>>
+            name: Add workspace binaries to PATH
+            working_directory: null
+            environment:
+              WORKSPACE_ROOT: << parameters.workspace_root >>
+            shell: null
+            background: null
+            no_output_timeout: null
+            when: null
+    - generate:
+        binary: << parameters.binary >>
+        orb_namespace: << parameters.orb_namespace >>
+        output: << parameters.output >>
+        install_method: << parameters.install_method >>
+        base_image: << parameters.base_image >>
+        home_url: << parameters.home_url >>
+        source_url: << parameters.source_url >>
+        orb_dir: << parameters.orb_dir >>
+        git_push_subcommand: << parameters.git_push_subcommand >>
+        dry_run: << parameters.dry_run >>
+    parallelism: null
+    circleci_ip_ranges: null
+  init:
+    description: Run init command in a dedicated job.
+    executor: default
+    docker: null
+    machine: null
+    macos: null
+    resource_class: null
+    working_directory: null
+    environment: {}
+    shell: null
+    parameters:
+      orb_dir:
+        type: string
+        description: Output directory for the generated orb source (relative to repo root)
+        default: orb
+        enum: null
+      requires_job:
+        type: string
+        description: Job in the build workflow that regenerate-orb should require
+        default: ''
+        enum: null
+      public_orb_namespace:
+        type: string
+        description: CircleCI namespace(s) to publish the orb under as a public orb (repeatable). Must be set correctly on first init — visibility cannot be changed after the orb is created
+        default: ''
+        enum: null
+      mcp:
+        type: boolean
+        description: Wire in toolkit/build_mcp_server after orb publish (requires jerus-org/circleci-toolkit)
+        default: false
+        enum: null
+      ci_dir:
+        type: string
+        description: Path to the .circleci/ directory
+        default: .circleci
+        enum: null
+      release_after_job:
+        type: string
+        description: Job in the release workflow after which build-container should run
+        default: ''
+        enum: null
+      dry_run:
+        type: boolean
+        description: Show planned changes without modifying any files
+        default: false
+        enum: null
+      binary:
+        type: string
+        description: Name of the binary to introspect (must be on PATH)
+        default: null
+        enum: null
+      build_workflow:
+        type: string
+        description: Name of the build/validation workflow to patch
+        default: null
+        enum: null
+      docker_orb_version:
+        type: string
+        description: circleci/docker orb version to pin in generated CI
+        default: 3.2.0
+        enum: null
+      docker_namespace:
+        type: string
+        description: Docker Hub (or registry) namespace for the built container image
+        default: null
+        enum: null
+      orb_context:
+        type: string
+        description: CircleCI context name holding orb publishing credentials
+        default: orb-publishing
+        enum: null
+      orb_tools_version:
+        type: string
+        description: circleci/orb-tools version to pin in generated CI
+        default: 12.3.3
+        enum: null
+      private_orb_namespace:
+        type: string
+        description: CircleCI namespace(s) to publish the orb under as a private orb (repeatable). Each listed namespace gets `--private` in its `circleci orb create` command. Must be set correctly on first init — visibility cannot be changed after the orb is created
+        default: ''
+        enum: null
+      docker_context:
+        type: string
+        description: CircleCI context name holding Docker Hub credentials
+        default: docker-credentials
+        enum: null
+      release_workflow:
+        type: string
+        description: Name of the release workflow to patch
+        default: null
+        enum: null
+    steps:
+    - checkout
+    - init:
+        binary: << parameters.binary >>
+        public_orb_namespace: << parameters.public_orb_namespace >>
+        private_orb_namespace: << parameters.private_orb_namespace >>
+        build_workflow: << parameters.build_workflow >>
+        release_workflow: << parameters.release_workflow >>
+        requires_job: << parameters.requires_job >>
+        release_after_job: << parameters.release_after_job >>
+        orb_dir: << parameters.orb_dir >>
+        ci_dir: << parameters.ci_dir >>
+        orb_tools_version: << parameters.orb_tools_version >>
+        docker_orb_version: << parameters.docker_orb_version >>
+        docker_namespace: << parameters.docker_namespace >>
+        docker_context: << parameters.docker_context >>
+        orb_context: << parameters.orb_context >>
+        mcp: << parameters.mcp >>
+        dry_run: << parameters.dry_run >>
+    parallelism: null
+    circleci_ip_ranges: null
+  build_container:
+    description: Build and push a Docker image for a CLI binary.
+    executor: null
+    docker:
+    - image: cimg/base:stable
+      auth: null
+      aws_auth: null
+      name: null
+      entrypoint: null
+      command: null
+      user: null
+      environment: {}
+    machine: null
+    macos: null
+    resource_class: null
+    working_directory: null
+    environment: {}
+    shell: null
+    parameters:
+      orb_dir:
+        type: string
+        description: Directory containing the Dockerfile
+        default: orb
+        enum: null
+      crate_tag_prefix:
+        type: string
+        description: Tag prefix to strip from CIRCLE_TAG to get the bare semver version
+        default: null
+        enum: null
+      binary:
+        type: string
+        description: Name of the binary (used for the Docker image name)
+        default: null
+        enum: null
+      docker_namespace:
+        type: string
+        description: Docker Hub namespace (e.g. jerusdp)
+        default: null
+        enum: null
+    steps:
+    - checkout
+    - build_container:
+        binary: << parameters.binary >>
+        docker_namespace: << parameters.docker_namespace >>
+        orb_dir: << parameters.orb_dir >>
+        crate_tag_prefix: << parameters.crate_tag_prefix >>
+    parallelism: null
+    circleci_ip_ranges: null
+  build_rust_binary:
+    description: Build a Rust binary from a workspace package and persist it to workspace for use in subsequent jobs.
+    executor: null
+    docker:
+    - image: << parameters.rust_image >>
+      auth: null
+      aws_auth: null
+      name: null
+      entrypoint: null
+      command: null
+      user: null
+      environment: {}
+    machine: null
+    macos: null
+    resource_class: null
+    working_directory: null
+    environment: {}
+    shell: null
+    parameters:
+      cargo_args:
+        type: string
+        description: Additional arguments passed to cargo build --release
+        default: ''
+        enum: null
+      rust_image:
+        type: string
+        description: Docker image to use for the Rust build
+        default: rust:latest
+        enum: null
+      package:
+        type: string
+        description: Cargo package name within the workspace (passed to --package)
+        default: null
+        enum: null
+      binary:
+        type: string
+        description: Binary target name if it differs from the package name; defaults to package name
+        default: ''
+        enum: null
+    steps:
+    - checkout
+    - build_rust_binary:
+        package: << parameters.package >>
+        binary: << parameters.binary >>
+        cargo_args: << parameters.cargo_args >>
+    parallelism: null
+    circleci_ip_ranges: null
+  ensure_orb_registered:
+    description: Ensure a CircleCI orb is registered, creating it if it does not exist.
+    executor: null
+    docker:
+    - image: cimg/base:stable
+      auth: null
+      aws_auth: null
+      name: null
+      entrypoint: null
+      command: null
+      user: null
+      environment: {}
+    machine: null
+    macos: null
+    resource_class: null
+    working_directory: null
+    environment: {}
+    shell: null
+    parameters:
+      orb_name:
+        type: string
+        description: The orb name to check/register (e.g. my-org/my-orb)
+        default: null
+        enum: null
+      private:
+        type: boolean
+        description: Register the orb as private when creating it
+        default: false
+        enum: null
+    steps:
+    - ensure_orb_registered:
+        orb_name: << parameters.orb_name >>
+        private: << parameters.private >>
+    parallelism: null
+    circleci_ip_ranges: null
+executors:
+  default:
+    description: Execution environment with gen-circleci-orb pre-installed.
+    docker:
+    - image: jerusdp/gen-circleci-orb:<< parameters.tag >>
+      auth: null
+      aws_auth: null
+      name: null
+      entrypoint: null
+      command: null
+      user: null
+      environment: {}
+    machine: null
+    macos: null
+    resource_class: null
+    working_directory: null
+    environment: {}
+    shell: null
+    parameters:
+      tag:
+        type: string
+        description: Docker image tag.
+        default: latest
+        enum: null
