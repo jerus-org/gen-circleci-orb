@@ -22,6 +22,8 @@ pub struct Cli {
 /// Available subcommands.
 #[derive(Debug, clap::Subcommand)]
 pub enum Commands {
+    /// Ensure a CircleCI orb is registered, creating it if it does not exist.
+    EnsureOrbRegistered(commands::ensure_orb_registered::EnsureOrbRegistered),
     /// Generate orb source files from a CLI binary's --help output.
     Generate(commands::generate::Generate),
     /// Wire orb generation into an existing repo's CI configuration.
@@ -32,6 +34,7 @@ impl Cli {
     /// Execute the selected command.
     pub fn run(&self) -> Result<()> {
         match &self.command {
+            Commands::EnsureOrbRegistered(cmd) => cmd.run(),
             Commands::Generate(cmd) => cmd.run(),
             Commands::Init(cmd) => cmd.run(),
         }
