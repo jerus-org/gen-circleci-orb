@@ -3,14 +3,9 @@ if [ "${PRIVATE}" = "1" ] || [ "${PRIVATE}" = "true" ]; then
   CREATE_FLAGS="--private --no-prompt"
 fi
 
-set +e
-circleci setup --token "${CIRCLE_TOKEN}" --host https://circleci.com --no-prompt
-setup_exit=$?
-set -e
-if [ "${setup_exit}" -ne 0 ] && [ "${setup_exit}" -ne 255 ]; then
-  echo "circleci setup failed with exit ${setup_exit}" >&2
-  exit "${setup_exit}"
-fi
+# Authenticate via env var — avoids `circleci setup` which was removed in
+# newer CLI releases bundled in cimg/base:stable.
+export CIRCLECI_CLI_TOKEN="${CIRCLE_TOKEN}"
 
 set +e
 circleci orb info "${ORB_NAME}"
