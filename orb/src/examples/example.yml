@@ -7,4 +7,5 @@ usage:
   workflows:
     use-my-orb:
       jobs:
-        - gen-circleci-orb/ensure-orb-registered
+        - gen-circleci-orb/ensure-orb-registered:
+            orb_name: my-value

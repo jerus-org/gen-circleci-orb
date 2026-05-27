@@ -318,15 +318,33 @@ fn render_example(cli: &CliDefinition, opts: &GenerateOpts) -> String {
         .unwrap_or("my-org");
     let binary = &cli.binary_name;
     // Use the first leaf subcommand name for the example job, or the binary name if none.
-    let job_name = cli
-        .subcommands
-        .iter()
-        .find(|s| s.is_leaf)
-        .map(|s| s.name.as_str())
-        .unwrap_or(binary);
-    format!(
-        "description: >\n  Example usage of the {binary} orb.\nusage:\n  version: 2.1\n  orbs:\n    {binary}: {namespace}/{binary}@1.0\n  workflows:\n    use-my-orb:\n      jobs:\n        - {binary}/{job_name}\n"
-    )
+    let first_sub = cli.subcommands.iter().find(|s| s.is_leaf);
+    let job_name = first_sub.map(|s| s.name.as_str()).unwrap_or(binary);
+    // Collect required parameters (no default, not boolean) for the example.
+    // orb-tools review validates that required params are supplied in examples.
+    let required_params: Vec<&crate::help_parser::types::Parameter> = first_sub
+        .map(|s| {
+            s.parameters
+                .iter()
+                .filter(|p| {
+                    p.required && p.default.is_none() && !matches!(p.param_type, ParamType::Boolean)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let mut out = format!(
+        "description: >\n  Example usage of the {binary} orb.\nusage:\n  version: 2.1\n  orbs:\n    {binary}: {namespace}/{binary}@1.0\n  workflows:\n    use-my-orb:\n      jobs:\n"
+    );
+    if required_params.is_empty() {
+        out.push_str(&format!("        - {binary}/{job_name}\n"));
+    } else {
+        out.push_str(&format!("        - {binary}/{job_name}:\n"));
+        for p in required_params {
+            out.push_str(&format!("            {}: my-value\n", p.long_name));
+        }
+    }
+    out
 }
 
 fn build_orb_parameters(sub: &SubCommand, skip: &[&str]) -> IndexMap<String, OrbParameter> {
@@ -811,6 +829,42 @@ mod tests {
         assert!(
             example.contains("my-org/mytool"),
             "example must reference the orb:\n{example}"
+        );
+    }
+
+    #[test]
+    fn example_includes_required_params_with_placeholder() {
+        // orb-tools review validates examples: a job with required params must
+        // supply them or the example YAML is invalid and the review fails.
+        let params = vec![
+            Parameter {
+                long_name: "orb_name".to_string(),
+                short: None,
+                param_type: ParamType::String,
+                default: None,
+                required: true,
+                description: "The orb name.".to_string(),
+            },
+            Parameter {
+                long_name: "optional_flag".to_string(),
+                short: None,
+                param_type: ParamType::Boolean,
+                default: Some("false".to_string()),
+                required: false,
+                description: "An optional boolean.".to_string(),
+            },
+        ];
+        let sub = make_leaf("dosomething", params);
+        let cli = make_cli("mytool", vec![sub]);
+        let files = generate(&cli, &default_opts());
+        let example = &files[&PathBuf::from("src/examples/example.yml")];
+        assert!(
+            example.contains("orb_name:"),
+            "example must include required param 'orb_name':\n{example}"
+        );
+        assert!(
+            !example.contains("optional_flag:"),
+            "example must not include optional params with defaults:\n{example}"
         );
     }
 
