@@ -58,7 +58,7 @@ parameters:
   gen_circleci_orb_version:
     type: string
     description: Version of the jerus-org/gen-circleci-orb orb to pin in generated CI. Defaults to the version of this binary (orb and crate are released together)
-    default: 0.0.29
+    default: 0.0.31
   mcp:
     type: boolean
     description: Wire in gen-orb-mcp MCP server generation + publish after orb publish
@@ -75,8 +75,26 @@ parameters:
     type: boolean
     description: Show planned changes without modifying any files
     default: false
+  attach_workspace:
+    type: boolean
+    description: Attach a workspace before running the command (use when the binary was built in a prior job).
+    default: false
+  workspace_root:
+    type: string
+    description: Path at which to attach the workspace; also prepended to PATH (only used when attach_workspace is true).
+    default: /tmp/workspace
 steps:
 - checkout
+- when:
+    condition: << parameters.attach_workspace >>
+    steps:
+    - attach_workspace:
+        at: << parameters.workspace_root >>
+    - run:
+        name: Add workspace binaries to PATH
+        command: <<include(scripts/add-workspace-to-path.sh)>>
+        environment:
+          WORKSPACE_ROOT: << parameters.workspace_root >>
 - init:
     binary: << parameters.binary >>
     public_orb_namespace: << parameters.public_orb_namespace >>

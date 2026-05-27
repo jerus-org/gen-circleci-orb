@@ -213,16 +213,91 @@ fn render_command_script_content(sub: &SubCommand, binary: &str) -> String {
 }
 
 fn render_job(sub: &SubCommand, opts: &GenerateOpts) -> String {
-    let parameters = build_orb_parameters(sub, RESERVED_JOB_PARAMS);
+    let mut parameters = build_orb_parameters(sub, RESERVED_JOB_PARAMS);
+    parameters.insert(
+        "attach_workspace".to_string(),
+        OrbParameter {
+            param_type: "boolean".to_string(),
+            description: "Attach a workspace before running the command (use when the binary was built in a prior job).".to_string(),
+            default: Some(serde_yaml::Value::Bool(false)),
+            enum_values: None,
+        },
+    );
+    parameters.insert(
+        "workspace_root".to_string(),
+        OrbParameter {
+            param_type: "string".to_string(),
+            description: "Path at which to attach the workspace; also prepended to PATH (only used when attach_workspace is true).".to_string(),
+            default: Some(serde_yaml::Value::String("/tmp/workspace".to_string())),
+            enum_values: None,
+        },
+    );
+
     let checkout_step: serde_yaml::Value = serde_yaml::Value::String("checkout".to_string());
+
+    // Conditional workspace attachment step
+    let attach_step = {
+        let mut attach_map = serde_yaml::Mapping::new();
+        attach_map.insert(
+            serde_yaml::Value::String("at".to_string()),
+            serde_yaml::Value::String("<< parameters.workspace_root >>".to_string()),
+        );
+        let mut add_path_env = serde_yaml::Mapping::new();
+        add_path_env.insert(
+            serde_yaml::Value::String("WORKSPACE_ROOT".to_string()),
+            serde_yaml::Value::String("<< parameters.workspace_root >>".to_string()),
+        );
+        let mut add_path_run = serde_yaml::Mapping::new();
+        add_path_run.insert(
+            serde_yaml::Value::String("name".to_string()),
+            serde_yaml::Value::String("Add workspace binaries to PATH".to_string()),
+        );
+        add_path_run.insert(
+            serde_yaml::Value::String("command".to_string()),
+            serde_yaml::Value::String("<<include(scripts/add-workspace-to-path.sh)>>".to_string()),
+        );
+        add_path_run.insert(
+            serde_yaml::Value::String("environment".to_string()),
+            serde_yaml::Value::Mapping(add_path_env),
+        );
+        let mut attach_ws_map = serde_yaml::Mapping::new();
+        attach_ws_map.insert(
+            serde_yaml::Value::String("attach_workspace".to_string()),
+            serde_yaml::Value::Mapping(attach_map),
+        );
+        let inner_steps = serde_yaml::Value::Sequence(vec![
+            serde_yaml::Value::Mapping(attach_ws_map),
+            serde_yaml::Value::Mapping({
+                let mut m = serde_yaml::Mapping::new();
+                m.insert(
+                    serde_yaml::Value::String("run".to_string()),
+                    serde_yaml::Value::Mapping(add_path_run),
+                );
+                m
+            }),
+        ]);
+        let mut when_inner = serde_yaml::Mapping::new();
+        when_inner.insert(
+            serde_yaml::Value::String("condition".to_string()),
+            serde_yaml::Value::String("<< parameters.attach_workspace >>".to_string()),
+        );
+        when_inner.insert(serde_yaml::Value::String("steps".to_string()), inner_steps);
+        let mut when_map = serde_yaml::Mapping::new();
+        when_map.insert(
+            serde_yaml::Value::String("when".to_string()),
+            serde_yaml::Value::Mapping(when_inner),
+        );
+        serde_yaml::Value::Mapping(when_map)
+    };
+
     let invoke_step = build_invoke_step(sub, RESERVED_JOB_PARAMS);
-    let mut steps = vec![checkout_step];
+    let mut steps = vec![checkout_step, attach_step];
     if opts.git_push_subcommands.contains(&sub.name) {
         steps.push(serde_yaml::Value::String("set_https_remote".to_string()));
     }
     steps.push(invoke_step);
     let job = OrbJob {
-        description: format!("Run {} {} in a dedicated job.", sub.name, "command"),
+        description: format!("Run {} command in a dedicated job.", sub.name),
         executor: "default".to_string(),
         parameters,
         steps,
@@ -1542,6 +1617,54 @@ mod tests {
         assert!(
             !job.contains("set_https_remote"),
             "validate job must not have set_https_remote (not a push subcommand):\n{job}"
+        );
+    }
+
+    #[test]
+    fn job_has_attach_workspace_parameter() {
+        let sub = make_leaf("generate", vec![]);
+        let cli = make_cli("mytool", vec![sub]);
+        let files = generate(&cli, &default_opts());
+        let job = &files[&PathBuf::from("src/jobs/generate.yml")];
+        assert!(
+            job.contains("attach_workspace:"),
+            "job must declare attach_workspace parameter:\n{job}"
+        );
+    }
+
+    #[test]
+    fn job_has_workspace_root_parameter() {
+        let sub = make_leaf("generate", vec![]);
+        let cli = make_cli("mytool", vec![sub]);
+        let files = generate(&cli, &default_opts());
+        let job = &files[&PathBuf::from("src/jobs/generate.yml")];
+        assert!(
+            job.contains("workspace_root:"),
+            "job must declare workspace_root parameter:\n{job}"
+        );
+    }
+
+    #[test]
+    fn job_workspace_root_default_is_tmp_workspace() {
+        let sub = make_leaf("generate", vec![]);
+        let cli = make_cli("mytool", vec![sub]);
+        let files = generate(&cli, &default_opts());
+        let job = &files[&PathBuf::from("src/jobs/generate.yml")];
+        assert!(
+            job.contains("/tmp/workspace"),
+            "workspace_root default must be /tmp/workspace:\n{job}"
+        );
+    }
+
+    #[test]
+    fn job_has_conditional_attach_workspace_step() {
+        let sub = make_leaf("generate", vec![]);
+        let cli = make_cli("mytool", vec![sub]);
+        let files = generate(&cli, &default_opts());
+        let job = &files[&PathBuf::from("src/jobs/generate.yml")];
+        assert!(
+            job.contains("condition: << parameters.attach_workspace >>"),
+            "job must have conditional step gated on attach_workspace parameter:\n{job}"
         );
     }
 
