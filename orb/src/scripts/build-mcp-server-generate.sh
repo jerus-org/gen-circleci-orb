@@ -1,3 +1,4 @@
+apt-get update -qq && apt-get install -y --no-install-recommends libssl-dev pkg-config
 NAME_UNDERSCORED=$(echo "${NAME}" | tr '-' '_')
 gen-orb-mcp generate \
   --format binary \
