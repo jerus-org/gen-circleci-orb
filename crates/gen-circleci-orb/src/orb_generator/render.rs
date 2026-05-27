@@ -16,6 +16,10 @@ pub struct GenerateOpts {
     /// Subcommand names whose generated jobs should include a `set_https_remote` step.
     /// Use for subcommands that push to git (e.g. "save").
     pub git_push_subcommands: Vec<String>,
+    /// When set, adds a cli-installer stage to the generated Dockerfile that downloads
+    /// and checksum-verifies this version of the circleci CLI binary.  Required when the
+    /// wrapped binary calls `circleci` commands at runtime (e.g. gen-circleci-orb itself).
+    pub circleci_cli_version: Option<String>,
 }
 
 /// Generate all orb artifact strings keyed by their relative output path.
@@ -39,7 +43,12 @@ pub fn generate(cli: &CliDefinition, opts: &GenerateOpts) -> HashMap<PathBuf, St
     // Dockerfile
     files.insert(
         PathBuf::from("Dockerfile"),
-        render_dockerfile(&cli.binary_name, &opts.install_method, &opts.base_image),
+        render_dockerfile(
+            &cli.binary_name,
+            &opts.install_method,
+            &opts.base_image,
+            opts.circleci_cli_version.as_deref(),
+        ),
     );
 
     // examples/example.yml (RC003)
@@ -237,25 +246,64 @@ fn render_executor(binary_name: &str) -> String {
     serde_yaml::to_string(&executor).unwrap()
 }
 
-fn render_dockerfile(binary: &str, method: &InstallMethod, base_image: &str) -> String {
-    match method {
-        InstallMethod::Binstall => format!(
-            r#"FROM rust:1-slim-bookworm AS builder
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates libssl-dev pkg-config \
-    && rm -rf /var/lib/apt/lists/* \
-    && cargo install {binary}
+fn render_cli_installer_stage(ver: &str) -> String {
+    let mut s = String::new();
+    s.push_str("FROM debian:12-slim AS cli-installer\n");
+    s.push_str(&format!("ARG CIRCLECI_CLI_VERSION={ver}\n"));
+    s.push_str("RUN apt-get update \\\n");
+    s.push_str("    && apt-get install -y --no-install-recommends ca-certificates curl \\\n");
+    s.push_str("    && rm -rf /var/lib/apt/lists/* \\\n");
+    s.push_str("    && cd /tmp \\\n");
+    s.push_str("    && TARBALL=\"circleci-cli_${CIRCLECI_CLI_VERSION}_linux_amd64.tar.gz\" \\\n");
+    s.push_str("    && curl -fLSs \"https://github.com/CircleCI-Public/circleci-cli/releases/download/v${CIRCLECI_CLI_VERSION}/${TARBALL}\" -o \"${TARBALL}\" \\\n");
+    s.push_str("    && curl -fLSs \"https://github.com/CircleCI-Public/circleci-cli/releases/download/v${CIRCLECI_CLI_VERSION}/circleci-cli_${CIRCLECI_CLI_VERSION}_checksums.txt\" -o checksums.txt \\\n");
+    s.push_str("    && grep \"${TARBALL}\" checksums.txt | sha256sum --check \\\n");
+    s.push_str("    && tar -xzf \"${TARBALL}\" --strip 1 \\\n");
+    s.push_str("    && install -m 755 circleci /usr/local/bin/circleci \\\n");
+    s.push_str("    && rm -rf \"${TARBALL}\" checksums.txt circleci\n");
+    s
+}
 
-FROM {base_image}
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates git \
-    && rm -rf /var/lib/apt/lists/* \
-    && useradd -ms /bin/bash circleci
-COPY --from=builder /usr/local/cargo/bin/{binary} /usr/local/bin/{binary}
-USER circleci
-WORKDIR /home/circleci/project
-"#
-        ),
+fn render_dockerfile(
+    binary: &str,
+    method: &InstallMethod,
+    base_image: &str,
+    circleci_cli_version: Option<&str>,
+) -> String {
+    match method {
+        InstallMethod::Binstall => {
+            let mut out = String::new();
+            out.push_str("FROM rust:1-slim-bookworm AS builder\n");
+            out.push_str("RUN apt-get update \\\n");
+            out.push_str(
+                "    && apt-get install -y --no-install-recommends ca-certificates libssl-dev pkg-config \\\n",
+            );
+            out.push_str("    && rm -rf /var/lib/apt/lists/* \\\n");
+            out.push_str(&format!("    && cargo install {binary}\n"));
+            if let Some(ver) = circleci_cli_version {
+                out.push('\n');
+                out.push_str(&render_cli_installer_stage(ver));
+            }
+            out.push('\n');
+            out.push_str(&format!("FROM {base_image}\n"));
+            out.push_str("RUN apt-get update \\\n");
+            out.push_str(
+                "    && apt-get install -y --no-install-recommends ca-certificates git \\\n",
+            );
+            out.push_str("    && rm -rf /var/lib/apt/lists/* \\\n");
+            out.push_str("    && useradd -ms /bin/bash circleci\n");
+            out.push_str(&format!(
+                "COPY --from=builder /usr/local/cargo/bin/{binary} /usr/local/bin/{binary}\n"
+            ));
+            if circleci_cli_version.is_some() {
+                out.push_str(
+                    "COPY --from=cli-installer /usr/local/bin/circleci /usr/local/bin/circleci\n",
+                );
+            }
+            out.push_str("USER circleci\n");
+            out.push_str("WORKDIR /home/circleci/project\n");
+            out
+        }
         InstallMethod::Apt => format!(
             "FROM {base_image}\nRUN apt-get update \\\n    && apt-get install -y --no-install-recommends git {binary} \\\n    && rm -rf /var/lib/apt/lists/*\n"
         ),
@@ -415,6 +463,7 @@ mod tests {
             source_url: None,
             binary_name: "mytool".to_string(),
             git_push_subcommands: vec![],
+            circleci_cli_version: None,
         }
     }
 
@@ -1052,10 +1101,103 @@ mod tests {
         );
     }
 
+    // ── circleci CLI installer stage ────────────────────────────────────────
+
+    #[test]
+    fn dockerfile_without_circleci_cli_version_has_no_installer_stage() {
+        let cli = make_cli("mytool", vec![]);
+        let files = generate(&cli, &default_opts());
+        let content = &files[&PathBuf::from("Dockerfile")];
+        assert!(
+            !content.contains("cli-installer"),
+            "Dockerfile without --circleci-cli-version must not have cli-installer stage:\n{content}"
+        );
+        assert!(
+            !content.contains("CIRCLECI_CLI_VERSION"),
+            "Dockerfile without --circleci-cli-version must not reference CIRCLECI_CLI_VERSION:\n{content}"
+        );
+    }
+
+    #[test]
+    fn dockerfile_with_circleci_cli_version_has_installer_stage() {
+        let cli = make_cli("mytool", vec![]);
+        let opts = GenerateOpts {
+            circleci_cli_version: Some("0.1.36202".to_string()),
+            ..default_opts()
+        };
+        let files = generate(&cli, &opts);
+        let content = &files[&PathBuf::from("Dockerfile")];
+        assert!(
+            content.contains("AS cli-installer"),
+            "Dockerfile with --circleci-cli-version must have cli-installer stage:\n{content}"
+        );
+        assert!(
+            content.contains("ARG CIRCLECI_CLI_VERSION=0.1.36202"),
+            "Dockerfile must pin the specified circleci-cli version:\n{content}"
+        );
+    }
+
+    #[test]
+    fn dockerfile_with_circleci_cli_version_uses_checksum_verification() {
+        let cli = make_cli("mytool", vec![]);
+        let opts = GenerateOpts {
+            circleci_cli_version: Some("0.1.36202".to_string()),
+            ..default_opts()
+        };
+        let files = generate(&cli, &opts);
+        let content = &files[&PathBuf::from("Dockerfile")];
+        assert!(
+            content.contains("sha256sum --check"),
+            "cli-installer stage must verify checksum:\n{content}"
+        );
+        assert!(
+            !content.contains("| bash"),
+            "cli-installer must not use curl|bash:\n{content}"
+        );
+    }
+
+    #[test]
+    fn dockerfile_with_circleci_cli_version_copies_binary_to_final_stage() {
+        let cli = make_cli("mytool", vec![]);
+        let opts = GenerateOpts {
+            circleci_cli_version: Some("0.1.36202".to_string()),
+            ..default_opts()
+        };
+        let files = generate(&cli, &opts);
+        let content = &files[&PathBuf::from("Dockerfile")];
+        assert!(
+            content.contains(
+                "COPY --from=cli-installer /usr/local/bin/circleci /usr/local/bin/circleci"
+            ),
+            "final stage must copy circleci binary from cli-installer:\n{content}"
+        );
+    }
+
+    #[test]
+    fn dockerfile_with_circleci_cli_version_stage_order() {
+        let cli = make_cli("mytool", vec![]);
+        let opts = GenerateOpts {
+            circleci_cli_version: Some("0.1.36202".to_string()),
+            ..default_opts()
+        };
+        let files = generate(&cli, &opts);
+        let content = &files[&PathBuf::from("Dockerfile")];
+        let builder_pos = content.find("AS builder").expect("builder stage missing");
+        let installer_pos = content
+            .find("AS cli-installer")
+            .expect("cli-installer stage missing");
+        let final_from_pos = content.rfind("\nFROM").expect("final FROM missing");
+        assert!(
+            builder_pos < installer_pos && installer_pos < final_from_pos,
+            "cli-installer stage must appear between builder and final stage:\n{content}"
+        );
+    }
+
     #[test]
     fn dockerfile_binstall_builder_packages_sorted() {
         // SonarQube S7018: package lists must be sorted alphanumerically.
-        let dockerfile = render_dockerfile("mytool", &InstallMethod::Binstall, "debian:12-slim");
+        let dockerfile =
+            render_dockerfile("mytool", &InstallMethod::Binstall, "debian:12-slim", None);
         // builder stage: ca-certificates libssl-dev pkg-config (alphabetical)
         assert!(
             dockerfile.contains("ca-certificates libssl-dev pkg-config"),

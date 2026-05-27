@@ -35,7 +35,8 @@ jobs:
             gen-circleci-orb generate \
               --binary gen-circleci-orb \
               --orb-namespace jerus-org \
-              --orb-dir orb
+              --orb-dir orb \
+              --circleci-cli-version 0.1.36202
 
 
 workflows:
