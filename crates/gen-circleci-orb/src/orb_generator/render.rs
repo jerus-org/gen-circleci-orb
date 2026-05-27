@@ -20,6 +20,9 @@ pub struct GenerateOpts {
     /// and checksum-verifies this version of the circleci CLI binary.  Required when the
     /// wrapped binary calls `circleci` commands at runtime (e.g. gen-circleci-orb itself).
     pub circleci_cli_version: Option<String>,
+    /// Extra apt packages to install in the final Docker image stage (sorted together with
+    /// the baseline packages: ca-certificates, git).
+    pub apt_packages: Vec<String>,
 }
 
 /// Generate all orb artifact strings keyed by their relative output path.
@@ -48,6 +51,7 @@ pub fn generate(cli: &CliDefinition, opts: &GenerateOpts) -> HashMap<PathBuf, St
             &opts.install_method,
             &opts.base_image,
             opts.circleci_cli_version.as_deref(),
+            &opts.apt_packages,
         ),
     );
 
@@ -265,14 +269,24 @@ fn render_cli_installer_stage(ver: &str) -> String {
     s
 }
 
+fn sorted_package_list(extra: &[String]) -> String {
+    let mut pkgs: Vec<&str> = vec!["ca-certificates", "git"];
+    pkgs.extend(extra.iter().map(String::as_str));
+    pkgs.sort_unstable();
+    pkgs.dedup();
+    pkgs.join(" ")
+}
+
 fn render_dockerfile(
     binary: &str,
     method: &InstallMethod,
     base_image: &str,
     circleci_cli_version: Option<&str>,
+    apt_packages: &[String],
 ) -> String {
     match method {
         InstallMethod::Binstall => {
+            let runtime_pkgs = sorted_package_list(apt_packages);
             let mut out = String::new();
             out.push_str("FROM rust:1-slim-bookworm AS builder\n");
             out.push_str("RUN apt-get update \\\n");
@@ -288,9 +302,9 @@ fn render_dockerfile(
             out.push('\n');
             out.push_str(&format!("FROM {base_image}\n"));
             out.push_str("RUN apt-get update \\\n");
-            out.push_str(
-                "    && apt-get install -y --no-install-recommends ca-certificates git \\\n",
-            );
+            out.push_str(&format!(
+                "    && apt-get install -y --no-install-recommends {runtime_pkgs} \\\n"
+            ));
             out.push_str("    && rm -rf /var/lib/apt/lists/* \\\n");
             out.push_str("    && useradd -ms /bin/bash circleci\n");
             out.push_str(&format!(
@@ -305,9 +319,17 @@ fn render_dockerfile(
             out.push_str("WORKDIR /home/circleci/project\n");
             out
         }
-        InstallMethod::Apt => format!(
-            "FROM {base_image}\nRUN apt-get update \\\n    && apt-get install -y --no-install-recommends git {binary} \\\n    && rm -rf /var/lib/apt/lists/*\n"
-        ),
+        InstallMethod::Apt => {
+            let extra_pkgs: Vec<&str> = apt_packages.iter().map(String::as_str).collect();
+            let mut all_pkgs = vec!["git", binary];
+            all_pkgs.extend(extra_pkgs);
+            all_pkgs.sort_unstable();
+            all_pkgs.dedup();
+            let pkg_list = all_pkgs.join(" ");
+            format!(
+                "FROM {base_image}\nRUN apt-get update \\\n    && apt-get install -y --no-install-recommends {pkg_list} \\\n    && rm -rf /var/lib/apt/lists/*\n"
+            )
+        }
     }
 }
 
@@ -489,6 +511,7 @@ mod tests {
             binary_name: "mytool".to_string(),
             git_push_subcommands: vec![],
             circleci_cli_version: None,
+            apt_packages: vec![],
         }
     }
 
@@ -642,6 +665,98 @@ mod tests {
         assert!(
             user_pos > copy_pos,
             "USER circleci must appear after COPY --from=builder:\n{content}"
+        );
+    }
+
+    #[test]
+    fn dockerfile_extra_apt_packages_appear_in_final_stage() {
+        let cli = make_cli("mytool", vec![]);
+        let opts = GenerateOpts {
+            apt_packages: vec!["libssl-dev".to_string(), "pkg-config".to_string()],
+            ..default_opts()
+        };
+        let files = generate(&cli, &opts);
+        let content = &files[&PathBuf::from("Dockerfile")];
+        assert!(
+            content.contains("libssl-dev"),
+            "extra apt package libssl-dev must appear in Dockerfile:\n{content}"
+        );
+        assert!(
+            content.contains("pkg-config"),
+            "extra apt package pkg-config must appear in Dockerfile:\n{content}"
+        );
+    }
+
+    #[test]
+    fn dockerfile_final_stage_packages_are_sorted() {
+        let cli = make_cli("mytool", vec![]);
+        let opts = GenerateOpts {
+            apt_packages: vec!["libssl-dev".to_string(), "pkg-config".to_string()],
+            ..default_opts()
+        };
+        let files = generate(&cli, &opts);
+        let content = &files[&PathBuf::from("Dockerfile")];
+        // Isolate the final stage (starts at "FROM debian:12-slim")
+        let final_stage = content
+            .find("FROM debian:12-slim")
+            .map(|pos| &content[pos..])
+            .expect("FROM debian:12-slim not found");
+        // ca-certificates < git < libssl-dev < pkg-config alphabetically
+        let ca_pos = final_stage
+            .find("ca-certificates")
+            .expect("ca-certificates not found in final stage");
+        let git_pos = final_stage
+            .find(" git ")
+            .expect("git not found in final stage");
+        let ssl_pos = final_stage
+            .find("libssl-dev")
+            .expect("libssl-dev not found in final stage");
+        let pkg_pos = final_stage
+            .find("pkg-config")
+            .expect("pkg-config not found in final stage");
+        assert!(
+            ca_pos < git_pos,
+            "ca-certificates must come before git (sorted):\n{final_stage}"
+        );
+        assert!(
+            git_pos < ssl_pos,
+            "git must come before libssl-dev (sorted):\n{final_stage}"
+        );
+        assert!(
+            ssl_pos < pkg_pos,
+            "libssl-dev must come before pkg-config (sorted):\n{final_stage}"
+        );
+    }
+
+    #[test]
+    fn dockerfile_no_extra_packages_unchanged() {
+        let cli = make_cli("mytool", vec![]);
+        let files_default = generate(&cli, &default_opts());
+        let opts_empty = GenerateOpts {
+            apt_packages: vec![],
+            ..default_opts()
+        };
+        let files_empty = generate(&cli, &opts_empty);
+        assert_eq!(
+            files_default[&PathBuf::from("Dockerfile")],
+            files_empty[&PathBuf::from("Dockerfile")],
+            "empty apt_packages must produce identical Dockerfile to default"
+        );
+    }
+
+    #[test]
+    fn dockerfile_apt_method_extra_packages() {
+        let cli = make_cli("mytool", vec![]);
+        let opts = GenerateOpts {
+            install_method: InstallMethod::Apt,
+            apt_packages: vec!["libssl-dev".to_string()],
+            ..default_opts()
+        };
+        let files = generate(&cli, &opts);
+        let content = &files[&PathBuf::from("Dockerfile")];
+        assert!(
+            content.contains("libssl-dev"),
+            "extra apt package must appear in Dockerfile (apt method):\n{content}"
         );
     }
 
@@ -1361,8 +1476,13 @@ mod tests {
     #[test]
     fn dockerfile_binstall_builder_packages_sorted() {
         // SonarQube S7018: package lists must be sorted alphanumerically.
-        let dockerfile =
-            render_dockerfile("mytool", &InstallMethod::Binstall, "debian:12-slim", None);
+        let dockerfile = render_dockerfile(
+            "mytool",
+            &InstallMethod::Binstall,
+            "debian:12-slim",
+            None,
+            &[],
+        );
         // builder stage: ca-certificates libssl-dev pkg-config (alphabetical)
         assert!(
             dockerfile.contains("ca-certificates libssl-dev pkg-config"),

@@ -60,6 +60,12 @@ pub struct Generate {
     #[arg(long)]
     pub circleci_cli_version: Option<String>,
 
+    /// Extra apt package(s) to install in the final Docker image stage (repeatable).
+    /// Combined with the baseline packages (ca-certificates, git) and sorted
+    /// alphanumerically. Example: --apt-packages libssl-dev --apt-packages pkg-config
+    #[arg(long = "apt-packages")]
+    pub apt_packages: Vec<String>,
+
     /// Show planned output without writing any files.
     #[arg(long)]
     pub dry_run: bool,
@@ -146,6 +152,7 @@ impl Generate {
             binary_name: cli_def.binary_name.clone(),
             git_push_subcommands: self.git_push_subcommands.clone(),
             circleci_cli_version: self.circleci_cli_version.clone(),
+            apt_packages: self.apt_packages.clone(),
         };
 
         let files = orb_generator::generate(&cli_def, &opts);

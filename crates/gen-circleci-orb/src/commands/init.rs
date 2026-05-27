@@ -123,6 +123,7 @@ impl Init {
             source_url: None,
             git_push_subcommands: vec![],
             circleci_cli_version: None,
+            apt_packages: vec![],
             dry_run: self.dry_run,
         };
         gen.run()?;
