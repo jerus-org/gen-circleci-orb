@@ -42,6 +42,10 @@ parameters:
     type: string
     description: circleci-cli version to install in the generated Docker image executor. When set, adds a cli-installer builder stage that downloads the release tarball, verifies its SHA-256 checksum, and copies the binary into the final image.  Required when the wrapped binary calls `circleci` commands at runtime (e.g. when generating gen-circleci-orb's own orb)
     default: ''
+  apt_packages:
+    type: string
+    description: 'Extra apt package(s) to install in the final Docker image stage (repeatable). Combined with the baseline packages (ca-certificates, git) and sorted alphanumerically. Example: --apt-packages libssl-dev --apt-packages pkg-config'
+    default: ''
   dry_run:
     type: boolean
     description: Show planned output without writing any files
@@ -59,4 +63,5 @@ steps:
     orb_dir: << parameters.orb_dir >>
     git_push_subcommand: << parameters.git_push_subcommand >>
     circleci_cli_version: << parameters.circleci_cli_version >>
+    apt_packages: << parameters.apt_packages >>
     dry_run: << parameters.dry_run >>

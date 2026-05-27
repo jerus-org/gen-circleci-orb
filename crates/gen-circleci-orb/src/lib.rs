@@ -25,7 +25,7 @@ pub enum Commands {
     /// Ensure a CircleCI orb is registered, creating it if it does not exist.
     EnsureOrbRegistered(commands::ensure_orb_registered::EnsureOrbRegistered),
     /// Generate orb source files from a CLI binary's --help output.
-    Generate(commands::generate::Generate),
+    Generate(Box<commands::generate::Generate>),
     /// Wire orb generation into an existing repo's CI configuration.
     Init(Box<commands::init::Init>),
 }

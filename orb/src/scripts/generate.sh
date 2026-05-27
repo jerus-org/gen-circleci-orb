@@ -9,5 +9,6 @@ set -- "$@" --orb-namespace "${ORB_NAMESPACE}"
 [[ -n "${ORB_DIR:-}" ]] && set -- "$@" --orb-dir "${ORB_DIR}"
 [[ -n "${GIT_PUSH_SUBCOMMAND:-}" ]] && set -- "$@" --git-push-subcommand "${GIT_PUSH_SUBCOMMAND}"
 [[ -n "${CIRCLECI_CLI_VERSION:-}" ]] && set -- "$@" --circleci-cli-version "${CIRCLECI_CLI_VERSION}"
+[[ -n "${APT_PACKAGES:-}" ]] && set -- "$@" --apt-packages "${APT_PACKAGES}"
 [[ "${DRY_RUN:-false}" = "true" ]] && set -- "$@" --dry-run
 "$@"
