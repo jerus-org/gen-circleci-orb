@@ -22,10 +22,12 @@ parameters:
     type: string
     description: Job in the build workflow that regenerate-orb should require
     default: ''
+  crate_tag_prefix:
+    type: string
+    description: Tag prefix used by `toolkit/release_crate` for the crate (e.g. `gen-orb-mcp-v`). Used to filter the `orb-release:` workflow trigger in config.yml and to normalise `CIRCLE_TAG` for `orb-tools/publish`
   release_after_job:
     type: string
-    description: Job in the release workflow after which build-container should run
-    default: ''
+    description: Job in the release workflow after which the generated release jobs (build-binary-release, pack-orb-release, build-container, ensure-orb-registered) should be gated. This is the sole mechanism for specifying where the generated jobs plug into the existing pipeline topology
   orb_dir:
     type: string
     description: Output directory for the generated orb source (relative to repo root)
@@ -41,7 +43,7 @@ parameters:
   docker_orb_version:
     type: string
     description: circleci/docker orb version to pin in generated CI
-    default: 3.2.0
+    default: 3.0.1
   docker_namespace:
     type: string
     description: Docker Hub (or registry) namespace for the built container image
@@ -53,10 +55,22 @@ parameters:
     type: string
     description: CircleCI context name holding orb publishing credentials
     default: orb-publishing
+  gen_circleci_orb_version:
+    type: string
+    description: Version of the jerus-org/gen-circleci-orb orb to pin in generated CI. Defaults to the version of this binary (orb and crate are released together)
+    default: 0.0.28
   mcp:
     type: boolean
-    description: Wire in toolkit/build_mcp_server after orb publish (requires jerus-org/circleci-toolkit)
+    description: Wire in gen-orb-mcp MCP server generation + publish after orb publish
     default: false
+  mcp_earliest_version:
+    type: string
+    description: Earliest orb version to include when priming prior-version snapshots. Passed to gen-circleci-orb/build_mcp_server as `earliest_version`. Only used when --mcp is enabled
+    default: 0.0.1
+  mcp_context:
+    type: string
+    description: CircleCI context providing push authority for MCP server build + publish + save steps. Only used when --mcp is enabled
+    default: pcu-app
   dry_run:
     type: boolean
     description: Show planned changes without modifying any files
@@ -70,6 +84,7 @@ steps:
     build_workflow: << parameters.build_workflow >>
     release_workflow: << parameters.release_workflow >>
     requires_job: << parameters.requires_job >>
+    crate_tag_prefix: << parameters.crate_tag_prefix >>
     release_after_job: << parameters.release_after_job >>
     orb_dir: << parameters.orb_dir >>
     ci_dir: << parameters.ci_dir >>
@@ -78,5 +93,8 @@ steps:
     docker_namespace: << parameters.docker_namespace >>
     docker_context: << parameters.docker_context >>
     orb_context: << parameters.orb_context >>
+    gen_circleci_orb_version: << parameters.gen_circleci_orb_version >>
     mcp: << parameters.mcp >>
+    mcp_earliest_version: << parameters.mcp_earliest_version >>
+    mcp_context: << parameters.mcp_context >>
     dry_run: << parameters.dry_run >>
