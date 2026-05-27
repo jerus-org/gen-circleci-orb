@@ -255,8 +255,8 @@ fn render_cli_installer_stage(ver: &str) -> String {
     s.push_str("    && rm -rf /var/lib/apt/lists/* \\\n");
     s.push_str("    && cd /tmp \\\n");
     s.push_str("    && TARBALL=\"circleci-cli_${CIRCLECI_CLI_VERSION}_linux_amd64.tar.gz\" \\\n");
-    s.push_str("    && curl -fLSs \"https://github.com/CircleCI-Public/circleci-cli/releases/download/v${CIRCLECI_CLI_VERSION}/${TARBALL}\" -o \"${TARBALL}\" \\\n");
-    s.push_str("    && curl -fLSs \"https://github.com/CircleCI-Public/circleci-cli/releases/download/v${CIRCLECI_CLI_VERSION}/circleci-cli_${CIRCLECI_CLI_VERSION}_checksums.txt\" -o checksums.txt \\\n");
+    s.push_str("    && curl -fLSs --proto '=https' \"https://github.com/CircleCI-Public/circleci-cli/releases/download/v${CIRCLECI_CLI_VERSION}/${TARBALL}\" -o \"${TARBALL}\" \\\n");
+    s.push_str("    && curl -fLSs --proto '=https' \"https://github.com/CircleCI-Public/circleci-cli/releases/download/v${CIRCLECI_CLI_VERSION}/circleci-cli_${CIRCLECI_CLI_VERSION}_checksums.txt\" -o checksums.txt \\\n");
     s.push_str("    && grep \"${TARBALL}\" checksums.txt | sha256sum --check \\\n");
     s.push_str("    && tar -xzf \"${TARBALL}\" --strip 1 \\\n");
     s.push_str("    && install -m 755 circleci /usr/local/bin/circleci \\\n");
@@ -1171,6 +1171,33 @@ mod tests {
             ),
             "final stage must copy circleci binary from cli-installer:\n{content}"
         );
+    }
+
+    #[test]
+    fn dockerfile_cli_installer_curl_enforces_https_protocol() {
+        // SonarQube S6506: curl -L can follow redirects to non-HTTPS URLs.
+        // --proto '=https' restricts curl to HTTPS-only, preventing downgrade attacks.
+        let cli = make_cli("mytool", vec![]);
+        let opts = GenerateOpts {
+            circleci_cli_version: Some("0.1.36202".to_string()),
+            ..default_opts()
+        };
+        let files = generate(&cli, &opts);
+        let content = &files[&PathBuf::from("Dockerfile")];
+        let curl_lines: Vec<&str> = content
+            .lines()
+            .filter(|l| l.trim_start().starts_with("&& curl "))
+            .collect();
+        assert!(
+            !curl_lines.is_empty(),
+            "cli-installer stage must contain curl invocations:\n{content}"
+        );
+        for line in &curl_lines {
+            assert!(
+                line.contains("--proto '=https'"),
+                "curl invocation must enforce HTTPS with --proto '=https' (SonarQube S6506):\n{line}"
+            );
+        }
     }
 
     #[test]
