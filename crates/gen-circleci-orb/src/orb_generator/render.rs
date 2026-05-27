@@ -181,13 +181,13 @@ fn render_command_script_content(sub: &SubCommand, binary: &str) -> String {
         let flag = format!("--{}", p.long_name.replace('_', "-"));
         let line = match &p.param_type {
             ParamType::Boolean => {
-                format!(r#"[ "${{{env_var}:-false}}" = "true" ] && set -- "$@" {flag}"#)
+                format!(r#"[[ "${{{env_var}:-false}}" = "true" ]] && set -- "$@" {flag}"#)
             }
             _ => {
                 if p.required {
                     format!(r#"set -- "$@" {flag} "${{{env_var}}}""#)
                 } else {
-                    format!(r#"[ -n "${{{env_var}:-}}" ] && set -- "$@" {flag} "${{{env_var}}}""#)
+                    format!(r#"[[ -n "${{{env_var}:-}}" ]] && set -- "$@" {flag} "${{{env_var}}}""#)
                 }
             }
         };
@@ -195,7 +195,7 @@ fn render_command_script_content(sub: &SubCommand, binary: &str) -> String {
     }
 
     lines.push(r#""$@""#.to_string());
-    lines.join("\n")
+    lines.join("\n") + "\n"
 }
 
 fn render_job(sub: &SubCommand, opts: &GenerateOpts) -> String {
@@ -679,7 +679,8 @@ mod tests {
         let files = generate(&cli, &default_opts());
         let script = &files[&PathBuf::from("src/scripts/generate.sh")];
         assert!(
-            script.contains("[ -n \"${OUTPUT:-}\" ]") && script.contains("--output \"${OUTPUT}\""),
+            script.contains("[[ -n \"${OUTPUT:-}\" ]]")
+                && script.contains("--output \"${OUTPUT}\""),
             "optional param in script must use shell conditional on env var:\n{script}"
         );
     }
@@ -699,7 +700,7 @@ mod tests {
         let files = generate(&cli, &default_opts());
         let script = &files[&PathBuf::from("src/scripts/generate.sh")];
         assert!(
-            script.contains("[ \"${FORCE:-false}\" = \"true\" ]") && script.contains("--force"),
+            script.contains("[[ \"${FORCE:-false}\" = \"true\" ]]") && script.contains("--force"),
             "boolean flag in script must use shell conditional on env var:\n{script}"
         );
     }
@@ -804,7 +805,7 @@ mod tests {
         let files = generate(&cli, &default_opts());
         let script = &files[&PathBuf::from("src/scripts/generate.sh")];
         assert!(
-            script.contains("[ -n \"${OUTPUT:-}\" ]"),
+            script.contains("[[ -n \"${OUTPUT:-}\" ]]"),
             "optional param should use shell conditional on env var:\n{script}"
         );
     }
@@ -824,7 +825,7 @@ mod tests {
         let files = generate(&cli, &default_opts());
         let script = &files[&PathBuf::from("src/scripts/generate.sh")];
         assert!(
-            script.contains("[ \"${FORCE:-false}\" = \"true\" ]"),
+            script.contains("[[ \"${FORCE:-false}\" = \"true\" ]]"),
             "boolean flag must use shell conditional on env var:\n{script}"
         );
     }
@@ -1114,6 +1115,18 @@ mod tests {
         assert!(
             !job.contains("set_https_remote"),
             "validate job must not have set_https_remote (not a push subcommand):\n{job}"
+        );
+    }
+
+    #[test]
+    fn script_file_ends_with_newline() {
+        let sub = make_leaf("generate", vec![]);
+        let cli = make_cli("mytool", vec![sub]);
+        let files = generate(&cli, &default_opts());
+        let script = &files[&PathBuf::from("src/scripts/generate.sh")];
+        assert!(
+            script.ends_with('\n'),
+            "generated script must end with a newline:\n{script:?}"
         );
     }
 
