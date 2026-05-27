@@ -1,19 +1,16 @@
-description: >
-  Ensure a CircleCI orb is registered before publishing.
-  Runs circleci orb info; if the orb is not found, creates it.
-  Accepts circleci CLI exit 255 (TLS/network quirks) as non-fatal.
+description: Ensure a CircleCI orb is registered, creating it if it does not exist
 parameters:
   orb_name:
     type: string
     description: The orb name to check/register (e.g. my-org/my-orb)
   private:
     type: boolean
-    description: Register the orb as private when creating it
+    description: Register the orb as private when creating it.  Must be set correctly on first creation — orb visibility cannot be changed after the orb is created.
     default: false
 steps:
-  - run:
-      name: Ensure orb is registered
-      command: <<include(scripts/ensure_orb_registered.sh)>>
-      environment:
-        ORB_NAME: << parameters.orb_name >>
-        PRIVATE: << parameters.private >>
+- run:
+    name: ensure-orb-registered
+    command: <<include(scripts/ensure_orb_registered.sh)>>
+    environment:
+      ORB_NAME: << parameters.orb_name >>
+      PRIVATE: << parameters.private >>

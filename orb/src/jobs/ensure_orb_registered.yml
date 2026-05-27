@@ -1,15 +1,15 @@
-description: Ensure a CircleCI orb is registered, creating it if it does not exist.
-docker:
-  - image: cimg/base:stable
+description: Run ensure-orb-registered command in a dedicated job.
+executor: default
 parameters:
   orb_name:
     type: string
     description: The orb name to check/register (e.g. my-org/my-orb)
   private:
     type: boolean
-    description: Register the orb as private when creating it
+    description: Register the orb as private when creating it.  Must be set correctly on first creation — orb visibility cannot be changed after the orb is created.
     default: false
 steps:
-  - ensure_orb_registered:
-      orb_name: << parameters.orb_name >>
-      private: << parameters.private >>
+- checkout
+- ensure_orb_registered:
+    orb_name: << parameters.orb_name >>
+    private: << parameters.private >>

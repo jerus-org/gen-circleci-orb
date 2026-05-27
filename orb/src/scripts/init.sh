@@ -1,20 +1,22 @@
-set -- gen-circleci-orb init \
-  --binary "${BINARY}" \
-  --build-workflow "${BUILD_WORKFLOW}" \
-  --release-workflow "${RELEASE_WORKFLOW}" \
-  --orb-dir "${ORB_DIR}" \
-  --ci-dir "${CI_DIR}" \
-  --orb-tools-version "${ORB_TOOLS_VERSION}" \
-  --docker-orb-version "${DOCKER_ORB_VERSION}" \
-  --docker-namespace "${DOCKER_NAMESPACE}" \
-  --docker-context "${DOCKER_CONTEXT}" \
-  --orb-context "${ORB_CONTEXT}"
-
-[ -n "${PUBLIC_ORB_NAMESPACE:-}" ]  && set -- "$@" --public-orb-namespace "${PUBLIC_ORB_NAMESPACE}"
-[ -n "${PRIVATE_ORB_NAMESPACE:-}" ] && set -- "$@" --private-orb-namespace "${PRIVATE_ORB_NAMESPACE}"
-[ -n "${REQUIRES_JOB:-}" ]          && set -- "$@" --requires-job "${REQUIRES_JOB}"
-[ -n "${RELEASE_AFTER_JOB:-}" ]     && set -- "$@" --release-after-job "${RELEASE_AFTER_JOB}"
-[ "${MCP:-false}" = "true" ]        && set -- "$@" --mcp
-[ "${DRY_RUN:-false}" = "true" ]    && set -- "$@" --dry-run
-
+set -- gen-circleci-orb init
+set -- "$@" --binary "${BINARY}"
+[[ -n "${PUBLIC_ORB_NAMESPACE:-}" ]] && set -- "$@" --public-orb-namespace "${PUBLIC_ORB_NAMESPACE}"
+[[ -n "${PRIVATE_ORB_NAMESPACE:-}" ]] && set -- "$@" --private-orb-namespace "${PRIVATE_ORB_NAMESPACE}"
+set -- "$@" --build-workflow "${BUILD_WORKFLOW}"
+set -- "$@" --release-workflow "${RELEASE_WORKFLOW}"
+[[ -n "${REQUIRES_JOB:-}" ]] && set -- "$@" --requires-job "${REQUIRES_JOB}"
+set -- "$@" --crate-tag-prefix "${CRATE_TAG_PREFIX}"
+set -- "$@" --release-after-job "${RELEASE_AFTER_JOB}"
+[[ -n "${ORB_DIR:-}" ]] && set -- "$@" --orb-dir "${ORB_DIR}"
+[[ -n "${CI_DIR:-}" ]] && set -- "$@" --ci-dir "${CI_DIR}"
+[[ -n "${ORB_TOOLS_VERSION:-}" ]] && set -- "$@" --orb-tools-version "${ORB_TOOLS_VERSION}"
+[[ -n "${DOCKER_ORB_VERSION:-}" ]] && set -- "$@" --docker-orb-version "${DOCKER_ORB_VERSION}"
+set -- "$@" --docker-namespace "${DOCKER_NAMESPACE}"
+[[ -n "${DOCKER_CONTEXT:-}" ]] && set -- "$@" --docker-context "${DOCKER_CONTEXT}"
+[[ -n "${ORB_CONTEXT:-}" ]] && set -- "$@" --orb-context "${ORB_CONTEXT}"
+[[ -n "${GEN_CIRCLECI_ORB_VERSION:-}" ]] && set -- "$@" --gen-circleci-orb-version "${GEN_CIRCLECI_ORB_VERSION}"
+[[ "${MCP:-false}" = "true" ]] && set -- "$@" --mcp
+[[ -n "${MCP_EARLIEST_VERSION:-}" ]] && set -- "$@" --mcp-earliest-version "${MCP_EARLIEST_VERSION}"
+[[ -n "${MCP_CONTEXT:-}" ]] && set -- "$@" --mcp-context "${MCP_CONTEXT}"
+[[ "${DRY_RUN:-false}" = "true" ]] && set -- "$@" --dry-run
 "$@"

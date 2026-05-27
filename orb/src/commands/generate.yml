@@ -35,9 +35,11 @@ parameters:
     default: orb
   git_push_subcommand:
     type: string
-    description: >
-      Subcommand name to inject a set_https_remote step into its generated job.
-      Use for subcommands that push to git (e.g. save). Pass empty string to skip.
+    description: Subcommand name(s) whose generated jobs should include a set_https_remote step (repeatable). Use for subcommands that push to git, e.g. --git-push-subcommand save
+    default: ''
+  circleci_cli_version:
+    type: string
+    description: circleci-cli version to install in the generated Docker image executor. When set, adds a cli-installer builder stage that downloads the release tarball, verifies its SHA-256 checksum, and copies the binary into the final image.  Required when the wrapped binary calls `circleci` commands at runtime (e.g. when generating gen-circleci-orb's own orb)
     default: ''
   dry_run:
     type: boolean
@@ -57,4 +59,5 @@ steps:
       SOURCE_URL: << parameters.source_url >>
       ORB_DIR: << parameters.orb_dir >>
       GIT_PUSH_SUBCOMMAND: << parameters.git_push_subcommand >>
+      CIRCLECI_CLI_VERSION: << parameters.circleci_cli_version >>
       DRY_RUN: << parameters.dry_run >>

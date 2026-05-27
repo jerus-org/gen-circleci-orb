@@ -36,34 +36,18 @@ parameters:
     default: orb
   git_push_subcommand:
     type: string
-    description: >
-      Subcommand name to inject a set_https_remote step into its generated job.
-      Use for subcommands that push to git (e.g. save). Pass empty string to skip.
+    description: Subcommand name(s) whose generated jobs should include a set_https_remote step (repeatable). Use for subcommands that push to git, e.g. --git-push-subcommand save
+    default: ''
+  circleci_cli_version:
+    type: string
+    description: circleci-cli version to install in the generated Docker image executor. When set, adds a cli-installer builder stage that downloads the release tarball, verifies its SHA-256 checksum, and copies the binary into the final image.  Required when the wrapped binary calls `circleci` commands at runtime (e.g. when generating gen-circleci-orb's own orb)
     default: ''
   dry_run:
     type: boolean
     description: Show planned output without writing any files
     default: false
-  attach_workspace:
-    type: boolean
-    description: Attach a workspace before running generate (use when the binary was built in a prior job)
-    default: false
-  workspace_root:
-    type: string
-    description: Path at which to attach the workspace; also prepended to PATH (only used when attach_workspace is true)
-    default: /tmp/workspace
 steps:
 - checkout
-- when:
-    condition: << parameters.attach_workspace >>
-    steps:
-      - attach_workspace:
-          at: << parameters.workspace_root >>
-      - run:
-          name: Add workspace binaries to PATH
-          command: <<include(scripts/add_workspace_to_path.sh)>>
-          environment:
-            WORKSPACE_ROOT: << parameters.workspace_root >>
 - generate:
     binary: << parameters.binary >>
     orb_namespace: << parameters.orb_namespace >>
@@ -74,4 +58,5 @@ steps:
     source_url: << parameters.source_url >>
     orb_dir: << parameters.orb_dir >>
     git_push_subcommand: << parameters.git_push_subcommand >>
+    circleci_cli_version: << parameters.circleci_cli_version >>
     dry_run: << parameters.dry_run >>

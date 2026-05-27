@@ -52,6 +52,14 @@ pub struct Generate {
     #[arg(long = "git-push-subcommand")]
     pub git_push_subcommands: Vec<String>,
 
+    /// circleci-cli version to install in the generated Docker image executor.
+    /// When set, adds a cli-installer builder stage that downloads the release
+    /// tarball, verifies its SHA-256 checksum, and copies the binary into the
+    /// final image.  Required when the wrapped binary calls `circleci` commands
+    /// at runtime (e.g. when generating gen-circleci-orb's own orb).
+    #[arg(long)]
+    pub circleci_cli_version: Option<String>,
+
     /// Show planned output without writing any files.
     #[arg(long)]
     pub dry_run: bool,
@@ -137,6 +145,7 @@ impl Generate {
             source_url,
             binary_name: cli_def.binary_name.clone(),
             git_push_subcommands: self.git_push_subcommands.clone(),
+            circleci_cli_version: self.circleci_cli_version.clone(),
         };
 
         let files = orb_generator::generate(&cli_def, &opts);

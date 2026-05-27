@@ -122,6 +122,7 @@ impl Init {
             home_url: None,
             source_url: None,
             git_push_subcommands: vec![],
+            circleci_cli_version: None,
             dry_run: self.dry_run,
         };
         gen.run()?;
