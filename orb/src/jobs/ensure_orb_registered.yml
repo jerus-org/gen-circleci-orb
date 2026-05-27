@@ -1,5 +1,5 @@
 description: Ensure a CircleCI orb is registered, creating it if it does not exist.
-executor: default
+executor: orb-tools/default
 parameters:
   orb_name:
     type: string
