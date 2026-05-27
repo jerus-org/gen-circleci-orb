@@ -61,7 +61,7 @@ steps:
           at: << parameters.workspace_root >>
       - run:
           name: Add workspace binaries to PATH
-          command: <<include(scripts/add_workspace_to_path.sh)>>
+          command: <<include(scripts/add-workspace-to-path.sh)>>
           environment:
             WORKSPACE_ROOT: << parameters.workspace_root >>
 - generate:

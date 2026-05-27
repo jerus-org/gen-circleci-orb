@@ -45,7 +45,7 @@ steps:
       at: << parameters.workspace_bin_path >>
   - run:
       name: Set up git and environment
-      command: <<include(scripts/build_mcp_server_setup.sh)>>
+      command: <<include(scripts/build-mcp-server-setup.sh)>>
       environment:
         NAME: << parameters.binary_name >>
         TAG_PREFIX: << parameters.tag_prefix >>
@@ -53,14 +53,14 @@ steps:
   - set_https_remote
   - run:
       name: Prime prior versions and migrations
-      command: <<include(scripts/build_mcp_server_prime.sh)>>
+      command: <<include(scripts/build-mcp-server-prime.sh)>>
       environment:
         ORB_PATH: << parameters.orb_path >>
         TAG_PREFIX: << parameters.tag_prefix >>
         EARLIEST_VERSION: << parameters.earliest_version >>
   - run:
       name: Generate and compile MCP server
-      command: <<include(scripts/build_mcp_server_generate.sh)>>
+      command: <<include(scripts/build-mcp-server-generate.sh)>>
       environment:
         NAME: << parameters.binary_name >>
         ORB_PATH: << parameters.orb_path >>
@@ -68,12 +68,12 @@ steps:
         MIGRATIONS_DIR: << parameters.migrations_dir >>
   - run:
       name: Publish MCP server binary to GitHub release
-      command: <<include(scripts/build_mcp_server_publish.sh)>>
+      command: <<include(scripts/build-mcp-server-publish.sh)>>
       environment:
         NAME: << parameters.binary_name >>
   - run:
       name: Commit back generated artifacts
-      command: <<include(scripts/build_mcp_server_save.sh)>>
+      command: <<include(scripts/build-mcp-server-save.sh)>>
       environment:
         PRIOR_VERSIONS_DIR: << parameters.prior_versions_dir >>
         MIGRATIONS_DIR: << parameters.migrations_dir >>

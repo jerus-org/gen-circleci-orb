@@ -11,4 +11,4 @@ description: >
 steps:
   - run:
       name: Set HTTPS remote URLs (fetch and push)
-      command: <<include(scripts/set_https_remote.sh)>>
+      command: <<include(scripts/set-https-remote.sh)>>

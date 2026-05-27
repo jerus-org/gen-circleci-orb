@@ -19,7 +19,7 @@ steps:
   - setup_remote_docker
   - run:
       name: Build and push Docker image
-      command: <<include(scripts/build_container.sh)>>
+      command: <<include(scripts/build-container.sh)>>
       environment:
         BINARY: << parameters.binary >>
         DOCKER_NAMESPACE: << parameters.docker_namespace >>

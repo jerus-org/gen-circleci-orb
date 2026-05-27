@@ -1,0 +1,16 @@
+description: Ensure a CircleCI orb is registered, creating it if it does not exist
+parameters:
+  orb_name:
+    type: string
+    description: The orb name to check/register (e.g. my-org/my-orb)
+  private:
+    type: boolean
+    description: Register the orb as private when creating it.  Must be set correctly on first creation — orb visibility cannot be changed after the orb is created.
+    default: false
+steps:
+- run:
+    name: ensure-orb-registered
+    command: <<include(scripts/ensure-orb-registered.sh)>>
+    environment:
+      ORB_NAME: << parameters.orb_name >>
+      PRIVATE: << parameters.private >>

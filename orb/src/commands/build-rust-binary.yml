@@ -14,13 +14,13 @@ parameters:
 steps:
   - run:
       name: Build << parameters.package >> binary
-      command: <<include(scripts/build_rust_binary.sh)>>
+      command: <<include(scripts/build-rust-binary.sh)>>
       environment:
         PACKAGE: << parameters.package >>
         CARGO_ARGS: << parameters.cargo_args >>
   - run:
       name: Persist binary to workspace
-      command: <<include(scripts/persist_binary.sh)>>
+      command: <<include(scripts/persist-binary.sh)>>
       environment:
         BINARY_OVERRIDE: << parameters.binary >>
         PACKAGE: << parameters.package >>
