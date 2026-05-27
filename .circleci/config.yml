@@ -81,12 +81,21 @@ workflows:
                 - /pull\/[0-9]+/
       - toolkit/security:
           name: security with sonarcloud
-          sonarcloud: false
+          context: SonarCloud
           filters:
             branches:
               ignore:
                 - /pull\/[0-9]+/
                 - main
+      - toolkit/code_coverage:
+          package: gen-circleci-orb
+          filters:
+            branches:
+              ignore:
+                - /pull\/[0-9]+/
+                - main
+          requires:
+            - security with sonarcloud
       - build-binary:
           requires: [toolkit/common_tests]
       - regenerate-orb:
