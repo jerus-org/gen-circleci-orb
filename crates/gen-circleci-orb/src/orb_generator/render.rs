@@ -82,16 +82,17 @@ fn render_subcommand(
     files: &mut HashMap<PathBuf, String>,
 ) {
     if sub.is_leaf {
+        let snake = sub.name.replace('-', "_");
         files.insert(
-            PathBuf::from(format!("src/commands/{}.yml", sub.name)),
+            PathBuf::from(format!("src/commands/{snake}.yml")),
             render_command(sub),
         );
         files.insert(
-            PathBuf::from(format!("src/jobs/{}.yml", sub.name)),
+            PathBuf::from(format!("src/jobs/{snake}.yml")),
             render_job(sub, opts),
         );
         files.insert(
-            PathBuf::from(format!("src/scripts/{}.sh", sub.name)),
+            PathBuf::from(format!("src/scripts/{snake}.sh")),
             render_command_script_content(sub, binary),
         );
     }
@@ -319,7 +320,10 @@ fn render_example(cli: &CliDefinition, opts: &GenerateOpts) -> String {
     let binary = &cli.binary_name;
     // Use the first leaf subcommand name for the example job, or the binary name if none.
     let first_sub = cli.subcommands.iter().find(|s| s.is_leaf);
-    let job_name = first_sub.map(|s| s.name.as_str()).unwrap_or(binary);
+    // RC010: job names in examples must use snake_case to match generated filenames.
+    let job_name = first_sub
+        .map(|s| s.name.replace('-', "_"))
+        .unwrap_or_else(|| binary.to_string());
     // Collect required parameters (no default, not boolean) for the example.
     // orb-tools review validates that required params are supplied in examples.
     let required_params: Vec<&crate::help_parser::types::Parameter> = first_sub
@@ -402,7 +406,10 @@ fn build_run_step(sub: &SubCommand) -> serde_yaml::Value {
         );
         run_map.insert(
             serde_yaml::Value::String("command".to_string()),
-            serde_yaml::Value::String(format!("<<include(scripts/{}.sh)>>", sub.name)),
+            serde_yaml::Value::String(format!(
+                "<<include(scripts/{}.sh)>>",
+                sub.name.replace('-', "_")
+            )),
         );
         if !sub.parameters.is_empty() {
             let mut env_map = serde_yaml::Mapping::new();
@@ -442,7 +449,7 @@ fn build_invoke_step(sub: &SubCommand, skip: &[&str]) -> serde_yaml::Value {
     serde_yaml::Value::Mapping({
         let mut m = serde_yaml::Mapping::new();
         m.insert(
-            serde_yaml::Value::String(sub.name.clone()),
+            serde_yaml::Value::String(sub.name.replace('-', "_")),
             serde_yaml::Value::Mapping(invoke_map),
         );
         m
@@ -865,6 +872,83 @@ mod tests {
         assert!(
             !example.contains("optional_flag:"),
             "example must not include optional params with defaults:\n{example}"
+        );
+    }
+
+    // ── RC010: component filenames must be snake_case ───────────────────────
+
+    #[test]
+    fn hyphenated_subcommand_generates_snake_case_file_paths() {
+        // RC010: orb component names (filenames) must be snake_cased.
+        // A subcommand named "do-something" must produce do_something.yml, not do-something.yml.
+        let sub = make_leaf("do-something", vec![]);
+        let cli = make_cli("mytool", vec![sub]);
+        let files = generate(&cli, &default_opts());
+        assert!(
+            files.contains_key(&PathBuf::from("src/commands/do_something.yml")),
+            "command file must use snake_case filename:\n{:?}",
+            files.keys().collect::<Vec<_>>()
+        );
+        assert!(
+            files.contains_key(&PathBuf::from("src/jobs/do_something.yml")),
+            "job file must use snake_case filename:\n{:?}",
+            files.keys().collect::<Vec<_>>()
+        );
+        assert!(
+            files.contains_key(&PathBuf::from("src/scripts/do_something.sh")),
+            "script file must use snake_case filename:\n{:?}",
+            files.keys().collect::<Vec<_>>()
+        );
+        assert!(
+            !files.contains_key(&PathBuf::from("src/commands/do-something.yml")),
+            "command must NOT use hyphenated filename"
+        );
+    }
+
+    #[test]
+    fn hyphenated_subcommand_job_invokes_snake_case_command() {
+        // The job's invoke step key must match the command's snake_case filename.
+        let sub = make_leaf("do-something", vec![]);
+        let cli = make_cli("mytool", vec![sub]);
+        let files = generate(&cli, &default_opts());
+        let job = &files[&PathBuf::from("src/jobs/do_something.yml")];
+        assert!(
+            job.contains("do_something:"),
+            "job invoke step must use snake_case command name:\n{job}"
+        );
+        assert!(
+            !job.contains("do-something:"),
+            "job must not reference hyphenated command name:\n{job}"
+        );
+    }
+
+    #[test]
+    fn hyphenated_subcommand_command_includes_snake_case_script() {
+        // The command's <<include(scripts/...)>> path must match the snake_case script filename.
+        let sub = make_leaf("do-something", vec![]);
+        let cli = make_cli("mytool", vec![sub]);
+        let files = generate(&cli, &default_opts());
+        let cmd = &files[&PathBuf::from("src/commands/do_something.yml")];
+        assert!(
+            cmd.contains("<<include(scripts/do_something.sh)>>"),
+            "command must include snake_case script path:\n{cmd}"
+        );
+    }
+
+    #[test]
+    fn hyphenated_subcommand_example_uses_snake_case_job_name() {
+        // The example must reference the job by its snake_case name.
+        let sub = make_leaf("do-something", vec![]);
+        let cli = make_cli("mytool", vec![sub]);
+        let files = generate(&cli, &default_opts());
+        let example = &files[&PathBuf::from("src/examples/example.yml")];
+        assert!(
+            example.contains("mytool/do_something"),
+            "example must use snake_case job name:\n{example}"
+        );
+        assert!(
+            !example.contains("mytool/do-something"),
+            "example must not use hyphenated job name:\n{example}"
         );
     }
 

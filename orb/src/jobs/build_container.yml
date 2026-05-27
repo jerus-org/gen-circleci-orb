@@ -17,7 +17,7 @@ parameters:
     description: Tag prefix to strip from CIRCLE_TAG to get the bare semver version
 steps:
   - checkout
-  - build-container:
+  - build_container:
       binary: << parameters.binary >>
       docker_namespace: << parameters.docker_namespace >>
       orb_dir: << parameters.orb_dir >>

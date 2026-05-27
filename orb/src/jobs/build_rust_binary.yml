@@ -19,7 +19,7 @@ docker:
   - image: << parameters.rust_image >>
 steps:
   - checkout
-  - build-rust-binary:
+  - build_rust_binary:
       package: << parameters.package >>
       binary: << parameters.binary >>
       cargo_args: << parameters.cargo_args >>
