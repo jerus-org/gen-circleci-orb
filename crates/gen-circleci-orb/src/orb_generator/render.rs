@@ -74,6 +74,17 @@ pub fn generate(
         }
     }
 
+    // src/jobs/<name>.yml for each extra_job in config (verbatim YAML)
+    if let Some(extras) = config.and_then(|c| c.extra_job.as_ref()) {
+        for extra in extras {
+            let content = extra.yaml.trim().to_string() + "\n";
+            files.insert(
+                PathBuf::from(format!("src/jobs/{}.yml", extra.name)),
+                content,
+            );
+        }
+    }
+
     // examples/example.yml (RC003)
     files.insert(
         PathBuf::from("src/examples/example.yml"),
@@ -2283,6 +2294,92 @@ mod tests {
         assert!(
             !job.contains("format:"),
             "non-listed format param must not appear in job:\n{job}"
+        );
+    }
+
+    // ── Phase 4: extra_job verbatim YAML generation ────────────────────────
+
+    #[test]
+    fn extra_job_file_created_at_jobs_path() {
+        use crate::orb_config::{ExtraJob, OrbConfig};
+
+        let cli = make_cli("mytool", vec![]);
+        let config = OrbConfig {
+            extra_job: Some(vec![ExtraJob {
+                name: "ensure_registered".to_string(),
+                yaml: "description: Ensure registered\nexecutor: orb-tools/default\n".to_string(),
+            }]),
+            ..OrbConfig::default()
+        };
+        let files = generate(&cli, &default_opts(), Some(&config));
+        assert!(
+            files.contains_key(&PathBuf::from("src/jobs/ensure_registered.yml")),
+            "extra_job must produce src/jobs/ensure_registered.yml"
+        );
+    }
+
+    #[test]
+    fn extra_job_yaml_emitted_verbatim() {
+        use crate::orb_config::{ExtraJob, OrbConfig};
+
+        let yaml_content =
+            "description: Ensure registered\nexecutor: orb-tools/default\nsteps:\n  - run: echo ok\n";
+        let cli = make_cli("mytool", vec![]);
+        let config = OrbConfig {
+            extra_job: Some(vec![ExtraJob {
+                name: "ensure_registered".to_string(),
+                yaml: yaml_content.to_string(),
+            }]),
+            ..OrbConfig::default()
+        };
+        let files = generate(&cli, &default_opts(), Some(&config));
+        let job = &files[&PathBuf::from("src/jobs/ensure_registered.yml")];
+        assert!(
+            job.contains("description: Ensure registered"),
+            "extra_job yaml must be emitted verbatim:\n{job}"
+        );
+        assert!(
+            job.contains("executor: orb-tools/default"),
+            "extra_job yaml must contain executor:\n{job}"
+        );
+    }
+
+    #[test]
+    fn extra_job_file_ends_with_newline() {
+        use crate::orb_config::{ExtraJob, OrbConfig};
+
+        let cli = make_cli("mytool", vec![]);
+        let config = OrbConfig {
+            extra_job: Some(vec![ExtraJob {
+                name: "my_job".to_string(),
+                yaml: "description: A job".to_string(),
+            }]),
+            ..OrbConfig::default()
+        };
+        let files = generate(&cli, &default_opts(), Some(&config));
+        let job = &files[&PathBuf::from("src/jobs/my_job.yml")];
+        assert!(
+            job.ends_with('\n'),
+            "extra_job output must end with a newline:\n{job:?}"
+        );
+    }
+
+    #[test]
+    fn extra_job_hyphenated_name_preserved_as_filename() {
+        use crate::orb_config::{ExtraJob, OrbConfig};
+
+        let cli = make_cli("mytool", vec![]);
+        let config = OrbConfig {
+            extra_job: Some(vec![ExtraJob {
+                name: "ensure-registered".to_string(),
+                yaml: "description: Test".to_string(),
+            }]),
+            ..OrbConfig::default()
+        };
+        let files = generate(&cli, &default_opts(), Some(&config));
+        assert!(
+            files.contains_key(&PathBuf::from("src/jobs/ensure-registered.yml")),
+            "extra_job with hyphenated name must use hyphen in filename"
         );
     }
 }
