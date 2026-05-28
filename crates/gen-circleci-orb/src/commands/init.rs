@@ -125,6 +125,7 @@ impl Init {
             circleci_cli_version: None,
             apt_packages: vec![],
             dry_run: self.dry_run,
+            config: None,
         };
         gen.run()?;
 
