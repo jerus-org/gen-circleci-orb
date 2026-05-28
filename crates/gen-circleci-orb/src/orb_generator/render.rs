@@ -664,52 +664,51 @@ fn find_leaf_subcommand<'a>(cli: &'a CliDefinition, name: &str) -> Option<&'a Su
     search(&cli.subcommands, name)
 }
 
-fn build_job_group_params(
-    group: &crate::orb_config::JobGroup,
+fn resolve_explicit_params(
+    explicit: &[String],
     step_subs: &[&SubCommand],
 ) -> IndexMap<String, OrbParameter> {
-    let mut params: IndexMap<String, OrbParameter> = if let Some(explicit) = &group.params {
-        // Explicit list: resolve each from the first step that defines it
-        let mut result = IndexMap::new();
-        for param_name in explicit {
-            for sub in step_subs.iter() {
-                if let Some(p) = sub.parameters.iter().find(|p| &p.long_name == param_name) {
-                    result.insert(param_name.clone(), cli_param_to_orb_param(p));
-                    break;
-                }
+    let mut result = IndexMap::new();
+    for param_name in explicit {
+        for sub in step_subs.iter() {
+            if let Some(p) = sub.parameters.iter().find(|p| &p.long_name == param_name) {
+                result.insert(param_name.clone(), cli_param_to_orb_param(p));
+                break;
             }
         }
-        result
-    } else {
-        // Auto: compute intersection of param names across all steps
-        let mut result = IndexMap::new();
-        if let Some(first) = step_subs.first() {
-            let shared_names: std::collections::HashSet<&str> = step_subs[1..].iter().fold(
-                first
-                    .parameters
-                    .iter()
-                    .map(|p| p.long_name.as_str())
-                    .collect(),
-                |acc: std::collections::HashSet<&str>, sub| {
-                    let sub_names: std::collections::HashSet<&str> = sub
-                        .parameters
-                        .iter()
-                        .map(|p| p.long_name.as_str())
-                        .collect();
-                    acc.intersection(&sub_names).copied().collect()
-                },
-            );
-            // Preserve order from first step
-            for p in &first.parameters {
-                if shared_names.contains(p.long_name.as_str()) {
-                    result.insert(p.long_name.clone(), cli_param_to_orb_param(p));
-                }
-            }
-        }
-        result
-    };
+    }
+    result
+}
 
-    // Always add mandatory params from each step not already present
+fn resolve_shared_params(step_subs: &[&SubCommand]) -> IndexMap<String, OrbParameter> {
+    let mut result = IndexMap::new();
+    let Some(first) = step_subs.first() else {
+        return result;
+    };
+    let shared_names: std::collections::HashSet<&str> = step_subs[1..].iter().fold(
+        first
+            .parameters
+            .iter()
+            .map(|p| p.long_name.as_str())
+            .collect(),
+        |acc: std::collections::HashSet<&str>, sub| {
+            let sub_names: std::collections::HashSet<&str> =
+                sub.parameters.iter().map(|p| p.long_name.as_str()).collect();
+            acc.intersection(&sub_names).copied().collect()
+        },
+    );
+    for p in &first.parameters {
+        if shared_names.contains(p.long_name.as_str()) {
+            result.insert(p.long_name.clone(), cli_param_to_orb_param(p));
+        }
+    }
+    result
+}
+
+fn add_mandatory_params(
+    params: &mut IndexMap<String, OrbParameter>,
+    step_subs: &[&SubCommand],
+) {
     let mut present: std::collections::HashSet<String> = params.keys().cloned().collect();
     for sub in step_subs {
         for p in &sub.parameters {
@@ -719,13 +718,9 @@ fn build_job_group_params(
             if present.contains(&p.long_name) {
                 continue;
             }
-            // Prefix with step name if another step also has a param with the same name
             let collides = step_subs.iter().any(|other| {
                 other.name != sub.name
-                    && other
-                        .parameters
-                        .iter()
-                        .any(|op| op.long_name == p.long_name)
+                    && other.parameters.iter().any(|op| op.long_name == p.long_name)
             });
             let job_name = if collides {
                 format!("{}_{}", sub.name, p.long_name)
@@ -736,7 +731,18 @@ fn build_job_group_params(
             present.insert(job_name);
         }
     }
+}
 
+fn build_job_group_params(
+    group: &crate::orb_config::JobGroup,
+    step_subs: &[&SubCommand],
+) -> IndexMap<String, OrbParameter> {
+    let mut params = if let Some(explicit) = &group.params {
+        resolve_explicit_params(explicit, step_subs)
+    } else {
+        resolve_shared_params(step_subs)
+    };
+    add_mandatory_params(&mut params, step_subs);
     params
 }
 
