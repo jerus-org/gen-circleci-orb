@@ -2,7 +2,7 @@ use anyhow::Result;
 use indexmap::IndexMap;
 use std::path::PathBuf;
 
-use crate::orb_config::{self, JobGroup, OrbConfig, ParamOverride, SubcommandConfig};
+use crate::orb_config::{self, JobGroup, OrbConfig, ParamOverride};
 
 const DEFAULT_CONFIG_PATH: &str = "gen-circleci-orb.toml";
 
