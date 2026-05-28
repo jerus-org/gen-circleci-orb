@@ -692,8 +692,11 @@ fn resolve_shared_params(step_subs: &[&SubCommand]) -> IndexMap<String, OrbParam
             .map(|p| p.long_name.as_str())
             .collect(),
         |acc: std::collections::HashSet<&str>, sub| {
-            let sub_names: std::collections::HashSet<&str> =
-                sub.parameters.iter().map(|p| p.long_name.as_str()).collect();
+            let sub_names: std::collections::HashSet<&str> = sub
+                .parameters
+                .iter()
+                .map(|p| p.long_name.as_str())
+                .collect();
             acc.intersection(&sub_names).copied().collect()
         },
     );
@@ -705,10 +708,7 @@ fn resolve_shared_params(step_subs: &[&SubCommand]) -> IndexMap<String, OrbParam
     result
 }
 
-fn add_mandatory_params(
-    params: &mut IndexMap<String, OrbParameter>,
-    step_subs: &[&SubCommand],
-) {
+fn add_mandatory_params(params: &mut IndexMap<String, OrbParameter>, step_subs: &[&SubCommand]) {
     let mut present: std::collections::HashSet<String> = params.keys().cloned().collect();
     for sub in step_subs {
         for p in &sub.parameters {
@@ -720,7 +720,10 @@ fn add_mandatory_params(
             }
             let collides = step_subs.iter().any(|other| {
                 other.name != sub.name
-                    && other.parameters.iter().any(|op| op.long_name == p.long_name)
+                    && other
+                        .parameters
+                        .iter()
+                        .any(|op| op.long_name == p.long_name)
             });
             let job_name = if collides {
                 format!("{}_{}", sub.name, p.long_name)
