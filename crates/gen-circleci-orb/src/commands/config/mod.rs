@@ -119,9 +119,7 @@ impl Config {
 
 pub(crate) fn suppress_subcommand(config: &mut OrbConfig, name: &str) {
     let subcommands = config.subcommand.get_or_insert_with(IndexMap::new);
-    let entry = subcommands
-        .entry(name.to_string())
-        .or_insert_with(SubcommandConfig::default);
+    let entry = subcommands.entry(name.to_string()).or_default();
     entry.generate_job = Some(false);
 }
 
@@ -148,9 +146,7 @@ pub(crate) fn set_param_default(
     default: &str,
 ) {
     let subcommands = config.subcommand.get_or_insert_with(IndexMap::new);
-    let sc = subcommands
-        .entry(subcommand.to_string())
-        .or_insert_with(SubcommandConfig::default);
+    let sc = subcommands.entry(subcommand.to_string()).or_default();
     let params = sc.param.get_or_insert_with(IndexMap::new);
     params.insert(
         param.to_string(),
