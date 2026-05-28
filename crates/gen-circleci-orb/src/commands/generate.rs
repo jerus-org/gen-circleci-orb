@@ -2,7 +2,7 @@ use anyhow::Result;
 use clap::ValueEnum;
 use std::path::{Path, PathBuf};
 
-use crate::{help_parser, orb_generator, output_writer};
+use crate::{help_parser, orb_config, orb_generator, output_writer};
 
 pub const DEFAULT_BASE_IMAGE: &str = "debian:12-slim";
 
@@ -69,6 +69,11 @@ pub struct Generate {
     /// Show planned output without writing any files.
     #[arg(long)]
     pub dry_run: bool,
+
+    /// Path to gen-circleci-orb.toml config file.
+    /// Defaults to <output>/gen-circleci-orb.toml when not specified.
+    #[arg(long)]
+    pub config: Option<PathBuf>,
 }
 
 /// Convert any git remote URL to a plain HTTPS URL, stripping the `.git` suffix.
@@ -128,11 +133,20 @@ pub(crate) fn check_orb_dir(orb_root: &Path) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn resolve_config_path(explicit: Option<&PathBuf>, output: &Path) -> PathBuf {
+    explicit
+        .cloned()
+        .unwrap_or_else(|| output.join("gen-circleci-orb.toml"))
+}
+
 impl Generate {
     pub fn run(&self) -> Result<()> {
         let orb_root = self.output.join(&self.orb_dir);
 
         check_orb_dir(&orb_root)?;
+
+        let config_path = resolve_config_path(self.config.as_ref(), &self.output);
+        let orb_config = orb_config::load_config(&config_path)?;
 
         tracing::info!("Parsing {} --help", self.binary);
         let cli_def = help_parser::parse_binary(&self.binary)?;
@@ -155,7 +169,7 @@ impl Generate {
             apt_packages: self.apt_packages.clone(),
         };
 
-        let files = orb_generator::generate(&cli_def, &opts);
+        let files = orb_generator::generate(&cli_def, &opts, Some(&orb_config));
 
         tracing::info!("Generated {} file(s)", files.len());
 
@@ -249,5 +263,24 @@ mod tests {
             msg.contains("does not appear to contain a CircleCI orb"),
             "unexpected error message: {msg}"
         );
+    }
+
+    // ── Phase 5: config path resolution ────────────────────────────────────
+
+    #[test]
+    fn config_path_defaults_to_output_dir() {
+        let tmp = TempDir::new().unwrap();
+        let output = tmp.path();
+        let resolved = resolve_config_path(None, output);
+        assert_eq!(resolved, output.join("gen-circleci-orb.toml"));
+    }
+
+    #[test]
+    fn config_path_uses_explicit_when_provided() {
+        let tmp = TempDir::new().unwrap();
+        let output = tmp.path();
+        let explicit = PathBuf::from("/custom/path/config.toml");
+        let resolved = resolve_config_path(Some(&explicit), output);
+        assert_eq!(resolved, explicit);
     }
 }

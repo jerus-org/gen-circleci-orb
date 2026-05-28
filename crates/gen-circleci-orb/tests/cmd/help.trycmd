@@ -5,6 +5,7 @@ Generate a CircleCI orb to provide the facilities offered by a CLI program
 Usage: gen-circleci-orb <COMMAND>
 
 Commands:
+  config                 Manage the gen-circleci-orb.toml configuration file
   ensure-orb-registered  Ensure a CircleCI orb is registered, creating it if it does not exist
   generate               Generate orb source files from a CLI binary's --help output
   init                   Wire orb generation into an existing repo's CI configuration

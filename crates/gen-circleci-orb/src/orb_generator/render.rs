@@ -1,6 +1,7 @@
 use super::types::{DockerImage, OrbCommand, OrbExecutor, OrbJob, OrbParameter};
 use crate::commands::generate::InstallMethod;
 use crate::help_parser::types::{CliDefinition, ParamType, SubCommand};
+use crate::orb_config::OrbConfig;
 use indexmap::IndexMap;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -26,11 +27,18 @@ pub struct GenerateOpts {
 }
 
 /// Generate all orb artifact strings keyed by their relative output path.
-pub fn generate(cli: &CliDefinition, opts: &GenerateOpts) -> HashMap<PathBuf, String> {
+pub fn generate(
+    cli: &CliDefinition,
+    opts: &GenerateOpts,
+    config: Option<&OrbConfig>,
+) -> HashMap<PathBuf, String> {
     let mut files = HashMap::new();
 
     // @orb.yml — metadata only; hand-formatted so `version: 2.1` stays unquoted
-    files.insert(PathBuf::from("src/@orb.yml"), render_orb_root(cli, opts));
+    files.insert(
+        PathBuf::from("src/@orb.yml"),
+        render_orb_root(cli, opts, config),
+    );
 
     // executors/default.yml
     files.insert(
@@ -40,7 +48,7 @@ pub fn generate(cli: &CliDefinition, opts: &GenerateOpts) -> HashMap<PathBuf, St
 
     // commands/<name>.yml and jobs/<name>.yml for each leaf subcommand
     for sub in &cli.subcommands {
-        render_subcommand(sub, &cli.binary_name, opts, &mut files);
+        render_subcommand(sub, &cli.binary_name, opts, config, &mut files);
     }
 
     // Dockerfile
@@ -55,16 +63,38 @@ pub fn generate(cli: &CliDefinition, opts: &GenerateOpts) -> HashMap<PathBuf, St
         ),
     );
 
+    // src/jobs/<name>.yml for each job_group in config
+    if let Some(groups) = config.and_then(|c| c.job_group.as_ref()) {
+        for group in groups {
+            let snake = group.name.replace('-', "_");
+            files.insert(
+                PathBuf::from(format!("src/jobs/{snake}.yml")),
+                render_job_group(group, cli, config),
+            );
+        }
+    }
+
+    // src/jobs/<name>.yml for each extra_job in config (verbatim YAML)
+    if let Some(extras) = config.and_then(|c| c.extra_job.as_ref()) {
+        for extra in extras {
+            let content = extra.yaml.trim().to_string() + "\n";
+            files.insert(
+                PathBuf::from(format!("src/jobs/{}.yml", extra.name)),
+                content,
+            );
+        }
+    }
+
     // examples/example.yml (RC003)
     files.insert(
         PathBuf::from("src/examples/example.yml"),
-        render_example(cli, opts),
+        render_example(cli, opts, config),
     );
 
     files
 }
 
-fn render_orb_root(cli: &CliDefinition, opts: &GenerateOpts) -> String {
+fn render_orb_root(cli: &CliDefinition, opts: &GenerateOpts, config: Option<&OrbConfig>) -> String {
     // version must be the YAML float 2.1, not a quoted string
     let mut out = format!("version: 2.1\ndescription: >\n  {}\n", cli.description);
     if opts.home_url.is_some() || opts.source_url.is_some() {
@@ -76,13 +106,32 @@ fn render_orb_root(cli: &CliDefinition, opts: &GenerateOpts) -> String {
             out.push_str(&format!("  source_url: \"{url}\"\n"));
         }
     }
+    if let Some(orbs) = config
+        .and_then(|c| c.orbs.as_ref())
+        .filter(|o| !o.is_empty())
+    {
+        out.push_str("orbs:\n");
+        for (name, reference) in orbs {
+            out.push_str(&format!("  {name}: {reference}\n"));
+        }
+    }
     out
+}
+
+fn is_job_suppressed(config: Option<&OrbConfig>, name: &str) -> bool {
+    config
+        .and_then(|c| c.subcommand.as_ref())
+        .and_then(|sc| sc.get(name))
+        .and_then(|sc_config| sc_config.generate_job)
+        .map(|generate| !generate)
+        .unwrap_or(false)
 }
 
 fn render_subcommand(
     sub: &SubCommand,
     binary: &str,
     opts: &GenerateOpts,
+    config: Option<&OrbConfig>,
     files: &mut HashMap<PathBuf, String>,
 ) {
     if sub.is_leaf {
@@ -91,17 +140,19 @@ fn render_subcommand(
             PathBuf::from(format!("src/commands/{snake}.yml")),
             render_command(sub),
         );
-        files.insert(
-            PathBuf::from(format!("src/jobs/{snake}.yml")),
-            render_job(sub, opts),
-        );
+        if !is_job_suppressed(config, &sub.name) {
+            files.insert(
+                PathBuf::from(format!("src/jobs/{snake}.yml")),
+                render_job(sub, opts, config),
+            );
+        }
         files.insert(
             PathBuf::from(format!("src/scripts/{snake}.sh")),
             render_command_script_content(sub, binary),
         );
     }
     for child in &sub.subcommands {
-        render_subcommand(child, binary, opts, files);
+        render_subcommand(child, binary, opts, config, files);
     }
 }
 
@@ -212,86 +263,32 @@ fn render_command_script_content(sub: &SubCommand, binary: &str) -> String {
     lines.join("\n") + "\n"
 }
 
-fn render_job(sub: &SubCommand, opts: &GenerateOpts) -> String {
+fn render_job(sub: &SubCommand, opts: &GenerateOpts, config: Option<&OrbConfig>) -> String {
     let mut parameters = build_orb_parameters(sub, RESERVED_JOB_PARAMS);
-    parameters.insert(
-        "attach_workspace".to_string(),
-        OrbParameter {
-            param_type: "boolean".to_string(),
-            description: "Attach a workspace before running the command (use when the binary was built in a prior job).".to_string(),
-            default: Some(serde_yaml::Value::Bool(false)),
-            enum_values: None,
-        },
-    );
-    parameters.insert(
-        "workspace_root".to_string(),
-        OrbParameter {
-            param_type: "string".to_string(),
-            description: "Path at which to attach the workspace; also prepended to PATH (only used when attach_workspace is true).".to_string(),
-            default: Some(serde_yaml::Value::String("/tmp/workspace".to_string())),
-            enum_values: None,
-        },
-    );
 
-    let checkout_step: serde_yaml::Value = serde_yaml::Value::String("checkout".to_string());
-
-    // Conditional workspace attachment step
-    let attach_step = {
-        let mut attach_map = serde_yaml::Mapping::new();
-        attach_map.insert(
-            serde_yaml::Value::String("at".to_string()),
-            serde_yaml::Value::String("<< parameters.workspace_root >>".to_string()),
-        );
-        let mut add_path_env = serde_yaml::Mapping::new();
-        add_path_env.insert(
-            serde_yaml::Value::String("WORKSPACE_ROOT".to_string()),
-            serde_yaml::Value::String("<< parameters.workspace_root >>".to_string()),
-        );
-        let mut add_path_run = serde_yaml::Mapping::new();
-        add_path_run.insert(
-            serde_yaml::Value::String("name".to_string()),
-            serde_yaml::Value::String("Add workspace binaries to PATH".to_string()),
-        );
-        add_path_run.insert(
-            serde_yaml::Value::String("command".to_string()),
-            serde_yaml::Value::String("<<include(scripts/add-workspace-to-path.sh)>>".to_string()),
-        );
-        add_path_run.insert(
-            serde_yaml::Value::String("environment".to_string()),
-            serde_yaml::Value::Mapping(add_path_env),
-        );
-        let mut attach_ws_map = serde_yaml::Mapping::new();
-        attach_ws_map.insert(
-            serde_yaml::Value::String("attach_workspace".to_string()),
-            serde_yaml::Value::Mapping(attach_map),
-        );
-        let inner_steps = serde_yaml::Value::Sequence(vec![
-            serde_yaml::Value::Mapping(attach_ws_map),
-            serde_yaml::Value::Mapping({
-                let mut m = serde_yaml::Mapping::new();
-                m.insert(
-                    serde_yaml::Value::String("run".to_string()),
-                    serde_yaml::Value::Mapping(add_path_run),
-                );
-                m
-            }),
-        ]);
-        let mut when_inner = serde_yaml::Mapping::new();
-        when_inner.insert(
-            serde_yaml::Value::String("condition".to_string()),
-            serde_yaml::Value::String("<< parameters.attach_workspace >>".to_string()),
-        );
-        when_inner.insert(serde_yaml::Value::String("steps".to_string()), inner_steps);
-        let mut when_map = serde_yaml::Mapping::new();
-        when_map.insert(
-            serde_yaml::Value::String("when".to_string()),
-            serde_yaml::Value::Mapping(when_inner),
-        );
-        serde_yaml::Value::Mapping(when_map)
-    };
+    // Apply param default overrides from config
+    if let Some(param_overrides) = config
+        .and_then(|c| c.subcommand.as_ref())
+        .and_then(|sc| sc.get(&sub.name))
+        .and_then(|sc_config| sc_config.param.as_ref())
+    {
+        for (param_name, override_) in param_overrides {
+            if let Some(param) = parameters.get_mut(param_name) {
+                if let Some(new_default) = &override_.default {
+                    param.default = Some(serde_yaml::Value::String(new_default.clone()));
+                }
+            }
+        }
+    }
+    let (attach_param, root_param) = build_workspace_params();
+    parameters.insert("attach_workspace".to_string(), attach_param);
+    parameters.insert("workspace_root".to_string(), root_param);
 
     let invoke_step = build_invoke_step(sub, RESERVED_JOB_PARAMS);
-    let mut steps = vec![checkout_step, attach_step];
+    let mut steps = vec![
+        serde_yaml::Value::String("checkout".to_string()),
+        build_attach_workspace_step(),
+    ];
     if opts.git_push_subcommands.contains(&sub.name) {
         steps.push(serde_yaml::Value::String("set_https_remote".to_string()));
     }
@@ -408,15 +405,18 @@ fn render_dockerfile(
     }
 }
 
-fn render_example(cli: &CliDefinition, opts: &GenerateOpts) -> String {
+fn render_example(cli: &CliDefinition, opts: &GenerateOpts, config: Option<&OrbConfig>) -> String {
     let namespace = opts
         .namespaces
         .first()
         .map(String::as_str)
         .unwrap_or("my-org");
     let binary = &cli.binary_name;
-    // Use the first leaf subcommand name for the example job, or the binary name if none.
-    let first_sub = cli.subcommands.iter().find(|s| s.is_leaf);
+    // Use the first non-suppressed leaf subcommand for the example job.
+    let first_sub = cli
+        .subcommands
+        .iter()
+        .find(|s| s.is_leaf && !is_job_suppressed(config, &s.name));
     // RC010: job names in examples must use snake_case to match generated filenames.
     let job_name = first_sub
         .map(|s| s.name.replace('-', "_"))
@@ -553,6 +553,275 @@ fn build_invoke_step(sub: &SubCommand, skip: &[&str]) -> serde_yaml::Value {
     })
 }
 
+fn build_workspace_params() -> (OrbParameter, OrbParameter) {
+    let attach = OrbParameter {
+        param_type: "boolean".to_string(),
+        description: "Attach a workspace before running the command (use when the binary was built in a prior job).".to_string(),
+        default: Some(serde_yaml::Value::Bool(false)),
+        enum_values: None,
+    };
+    let root = OrbParameter {
+        param_type: "string".to_string(),
+        description: "Path at which to attach the workspace; also prepended to PATH (only used when attach_workspace is true).".to_string(),
+        default: Some(serde_yaml::Value::String("/tmp/workspace".to_string())),
+        enum_values: None,
+    };
+    (attach, root)
+}
+
+fn build_attach_workspace_step() -> serde_yaml::Value {
+    let mut attach_map = serde_yaml::Mapping::new();
+    attach_map.insert(
+        serde_yaml::Value::String("at".to_string()),
+        serde_yaml::Value::String("<< parameters.workspace_root >>".to_string()),
+    );
+    let mut add_path_env = serde_yaml::Mapping::new();
+    add_path_env.insert(
+        serde_yaml::Value::String("WORKSPACE_ROOT".to_string()),
+        serde_yaml::Value::String("<< parameters.workspace_root >>".to_string()),
+    );
+    let mut add_path_run = serde_yaml::Mapping::new();
+    add_path_run.insert(
+        serde_yaml::Value::String("name".to_string()),
+        serde_yaml::Value::String("Add workspace binaries to PATH".to_string()),
+    );
+    add_path_run.insert(
+        serde_yaml::Value::String("command".to_string()),
+        serde_yaml::Value::String("<<include(scripts/add-workspace-to-path.sh)>>".to_string()),
+    );
+    add_path_run.insert(
+        serde_yaml::Value::String("environment".to_string()),
+        serde_yaml::Value::Mapping(add_path_env),
+    );
+    let mut attach_ws_map = serde_yaml::Mapping::new();
+    attach_ws_map.insert(
+        serde_yaml::Value::String("attach_workspace".to_string()),
+        serde_yaml::Value::Mapping(attach_map),
+    );
+    let inner_steps = serde_yaml::Value::Sequence(vec![
+        serde_yaml::Value::Mapping(attach_ws_map),
+        serde_yaml::Value::Mapping({
+            let mut m = serde_yaml::Mapping::new();
+            m.insert(
+                serde_yaml::Value::String("run".to_string()),
+                serde_yaml::Value::Mapping(add_path_run),
+            );
+            m
+        }),
+    ]);
+    let mut when_inner = serde_yaml::Mapping::new();
+    when_inner.insert(
+        serde_yaml::Value::String("condition".to_string()),
+        serde_yaml::Value::String("<< parameters.attach_workspace >>".to_string()),
+    );
+    when_inner.insert(serde_yaml::Value::String("steps".to_string()), inner_steps);
+    let mut when_map = serde_yaml::Mapping::new();
+    when_map.insert(
+        serde_yaml::Value::String("when".to_string()),
+        serde_yaml::Value::Mapping(when_inner),
+    );
+    serde_yaml::Value::Mapping(when_map)
+}
+
+fn cli_param_to_orb_param(p: &crate::help_parser::types::Parameter) -> OrbParameter {
+    let (type_str, enum_vals) = match &p.param_type {
+        ParamType::String => ("string".to_string(), None),
+        ParamType::Boolean => ("boolean".to_string(), None),
+        ParamType::Integer => ("integer".to_string(), None),
+        ParamType::Enum(vals) => ("enum".to_string(), Some(vals.clone())),
+    };
+    let default = match &p.param_type {
+        ParamType::Boolean => {
+            let val = p.default.as_ref().map(|d| d == "true").unwrap_or(false);
+            Some(serde_yaml::Value::Bool(val))
+        }
+        _ if !p.required && p.default.is_none() => Some(serde_yaml::Value::String(String::new())),
+        _ => p
+            .default
+            .as_ref()
+            .map(|d| serde_yaml::Value::String(d.clone())),
+    };
+    OrbParameter {
+        param_type: type_str,
+        description: p.description.clone(),
+        default,
+        enum_values: enum_vals,
+    }
+}
+
+fn find_leaf_subcommand<'a>(cli: &'a CliDefinition, name: &str) -> Option<&'a SubCommand> {
+    fn search<'a>(subs: &'a [SubCommand], name: &str) -> Option<&'a SubCommand> {
+        for sub in subs {
+            if sub.is_leaf && sub.name == name {
+                return Some(sub);
+            }
+            if let Some(found) = search(&sub.subcommands, name) {
+                return Some(found);
+            }
+        }
+        None
+    }
+    search(&cli.subcommands, name)
+}
+
+fn resolve_explicit_params(
+    explicit: &[String],
+    step_subs: &[&SubCommand],
+) -> IndexMap<String, OrbParameter> {
+    let mut result = IndexMap::new();
+    for param_name in explicit {
+        for sub in step_subs.iter() {
+            if let Some(p) = sub.parameters.iter().find(|p| &p.long_name == param_name) {
+                result.insert(param_name.clone(), cli_param_to_orb_param(p));
+                break;
+            }
+        }
+    }
+    result
+}
+
+fn resolve_shared_params(step_subs: &[&SubCommand]) -> IndexMap<String, OrbParameter> {
+    let mut result = IndexMap::new();
+    let Some(first) = step_subs.first() else {
+        return result;
+    };
+    let shared_names: std::collections::HashSet<&str> = step_subs[1..].iter().fold(
+        first
+            .parameters
+            .iter()
+            .map(|p| p.long_name.as_str())
+            .collect(),
+        |acc: std::collections::HashSet<&str>, sub| {
+            let sub_names: std::collections::HashSet<&str> = sub
+                .parameters
+                .iter()
+                .map(|p| p.long_name.as_str())
+                .collect();
+            acc.intersection(&sub_names).copied().collect()
+        },
+    );
+    for p in &first.parameters {
+        if shared_names.contains(p.long_name.as_str()) {
+            result.insert(p.long_name.clone(), cli_param_to_orb_param(p));
+        }
+    }
+    result
+}
+
+fn add_mandatory_params(params: &mut IndexMap<String, OrbParameter>, step_subs: &[&SubCommand]) {
+    let mut present: std::collections::HashSet<String> = params.keys().cloned().collect();
+    for sub in step_subs {
+        for p in &sub.parameters {
+            if !p.required || matches!(p.param_type, ParamType::Boolean) {
+                continue;
+            }
+            if present.contains(&p.long_name) {
+                continue;
+            }
+            let collides = step_subs.iter().any(|other| {
+                other.name != sub.name
+                    && other
+                        .parameters
+                        .iter()
+                        .any(|op| op.long_name == p.long_name)
+            });
+            let job_name = if collides {
+                format!("{}_{}", sub.name, p.long_name)
+            } else {
+                p.long_name.clone()
+            };
+            params.insert(job_name.clone(), cli_param_to_orb_param(p));
+            present.insert(job_name);
+        }
+    }
+}
+
+fn build_job_group_params(
+    group: &crate::orb_config::JobGroup,
+    step_subs: &[&SubCommand],
+) -> IndexMap<String, OrbParameter> {
+    let mut params = if let Some(explicit) = &group.params {
+        resolve_explicit_params(explicit, step_subs)
+    } else {
+        resolve_shared_params(step_subs)
+    };
+    add_mandatory_params(&mut params, step_subs);
+    params
+}
+
+fn build_job_group_invoke_step(
+    sub: &SubCommand,
+    job_params: &IndexMap<String, OrbParameter>,
+) -> serde_yaml::Value {
+    let mut invoke_map = serde_yaml::Mapping::new();
+    for p in &sub.parameters {
+        // Find the name this param has in the merged job parameter set
+        let job_param_name = if job_params.contains_key(&p.long_name) {
+            Some(p.long_name.clone())
+        } else {
+            let prefixed = format!("{}_{}", sub.name, p.long_name);
+            if job_params.contains_key(&prefixed) {
+                Some(prefixed)
+            } else {
+                None
+            }
+        };
+        if let Some(job_name) = job_param_name {
+            invoke_map.insert(
+                serde_yaml::Value::String(p.long_name.clone()),
+                serde_yaml::Value::String(format!("<< parameters.{job_name} >>")),
+            );
+        }
+    }
+    serde_yaml::Value::Mapping({
+        let mut m = serde_yaml::Mapping::new();
+        m.insert(
+            serde_yaml::Value::String(sub.name.replace('-', "_")),
+            serde_yaml::Value::Mapping(invoke_map),
+        );
+        m
+    })
+}
+
+fn render_job_group(
+    group: &crate::orb_config::JobGroup,
+    cli: &CliDefinition,
+    _config: Option<&OrbConfig>,
+) -> String {
+    let step_subs: Vec<&SubCommand> = group
+        .steps
+        .iter()
+        .filter_map(|name| find_leaf_subcommand(cli, name))
+        .collect();
+
+    let mut parameters = build_job_group_params(group, &step_subs);
+
+    let (attach_param, root_param) = build_workspace_params();
+    parameters.insert("attach_workspace".to_string(), attach_param);
+    parameters.insert("workspace_root".to_string(), root_param);
+
+    let mut steps = vec![
+        serde_yaml::Value::String("checkout".to_string()),
+        build_attach_workspace_step(),
+    ];
+    for sub in &step_subs {
+        steps.push(build_job_group_invoke_step(sub, &parameters));
+    }
+
+    let description = group
+        .description
+        .clone()
+        .unwrap_or_else(|| format!("Run {} in sequence.", group.steps.join(", ")));
+
+    let job = OrbJob {
+        description,
+        executor: "default".to_string(),
+        parameters,
+        steps,
+    };
+    serde_yaml::to_string(&job).unwrap()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -595,7 +864,7 @@ mod tests {
     #[test]
     fn orb_yml_has_no_commands_jobs_executors_keys() {
         let cli = make_cli("mytool", vec![]);
-        let files = generate(&cli, &default_opts());
+        let files = generate(&cli, &default_opts(), None);
         let content = files[&PathBuf::from("src/@orb.yml")].clone();
         assert!(
             !content.contains("commands:"),
@@ -614,7 +883,7 @@ mod tests {
     #[test]
     fn orb_yml_contains_version_and_description() {
         let cli = make_cli("mytool", vec![]);
-        let files = generate(&cli, &default_opts());
+        let files = generate(&cli, &default_opts(), None);
         let content = &files[&PathBuf::from("src/@orb.yml")];
         // version must be the YAML float 2.1, not a quoted string
         assert!(
@@ -629,7 +898,7 @@ mod tests {
     #[test]
     fn executor_has_docker_image_with_tag_param() {
         let cli = make_cli("mytool", vec![]);
-        let files = generate(&cli, &default_opts());
+        let files = generate(&cli, &default_opts(), None);
         let content = &files[&PathBuf::from("src/executors/default.yml")];
         assert!(
             content.contains("jerusdp/mytool:<< parameters.tag >>"),
@@ -650,7 +919,7 @@ mod tests {
     #[test]
     fn dockerfile_binstall_uses_multistage_build() {
         let cli = make_cli("mytool", vec![]);
-        let files = generate(&cli, &default_opts());
+        let files = generate(&cli, &default_opts(), None);
         let content = &files[&PathBuf::from("Dockerfile")];
         // Builder stage uses Rust on Bookworm so binary links against same GLIBC as runtime
         assert!(
@@ -682,7 +951,7 @@ mod tests {
     #[test]
     fn dockerfile_binstall_runtime_has_ca_certs_and_git() {
         let cli = make_cli("mytool", vec![]);
-        let files = generate(&cli, &default_opts());
+        let files = generate(&cli, &default_opts(), None);
         let content = &files[&PathBuf::from("Dockerfile")];
         assert!(
             content.contains("ca-certificates"),
@@ -697,7 +966,7 @@ mod tests {
     #[test]
     fn dockerfile_binstall_includes_git() {
         let cli = make_cli("mytool", vec![]);
-        let files = generate(&cli, &default_opts());
+        let files = generate(&cli, &default_opts(), None);
         let content = &files[&PathBuf::from("Dockerfile")];
         // git must appear as an apt package install, not just in cargo paths
         assert!(
@@ -709,7 +978,7 @@ mod tests {
     #[test]
     fn dockerfile_binstall_has_circleci_user_and_workdir() {
         let cli = make_cli("mytool", vec![]);
-        let files = generate(&cli, &default_opts());
+        let files = generate(&cli, &default_opts(), None);
         let content = &files[&PathBuf::from("Dockerfile")];
         assert!(
             content.contains("useradd") && content.contains("circleci"),
@@ -728,7 +997,7 @@ mod tests {
     #[test]
     fn dockerfile_binstall_does_not_run_as_root() {
         let cli = make_cli("mytool", vec![]);
-        let files = generate(&cli, &default_opts());
+        let files = generate(&cli, &default_opts(), None);
         let content = &files[&PathBuf::from("Dockerfile")];
         // USER circleci must appear after the binary is copied — not root at final layer
         let user_pos = content
@@ -750,7 +1019,7 @@ mod tests {
             apt_packages: vec!["libssl-dev".to_string(), "pkg-config".to_string()],
             ..default_opts()
         };
-        let files = generate(&cli, &opts);
+        let files = generate(&cli, &opts, None);
         let content = &files[&PathBuf::from("Dockerfile")];
         assert!(
             content.contains("libssl-dev"),
@@ -769,7 +1038,7 @@ mod tests {
             apt_packages: vec!["libssl-dev".to_string(), "pkg-config".to_string()],
             ..default_opts()
         };
-        let files = generate(&cli, &opts);
+        let files = generate(&cli, &opts, None);
         let content = &files[&PathBuf::from("Dockerfile")];
         // Isolate the final stage (starts at "FROM debian:12-slim")
         let final_stage = content
@@ -806,12 +1075,12 @@ mod tests {
     #[test]
     fn dockerfile_no_extra_packages_unchanged() {
         let cli = make_cli("mytool", vec![]);
-        let files_default = generate(&cli, &default_opts());
+        let files_default = generate(&cli, &default_opts(), None);
         let opts_empty = GenerateOpts {
             apt_packages: vec![],
             ..default_opts()
         };
-        let files_empty = generate(&cli, &opts_empty);
+        let files_empty = generate(&cli, &opts_empty, None);
         assert_eq!(
             files_default[&PathBuf::from("Dockerfile")],
             files_empty[&PathBuf::from("Dockerfile")],
@@ -827,7 +1096,7 @@ mod tests {
             apt_packages: vec!["libssl-dev".to_string()],
             ..default_opts()
         };
-        let files = generate(&cli, &opts);
+        let files = generate(&cli, &opts, None);
         let content = &files[&PathBuf::from("Dockerfile")];
         assert!(
             content.contains("libssl-dev"),
@@ -842,7 +1111,7 @@ mod tests {
             install_method: InstallMethod::Apt,
             ..default_opts()
         };
-        let files = generate(&cli, &opts);
+        let files = generate(&cli, &opts, None);
         let content = &files[&PathBuf::from("Dockerfile")];
         assert!(
             content.contains("apt-get install") && content.contains(" git"),
@@ -857,7 +1126,7 @@ mod tests {
             install_method: InstallMethod::Apt,
             ..default_opts()
         };
-        let files = generate(&cli, &opts);
+        let files = generate(&cli, &opts, None);
         let content = &files[&PathBuf::from("Dockerfile")];
         assert!(
             content.contains("apt-get install -y"),
@@ -883,7 +1152,7 @@ mod tests {
     fn command_step_uses_script_include() {
         let sub = make_leaf("generate", vec![]);
         let cli = make_cli("mytool", vec![sub]);
-        let files = generate(&cli, &default_opts());
+        let files = generate(&cli, &default_opts(), None);
         let content = &files[&PathBuf::from("src/commands/generate.yml")];
         assert!(
             content.contains("<<include(scripts/generate.sh)>>"),
@@ -895,7 +1164,7 @@ mod tests {
     fn script_file_generated_for_each_subcommand() {
         let subs = vec![make_leaf("generate", vec![]), make_leaf("validate", vec![])];
         let cli = make_cli("mytool", subs);
-        let files = generate(&cli, &default_opts());
+        let files = generate(&cli, &default_opts(), None);
         for name in &["generate", "validate"] {
             assert!(
                 files.contains_key(&PathBuf::from(format!("src/scripts/{name}.sh"))),
@@ -916,7 +1185,7 @@ mod tests {
         }];
         let sub = make_leaf("generate", params);
         let cli = make_cli("mytool", vec![sub]);
-        let files = generate(&cli, &default_opts());
+        let files = generate(&cli, &default_opts(), None);
         let script = &files[&PathBuf::from("src/scripts/generate.sh")];
         assert!(
             script.contains("set -- \"$@\" --orb-path \"${ORB_PATH}\""),
@@ -940,7 +1209,7 @@ mod tests {
         }];
         let sub = make_leaf("generate", params);
         let cli = make_cli("mytool", vec![sub]);
-        let files = generate(&cli, &default_opts());
+        let files = generate(&cli, &default_opts(), None);
         let script = &files[&PathBuf::from("src/scripts/generate.sh")];
         assert!(
             script.contains("[[ -n \"${OUTPUT:-}\" ]]")
@@ -961,7 +1230,7 @@ mod tests {
         }];
         let sub = make_leaf("generate", params);
         let cli = make_cli("mytool", vec![sub]);
-        let files = generate(&cli, &default_opts());
+        let files = generate(&cli, &default_opts(), None);
         let script = &files[&PathBuf::from("src/scripts/generate.sh")];
         assert!(
             script.contains("[[ \"${FORCE:-false}\" = \"true\" ]]") && script.contains("--force"),
@@ -991,7 +1260,7 @@ mod tests {
         ];
         let sub = make_leaf("generate", params);
         let cli = make_cli("mytool", vec![sub]);
-        let files = generate(&cli, &default_opts());
+        let files = generate(&cli, &default_opts(), None);
         let content = &files[&PathBuf::from("src/commands/generate.yml")];
         assert!(
             content.contains("environment:"),
@@ -1013,7 +1282,7 @@ mod tests {
     fn example_file_generated() {
         let sub = make_leaf("generate", vec![]);
         let cli = make_cli("mytool", vec![sub]);
-        let files = generate(&cli, &default_opts());
+        let files = generate(&cli, &default_opts(), None);
         assert!(
             files.contains_key(&PathBuf::from("src/examples/example.yml")),
             "src/examples/example.yml must be generated for RC003 compliance"
@@ -1053,7 +1322,7 @@ mod tests {
         ];
         let sub = make_leaf("dosomething", params);
         let cli = make_cli("mytool", vec![sub]);
-        let files = generate(&cli, &default_opts());
+        let files = generate(&cli, &default_opts(), None);
         let example = &files[&PathBuf::from("src/examples/example.yml")];
         assert!(
             example.contains("orb_name:"),
@@ -1073,7 +1342,7 @@ mod tests {
         // A subcommand named "do-something" must produce do_something.yml, not do-something.yml.
         let sub = make_leaf("do-something", vec![]);
         let cli = make_cli("mytool", vec![sub]);
-        let files = generate(&cli, &default_opts());
+        let files = generate(&cli, &default_opts(), None);
         assert!(
             files.contains_key(&PathBuf::from("src/commands/do_something.yml")),
             "command file must use snake_case filename:\n{:?}",
@@ -1100,7 +1369,7 @@ mod tests {
         // The job's invoke step key must match the command's snake_case filename.
         let sub = make_leaf("do-something", vec![]);
         let cli = make_cli("mytool", vec![sub]);
-        let files = generate(&cli, &default_opts());
+        let files = generate(&cli, &default_opts(), None);
         let job = &files[&PathBuf::from("src/jobs/do_something.yml")];
         assert!(
             job.contains("do_something:"),
@@ -1117,7 +1386,7 @@ mod tests {
         // The command's <<include(scripts/...)>> path must match the snake_case script filename.
         let sub = make_leaf("do-something", vec![]);
         let cli = make_cli("mytool", vec![sub]);
-        let files = generate(&cli, &default_opts());
+        let files = generate(&cli, &default_opts(), None);
         let cmd = &files[&PathBuf::from("src/commands/do_something.yml")];
         assert!(
             cmd.contains("<<include(scripts/do_something.sh)>>"),
@@ -1130,7 +1399,7 @@ mod tests {
         // The example must reference the job by its snake_case name.
         let sub = make_leaf("do-something", vec![]);
         let cli = make_cli("mytool", vec![sub]);
-        let files = generate(&cli, &default_opts());
+        let files = generate(&cli, &default_opts(), None);
         let example = &files[&PathBuf::from("src/examples/example.yml")];
         assert!(
             example.contains("mytool/do_something"),
@@ -1155,7 +1424,7 @@ mod tests {
         }];
         let sub = make_leaf("generate", params);
         let cli = make_cli("mytool", vec![sub]);
-        let files = generate(&cli, &default_opts());
+        let files = generate(&cli, &default_opts(), None);
         let script = &files[&PathBuf::from("src/scripts/generate.sh")];
         assert!(
             script.contains("set -- \"$@\" --orb-path \"${ORB_PATH}\""),
@@ -1179,7 +1448,7 @@ mod tests {
         }];
         let sub = make_leaf("generate", params);
         let cli = make_cli("mytool", vec![sub]);
-        let files = generate(&cli, &default_opts());
+        let files = generate(&cli, &default_opts(), None);
         let script = &files[&PathBuf::from("src/scripts/generate.sh")];
         assert!(
             script.contains("[[ -n \"${OUTPUT:-}\" ]]"),
@@ -1199,7 +1468,7 @@ mod tests {
         }];
         let sub = make_leaf("generate", params);
         let cli = make_cli("mytool", vec![sub]);
-        let files = generate(&cli, &default_opts());
+        let files = generate(&cli, &default_opts(), None);
         let script = &files[&PathBuf::from("src/scripts/generate.sh")];
         assert!(
             script.contains("[[ \"${FORCE:-false}\" = \"true\" ]]"),
@@ -1219,7 +1488,7 @@ mod tests {
         }];
         let sub = make_leaf("generate", params);
         let cli = make_cli("mytool", vec![sub]);
-        let files = generate(&cli, &default_opts());
+        let files = generate(&cli, &default_opts(), None);
         let content = &files[&PathBuf::from("src/commands/generate.yml")];
         assert!(
             content.contains("enum:"),
@@ -1250,7 +1519,7 @@ mod tests {
             description: "Force overwrite.".to_string(),
         }];
         let sub = make_leaf("cmd", params);
-        let files = generate(&make_cli("mytool", vec![sub]), &default_opts());
+        let files = generate(&make_cli("mytool", vec![sub]), &default_opts(), None);
         let content = &files[&PathBuf::from("src/commands/cmd.yml")];
         assert!(
             content.contains("default: false"),
@@ -1272,7 +1541,7 @@ mod tests {
             description: "Output path.".to_string(),
         }];
         let sub = make_leaf("cmd", params);
-        let files = generate(&make_cli("mytool", vec![sub]), &default_opts());
+        let files = generate(&make_cli("mytool", vec![sub]), &default_opts(), None);
         let content = &files[&PathBuf::from("src/commands/cmd.yml")];
         // serde_yaml serialises an empty string as ''
         assert!(
@@ -1294,7 +1563,7 @@ mod tests {
             description: "Path to orb.".to_string(),
         }];
         let sub = make_leaf("cmd", params);
-        let files = generate(&make_cli("mytool", vec![sub]), &default_opts());
+        let files = generate(&make_cli("mytool", vec![sub]), &default_opts(), None);
         let content = &files[&PathBuf::from("src/commands/cmd.yml")];
         assert!(
             !content.contains("default:"),
@@ -1308,7 +1577,7 @@ mod tests {
     fn job_references_executor_default() {
         let sub = make_leaf("validate", vec![]);
         let cli = make_cli("mytool", vec![sub]);
-        let files = generate(&cli, &default_opts());
+        let files = generate(&cli, &default_opts(), None);
         let content = &files[&PathBuf::from("src/jobs/validate.yml")];
         assert!(
             content.contains("executor: default"),
@@ -1320,7 +1589,7 @@ mod tests {
     fn job_has_checkout_step() {
         let sub = make_leaf("validate", vec![]);
         let cli = make_cli("mytool", vec![sub]);
-        let files = generate(&cli, &default_opts());
+        let files = generate(&cli, &default_opts(), None);
         let content = &files[&PathBuf::from("src/jobs/validate.yml")];
         assert!(
             content.contains("checkout"),
@@ -1353,7 +1622,7 @@ mod tests {
         ];
         let sub = make_leaf("generate", params);
         let cli = make_cli("mytool", vec![sub]);
-        let files = generate(&cli, &default_opts());
+        let files = generate(&cli, &default_opts(), None);
 
         // Job must NOT contain `name:` as a parameter key (2-space indent = parameter level).
         let job = &files[&PathBuf::from("src/jobs/generate.yml")];
@@ -1396,7 +1665,7 @@ mod tests {
         ];
         let sub = make_leaf("generate", params);
         let cli = make_cli("mytool", vec![sub]);
-        let files = generate(&cli, &default_opts());
+        let files = generate(&cli, &default_opts(), None);
 
         let cmd = &files[&PathBuf::from("src/commands/generate.yml")];
         // Must NOT appear as the bare restricted name
@@ -1434,7 +1703,7 @@ mod tests {
     #[test]
     fn dockerfile_without_circleci_cli_version_has_no_installer_stage() {
         let cli = make_cli("mytool", vec![]);
-        let files = generate(&cli, &default_opts());
+        let files = generate(&cli, &default_opts(), None);
         let content = &files[&PathBuf::from("Dockerfile")];
         assert!(
             !content.contains("cli-installer"),
@@ -1453,7 +1722,7 @@ mod tests {
             circleci_cli_version: Some("0.1.36202".to_string()),
             ..default_opts()
         };
-        let files = generate(&cli, &opts);
+        let files = generate(&cli, &opts, None);
         let content = &files[&PathBuf::from("Dockerfile")];
         assert!(
             content.contains("AS cli-installer"),
@@ -1472,7 +1741,7 @@ mod tests {
             circleci_cli_version: Some("0.1.36202".to_string()),
             ..default_opts()
         };
-        let files = generate(&cli, &opts);
+        let files = generate(&cli, &opts, None);
         let content = &files[&PathBuf::from("Dockerfile")];
         assert!(
             content.contains("sha256sum --check"),
@@ -1491,7 +1760,7 @@ mod tests {
             circleci_cli_version: Some("0.1.36202".to_string()),
             ..default_opts()
         };
-        let files = generate(&cli, &opts);
+        let files = generate(&cli, &opts, None);
         let content = &files[&PathBuf::from("Dockerfile")];
         assert!(
             content.contains(
@@ -1510,7 +1779,7 @@ mod tests {
             circleci_cli_version: Some("0.1.36202".to_string()),
             ..default_opts()
         };
-        let files = generate(&cli, &opts);
+        let files = generate(&cli, &opts, None);
         let content = &files[&PathBuf::from("Dockerfile")];
         let curl_lines: Vec<&str> = content
             .lines()
@@ -1535,7 +1804,7 @@ mod tests {
             circleci_cli_version: Some("0.1.36202".to_string()),
             ..default_opts()
         };
-        let files = generate(&cli, &opts);
+        let files = generate(&cli, &opts, None);
         let content = &files[&PathBuf::from("Dockerfile")];
         let builder_pos = content.find("AS builder").expect("builder stage missing");
         let installer_pos = content
@@ -1575,7 +1844,7 @@ mod tests {
             git_push_subcommands: vec!["save".to_string()],
             ..default_opts()
         };
-        let files = generate(&cli, &opts);
+        let files = generate(&cli, &opts, None);
         let job = &files[&PathBuf::from("src/jobs/save.yml")];
         assert!(
             job.contains("set_https_remote"),
@@ -1591,7 +1860,7 @@ mod tests {
             git_push_subcommands: vec!["save".to_string()],
             ..default_opts()
         };
-        let files = generate(&cli, &opts);
+        let files = generate(&cli, &opts, None);
         let job = &files[&PathBuf::from("src/jobs/save.yml")];
         let checkout_pos = job.find("- checkout").expect("checkout step missing");
         let https_pos = job
@@ -1612,7 +1881,7 @@ mod tests {
             git_push_subcommands: vec!["save".to_string()],
             ..default_opts()
         };
-        let files = generate(&cli, &opts);
+        let files = generate(&cli, &opts, None);
         let job = &files[&PathBuf::from("src/jobs/validate.yml")];
         assert!(
             !job.contains("set_https_remote"),
@@ -1624,7 +1893,7 @@ mod tests {
     fn job_has_attach_workspace_parameter() {
         let sub = make_leaf("generate", vec![]);
         let cli = make_cli("mytool", vec![sub]);
-        let files = generate(&cli, &default_opts());
+        let files = generate(&cli, &default_opts(), None);
         let job = &files[&PathBuf::from("src/jobs/generate.yml")];
         assert!(
             job.contains("attach_workspace:"),
@@ -1636,7 +1905,7 @@ mod tests {
     fn job_has_workspace_root_parameter() {
         let sub = make_leaf("generate", vec![]);
         let cli = make_cli("mytool", vec![sub]);
-        let files = generate(&cli, &default_opts());
+        let files = generate(&cli, &default_opts(), None);
         let job = &files[&PathBuf::from("src/jobs/generate.yml")];
         assert!(
             job.contains("workspace_root:"),
@@ -1648,7 +1917,7 @@ mod tests {
     fn job_workspace_root_default_is_tmp_workspace() {
         let sub = make_leaf("generate", vec![]);
         let cli = make_cli("mytool", vec![sub]);
-        let files = generate(&cli, &default_opts());
+        let files = generate(&cli, &default_opts(), None);
         let job = &files[&PathBuf::from("src/jobs/generate.yml")];
         assert!(
             job.contains("/tmp/workspace"),
@@ -1660,7 +1929,7 @@ mod tests {
     fn job_has_conditional_attach_workspace_step() {
         let sub = make_leaf("generate", vec![]);
         let cli = make_cli("mytool", vec![sub]);
-        let files = generate(&cli, &default_opts());
+        let files = generate(&cli, &default_opts(), None);
         let job = &files[&PathBuf::from("src/jobs/generate.yml")];
         assert!(
             job.contains("condition: << parameters.attach_workspace >>"),
@@ -1672,7 +1941,7 @@ mod tests {
     fn script_file_ends_with_newline() {
         let sub = make_leaf("generate", vec![]);
         let cli = make_cli("mytool", vec![sub]);
-        let files = generate(&cli, &default_opts());
+        let files = generate(&cli, &default_opts(), None);
         let script = &files[&PathBuf::from("src/scripts/generate.sh")];
         assert!(
             script.ends_with('\n'),
@@ -1684,7 +1953,7 @@ mod tests {
     fn job_with_no_push_subcommands_has_no_set_https_remote() {
         let sub = make_leaf("save", vec![]);
         let cli = make_cli("mytool", vec![sub]);
-        let files = generate(&cli, &default_opts());
+        let files = generate(&cli, &default_opts(), None);
         let job = &files[&PathBuf::from("src/jobs/save.yml")];
         assert!(
             !job.contains("set_https_remote"),
@@ -1700,7 +1969,7 @@ mod tests {
             make_leaf("diff", vec![]),
         ];
         let cli = make_cli("mytool", subs);
-        let files = generate(&cli, &default_opts());
+        let files = generate(&cli, &default_opts(), None);
         for name in &["generate", "validate", "diff"] {
             assert!(
                 files.contains_key(&PathBuf::from(format!("src/commands/{name}.yml"))),
@@ -1715,5 +1984,411 @@ mod tests {
                 "missing scripts/{name}.sh"
             );
         }
+    }
+
+    // ── Phase 2: config-driven suppression, param overrides, orbs section ─────
+
+    #[test]
+    fn suppressed_subcommand_has_no_job_file() {
+        use crate::orb_config::{OrbConfig, SubcommandConfig};
+        use indexmap::IndexMap;
+
+        let sub = make_leaf("help", vec![]);
+        let cli = make_cli("mytool", vec![sub]);
+        let mut subcommands = IndexMap::new();
+        subcommands.insert(
+            "help".to_string(),
+            SubcommandConfig {
+                generate_job: Some(false),
+                param: None,
+            },
+        );
+        let config = OrbConfig {
+            subcommand: Some(subcommands),
+            ..OrbConfig::default()
+        };
+        let files = generate(&cli, &default_opts(), Some(&config));
+        assert!(
+            !files.contains_key(&PathBuf::from("src/jobs/help.yml")),
+            "suppressed subcommand must not generate a job file"
+        );
+    }
+
+    #[test]
+    fn suppressed_subcommand_still_has_command_file() {
+        use crate::orb_config::{OrbConfig, SubcommandConfig};
+        use indexmap::IndexMap;
+
+        let sub = make_leaf("help", vec![]);
+        let cli = make_cli("mytool", vec![sub]);
+        let mut subcommands = IndexMap::new();
+        subcommands.insert(
+            "help".to_string(),
+            SubcommandConfig {
+                generate_job: Some(false),
+                param: None,
+            },
+        );
+        let config = OrbConfig {
+            subcommand: Some(subcommands),
+            ..OrbConfig::default()
+        };
+        let files = generate(&cli, &default_opts(), Some(&config));
+        assert!(
+            files.contains_key(&PathBuf::from("src/commands/help.yml")),
+            "suppressed subcommand must still generate a command file"
+        );
+    }
+
+    #[test]
+    fn suppressed_subcommand_not_in_example_yml() {
+        use crate::orb_config::{OrbConfig, SubcommandConfig};
+        use indexmap::IndexMap;
+
+        let subs = vec![make_leaf("generate", vec![]), make_leaf("help", vec![])];
+        let cli = make_cli("mytool", subs);
+        let mut subcommands = IndexMap::new();
+        subcommands.insert(
+            "help".to_string(),
+            SubcommandConfig {
+                generate_job: Some(false),
+                param: None,
+            },
+        );
+        let config = OrbConfig {
+            subcommand: Some(subcommands),
+            ..OrbConfig::default()
+        };
+        let files = generate(&cli, &default_opts(), Some(&config));
+        let example = &files[&PathBuf::from("src/examples/example.yml")];
+        assert!(
+            !example.contains("help:"),
+            "suppressed subcommand must not appear in example.yml:\n{example}"
+        );
+    }
+
+    #[test]
+    fn param_override_changes_default_in_generated_job() {
+        use crate::help_parser::types::Parameter;
+        use crate::orb_config::{OrbConfig, ParamOverride, SubcommandConfig};
+        use indexmap::IndexMap;
+
+        let orb_path_param = Parameter {
+            long_name: "orb_path".to_string(),
+            short: None,
+            param_type: ParamType::String,
+            default: Some("src/@orb.yml".to_string()),
+            required: false,
+            description: "Path to orb file.".to_string(),
+        };
+        let sub = make_leaf("generate", vec![orb_path_param]);
+        let cli = make_cli("mytool", vec![sub]);
+
+        let mut param_overrides = IndexMap::new();
+        param_overrides.insert(
+            "orb_path".to_string(),
+            ParamOverride {
+                default: Some("custom/@orb.yml".to_string()),
+            },
+        );
+        let mut subcommands = IndexMap::new();
+        subcommands.insert(
+            "generate".to_string(),
+            SubcommandConfig {
+                generate_job: None,
+                param: Some(param_overrides),
+            },
+        );
+        let config = OrbConfig {
+            subcommand: Some(subcommands),
+            ..OrbConfig::default()
+        };
+        let files = generate(&cli, &default_opts(), Some(&config));
+        let job = &files[&PathBuf::from("src/jobs/generate.yml")];
+        assert!(
+            job.contains("custom/@orb.yml"),
+            "param override must change default in generated job:\n{job}"
+        );
+        assert!(
+            !job.contains("src/@orb.yml"),
+            "original default must be replaced by param override:\n{job}"
+        );
+    }
+
+    #[test]
+    fn orb_yml_has_orbs_section_when_config_provides_orbs() {
+        use crate::orb_config::OrbConfig;
+        use indexmap::IndexMap;
+
+        let cli = make_cli("mytool", vec![]);
+        let mut orbs = IndexMap::new();
+        orbs.insert(
+            "orb-tools".to_string(),
+            "circleci/orb-tools@12.3.3".to_string(),
+        );
+        let config = OrbConfig {
+            orbs: Some(orbs),
+            ..OrbConfig::default()
+        };
+        let files = generate(&cli, &default_opts(), Some(&config));
+        let orb_yml = &files[&PathBuf::from("src/@orb.yml")];
+        assert!(
+            orb_yml.contains("orbs:"),
+            "@orb.yml must include orbs: section when config provides orbs:\n{orb_yml}"
+        );
+        assert!(
+            orb_yml.contains("orb-tools: circleci/orb-tools@12.3.3"),
+            "@orb.yml must include the orb reference:\n{orb_yml}"
+        );
+    }
+
+    #[test]
+    fn generate_with_no_config_matches_default_behavior() {
+        let sub = make_leaf("generate", vec![]);
+        let cli = make_cli("mytool", vec![sub]);
+        let files = generate(&cli, &default_opts(), None);
+        assert!(
+            files.contains_key(&PathBuf::from("src/jobs/generate.yml")),
+            "no-config generate must still produce job file"
+        );
+        assert!(
+            files.contains_key(&PathBuf::from("src/commands/generate.yml")),
+            "no-config generate must still produce command file"
+        );
+    }
+
+    // ── Phase 3: job_group composed job generation ─────────────────────────
+
+    fn make_param(name: &str, default: Option<&str>, required: bool) -> Parameter {
+        Parameter {
+            long_name: name.to_string(),
+            short: None,
+            param_type: ParamType::String,
+            default: default.map(String::from),
+            required,
+            description: format!("{name} param."),
+        }
+    }
+
+    #[test]
+    fn job_group_file_created_for_each_group() {
+        use crate::orb_config::{JobGroup, OrbConfig};
+
+        let subs = vec![make_leaf("generate", vec![]), make_leaf("validate", vec![])];
+        let cli = make_cli("mytool", subs);
+        let config = OrbConfig {
+            job_group: Some(vec![JobGroup {
+                name: "sync".to_string(),
+                description: Some("Regenerate and validate".to_string()),
+                steps: vec!["generate".to_string(), "validate".to_string()],
+                params: None,
+            }]),
+            ..OrbConfig::default()
+        };
+        let files = generate(&cli, &default_opts(), Some(&config));
+        assert!(
+            files.contains_key(&PathBuf::from("src/jobs/sync.yml")),
+            "job_group must produce src/jobs/sync.yml"
+        );
+    }
+
+    #[test]
+    fn job_group_contains_both_steps_in_order() {
+        use crate::orb_config::{JobGroup, OrbConfig};
+
+        let subs = vec![make_leaf("generate", vec![]), make_leaf("validate", vec![])];
+        let cli = make_cli("mytool", subs);
+        let config = OrbConfig {
+            job_group: Some(vec![JobGroup {
+                name: "sync".to_string(),
+                description: None,
+                steps: vec!["generate".to_string(), "validate".to_string()],
+                params: None,
+            }]),
+            ..OrbConfig::default()
+        };
+        let files = generate(&cli, &default_opts(), Some(&config));
+        let job = &files[&PathBuf::from("src/jobs/sync.yml")];
+        let gen_pos = job.find("generate:").expect("generate step missing");
+        let val_pos = job.find("validate:").expect("validate step missing");
+        assert!(
+            gen_pos < val_pos,
+            "generate step must appear before validate step:\n{job}"
+        );
+    }
+
+    #[test]
+    fn job_group_description_in_job_yaml() {
+        use crate::orb_config::{JobGroup, OrbConfig};
+
+        let subs = vec![make_leaf("generate", vec![]), make_leaf("validate", vec![])];
+        let cli = make_cli("mytool", subs);
+        let config = OrbConfig {
+            job_group: Some(vec![JobGroup {
+                name: "sync".to_string(),
+                description: Some("Regenerate and validate".to_string()),
+                steps: vec!["generate".to_string(), "validate".to_string()],
+                params: None,
+            }]),
+            ..OrbConfig::default()
+        };
+        let files = generate(&cli, &default_opts(), Some(&config));
+        let job = &files[&PathBuf::from("src/jobs/sync.yml")];
+        assert!(
+            job.contains("Regenerate and validate"),
+            "job_group description must appear in job YAML:\n{job}"
+        );
+    }
+
+    #[test]
+    fn job_group_shared_param_appears_in_merged_job() {
+        use crate::orb_config::{JobGroup, OrbConfig};
+
+        let shared_param = make_param("orb_path", Some("src/@orb.yml"), false);
+        let subs = vec![
+            make_leaf("generate", vec![shared_param.clone()]),
+            make_leaf("validate", vec![shared_param]),
+        ];
+        let cli = make_cli("mytool", subs);
+        let config = OrbConfig {
+            job_group: Some(vec![JobGroup {
+                name: "sync".to_string(),
+                description: None,
+                steps: vec!["generate".to_string(), "validate".to_string()],
+                params: None,
+            }]),
+            ..OrbConfig::default()
+        };
+        let files = generate(&cli, &default_opts(), Some(&config));
+        let job = &files[&PathBuf::from("src/jobs/sync.yml")];
+        assert!(
+            job.contains("orb_path:"),
+            "shared param orb_path must appear in merged job:\n{job}"
+        );
+    }
+
+    #[test]
+    fn job_group_explicit_params_restricts_to_listed_params() {
+        use crate::orb_config::{JobGroup, OrbConfig};
+
+        let subs = vec![
+            make_leaf(
+                "generate",
+                vec![
+                    make_param("orb_path", Some("src/@orb.yml"), false),
+                    make_param("format", Some("yaml"), false),
+                ],
+            ),
+            make_leaf(
+                "validate",
+                vec![make_param("orb_path", Some("src/@orb.yml"), false)],
+            ),
+        ];
+        let cli = make_cli("mytool", subs);
+        let config = OrbConfig {
+            job_group: Some(vec![JobGroup {
+                name: "sync".to_string(),
+                description: None,
+                steps: vec!["generate".to_string(), "validate".to_string()],
+                params: Some(vec!["orb_path".to_string()]),
+            }]),
+            ..OrbConfig::default()
+        };
+        let files = generate(&cli, &default_opts(), Some(&config));
+        let job = &files[&PathBuf::from("src/jobs/sync.yml")];
+        assert!(
+            job.contains("orb_path:"),
+            "explicitly listed orb_path must appear in job:\n{job}"
+        );
+        assert!(
+            !job.contains("format:"),
+            "non-listed format param must not appear in job:\n{job}"
+        );
+    }
+
+    // ── Phase 4: extra_job verbatim YAML generation ────────────────────────
+
+    #[test]
+    fn extra_job_file_created_at_jobs_path() {
+        use crate::orb_config::{ExtraJob, OrbConfig};
+
+        let cli = make_cli("mytool", vec![]);
+        let config = OrbConfig {
+            extra_job: Some(vec![ExtraJob {
+                name: "ensure_registered".to_string(),
+                yaml: "description: Ensure registered\nexecutor: orb-tools/default\n".to_string(),
+            }]),
+            ..OrbConfig::default()
+        };
+        let files = generate(&cli, &default_opts(), Some(&config));
+        assert!(
+            files.contains_key(&PathBuf::from("src/jobs/ensure_registered.yml")),
+            "extra_job must produce src/jobs/ensure_registered.yml"
+        );
+    }
+
+    #[test]
+    fn extra_job_yaml_emitted_verbatim() {
+        use crate::orb_config::{ExtraJob, OrbConfig};
+
+        let yaml_content =
+            "description: Ensure registered\nexecutor: orb-tools/default\nsteps:\n  - run: echo ok\n";
+        let cli = make_cli("mytool", vec![]);
+        let config = OrbConfig {
+            extra_job: Some(vec![ExtraJob {
+                name: "ensure_registered".to_string(),
+                yaml: yaml_content.to_string(),
+            }]),
+            ..OrbConfig::default()
+        };
+        let files = generate(&cli, &default_opts(), Some(&config));
+        let job = &files[&PathBuf::from("src/jobs/ensure_registered.yml")];
+        assert!(
+            job.contains("description: Ensure registered"),
+            "extra_job yaml must be emitted verbatim:\n{job}"
+        );
+        assert!(
+            job.contains("executor: orb-tools/default"),
+            "extra_job yaml must contain executor:\n{job}"
+        );
+    }
+
+    #[test]
+    fn extra_job_file_ends_with_newline() {
+        use crate::orb_config::{ExtraJob, OrbConfig};
+
+        let cli = make_cli("mytool", vec![]);
+        let config = OrbConfig {
+            extra_job: Some(vec![ExtraJob {
+                name: "my_job".to_string(),
+                yaml: "description: A job".to_string(),
+            }]),
+            ..OrbConfig::default()
+        };
+        let files = generate(&cli, &default_opts(), Some(&config));
+        let job = &files[&PathBuf::from("src/jobs/my_job.yml")];
+        assert!(
+            job.ends_with('\n'),
+            "extra_job output must end with a newline:\n{job:?}"
+        );
+    }
+
+    #[test]
+    fn extra_job_hyphenated_name_preserved_as_filename() {
+        use crate::orb_config::{ExtraJob, OrbConfig};
+
+        let cli = make_cli("mytool", vec![]);
+        let config = OrbConfig {
+            extra_job: Some(vec![ExtraJob {
+                name: "ensure-registered".to_string(),
+                yaml: "description: Test".to_string(),
+            }]),
+            ..OrbConfig::default()
+        };
+        let files = generate(&cli, &default_opts(), Some(&config));
+        assert!(
+            files.contains_key(&PathBuf::from("src/jobs/ensure-registered.yml")),
+            "extra_job with hyphenated name must use hyphen in filename"
+        );
     }
 }

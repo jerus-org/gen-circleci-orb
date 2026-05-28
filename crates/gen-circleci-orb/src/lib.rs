@@ -8,6 +8,7 @@ use clap::Parser;
 pub mod ci_patcher;
 pub mod commands;
 pub mod help_parser;
+pub mod orb_config;
 pub mod orb_generator;
 pub mod output_writer;
 
@@ -22,6 +23,8 @@ pub struct Cli {
 /// Available subcommands.
 #[derive(Debug, clap::Subcommand)]
 pub enum Commands {
+    /// Manage the gen-circleci-orb.toml configuration file.
+    Config(commands::config::Config),
     /// Ensure a CircleCI orb is registered, creating it if it does not exist.
     EnsureOrbRegistered(commands::ensure_orb_registered::EnsureOrbRegistered),
     /// Generate orb source files from a CLI binary's --help output.
@@ -34,6 +37,7 @@ impl Cli {
     /// Execute the selected command.
     pub fn run(&self) -> Result<()> {
         match &self.command {
+            Commands::Config(cmd) => cmd.run(),
             Commands::EnsureOrbRegistered(cmd) => cmd.run(),
             Commands::Generate(cmd) => cmd.run(),
             Commands::Init(cmd) => cmd.run(),

@@ -31,6 +31,10 @@ indexmap = { version = "2.9.0", features = ["serde"] }
 # Parsing
 regex = "1.11.1"
 
+# Configuration
+toml = "0.8"
+dialoguer = "0.11"
+
 # Testing
 trycmd = "1.2.0"
 tempfile = "3.19.1"
