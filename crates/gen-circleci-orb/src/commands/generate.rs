@@ -155,7 +155,7 @@ impl Generate {
             apt_packages: self.apt_packages.clone(),
         };
 
-        let files = orb_generator::generate(&cli_def, &opts);
+        let files = orb_generator::generate(&cli_def, &opts, None);
 
         tracing::info!("Generated {} file(s)", files.len());
 
