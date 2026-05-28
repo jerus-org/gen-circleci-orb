@@ -1,0 +1,34 @@
+[
+  {
+    "type": "ParameterRemoved",
+    "data": {
+      "job": "generate",
+      "parameter": "attach_workspace",
+      "since_version": "0.0.30"
+    }
+  },
+  {
+    "type": "ParameterRemoved",
+    "data": {
+      "job": "generate",
+      "parameter": "workspace_root",
+      "since_version": "0.0.30"
+    }
+  },
+  {
+    "type": "ParameterAdded",
+    "data": {
+      "job": "init",
+      "parameter": "crate_tag_prefix",
+      "since_version": "0.0.30"
+    }
+  },
+  {
+    "type": "CommandParameterAdded",
+    "data": {
+      "command": "init",
+      "parameter": "crate_tag_prefix",
+      "since_version": "0.0.30"
+    }
+  }
+]
