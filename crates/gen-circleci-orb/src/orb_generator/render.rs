@@ -63,6 +63,17 @@ pub fn generate(
         ),
     );
 
+    // src/jobs/<name>.yml for each job_group in config
+    if let Some(groups) = config.and_then(|c| c.job_group.as_ref()) {
+        for group in groups {
+            let snake = group.name.replace('-', "_");
+            files.insert(
+                PathBuf::from(format!("src/jobs/{snake}.yml")),
+                render_job_group(group, cli, config),
+            );
+        }
+    }
+
     // examples/example.yml (RC003)
     files.insert(
         PathBuf::from("src/examples/example.yml"),
@@ -258,84 +269,15 @@ fn render_job(sub: &SubCommand, opts: &GenerateOpts, config: Option<&OrbConfig>)
             }
         }
     }
-    parameters.insert(
-        "attach_workspace".to_string(),
-        OrbParameter {
-            param_type: "boolean".to_string(),
-            description: "Attach a workspace before running the command (use when the binary was built in a prior job).".to_string(),
-            default: Some(serde_yaml::Value::Bool(false)),
-            enum_values: None,
-        },
-    );
-    parameters.insert(
-        "workspace_root".to_string(),
-        OrbParameter {
-            param_type: "string".to_string(),
-            description: "Path at which to attach the workspace; also prepended to PATH (only used when attach_workspace is true).".to_string(),
-            default: Some(serde_yaml::Value::String("/tmp/workspace".to_string())),
-            enum_values: None,
-        },
-    );
-
-    let checkout_step: serde_yaml::Value = serde_yaml::Value::String("checkout".to_string());
-
-    // Conditional workspace attachment step
-    let attach_step = {
-        let mut attach_map = serde_yaml::Mapping::new();
-        attach_map.insert(
-            serde_yaml::Value::String("at".to_string()),
-            serde_yaml::Value::String("<< parameters.workspace_root >>".to_string()),
-        );
-        let mut add_path_env = serde_yaml::Mapping::new();
-        add_path_env.insert(
-            serde_yaml::Value::String("WORKSPACE_ROOT".to_string()),
-            serde_yaml::Value::String("<< parameters.workspace_root >>".to_string()),
-        );
-        let mut add_path_run = serde_yaml::Mapping::new();
-        add_path_run.insert(
-            serde_yaml::Value::String("name".to_string()),
-            serde_yaml::Value::String("Add workspace binaries to PATH".to_string()),
-        );
-        add_path_run.insert(
-            serde_yaml::Value::String("command".to_string()),
-            serde_yaml::Value::String("<<include(scripts/add-workspace-to-path.sh)>>".to_string()),
-        );
-        add_path_run.insert(
-            serde_yaml::Value::String("environment".to_string()),
-            serde_yaml::Value::Mapping(add_path_env),
-        );
-        let mut attach_ws_map = serde_yaml::Mapping::new();
-        attach_ws_map.insert(
-            serde_yaml::Value::String("attach_workspace".to_string()),
-            serde_yaml::Value::Mapping(attach_map),
-        );
-        let inner_steps = serde_yaml::Value::Sequence(vec![
-            serde_yaml::Value::Mapping(attach_ws_map),
-            serde_yaml::Value::Mapping({
-                let mut m = serde_yaml::Mapping::new();
-                m.insert(
-                    serde_yaml::Value::String("run".to_string()),
-                    serde_yaml::Value::Mapping(add_path_run),
-                );
-                m
-            }),
-        ]);
-        let mut when_inner = serde_yaml::Mapping::new();
-        when_inner.insert(
-            serde_yaml::Value::String("condition".to_string()),
-            serde_yaml::Value::String("<< parameters.attach_workspace >>".to_string()),
-        );
-        when_inner.insert(serde_yaml::Value::String("steps".to_string()), inner_steps);
-        let mut when_map = serde_yaml::Mapping::new();
-        when_map.insert(
-            serde_yaml::Value::String("when".to_string()),
-            serde_yaml::Value::Mapping(when_inner),
-        );
-        serde_yaml::Value::Mapping(when_map)
-    };
+    let (attach_param, root_param) = build_workspace_params();
+    parameters.insert("attach_workspace".to_string(), attach_param);
+    parameters.insert("workspace_root".to_string(), root_param);
 
     let invoke_step = build_invoke_step(sub, RESERVED_JOB_PARAMS);
-    let mut steps = vec![checkout_step, attach_step];
+    let mut steps = vec![
+        serde_yaml::Value::String("checkout".to_string()),
+        build_attach_workspace_step(),
+    ];
     if opts.git_push_subcommands.contains(&sub.name) {
         steps.push(serde_yaml::Value::String("set_https_remote".to_string()));
     }
@@ -598,6 +540,266 @@ fn build_invoke_step(sub: &SubCommand, skip: &[&str]) -> serde_yaml::Value {
         );
         m
     })
+}
+
+fn build_workspace_params() -> (OrbParameter, OrbParameter) {
+    let attach = OrbParameter {
+        param_type: "boolean".to_string(),
+        description: "Attach a workspace before running the command (use when the binary was built in a prior job).".to_string(),
+        default: Some(serde_yaml::Value::Bool(false)),
+        enum_values: None,
+    };
+    let root = OrbParameter {
+        param_type: "string".to_string(),
+        description: "Path at which to attach the workspace; also prepended to PATH (only used when attach_workspace is true).".to_string(),
+        default: Some(serde_yaml::Value::String("/tmp/workspace".to_string())),
+        enum_values: None,
+    };
+    (attach, root)
+}
+
+fn build_attach_workspace_step() -> serde_yaml::Value {
+    let mut attach_map = serde_yaml::Mapping::new();
+    attach_map.insert(
+        serde_yaml::Value::String("at".to_string()),
+        serde_yaml::Value::String("<< parameters.workspace_root >>".to_string()),
+    );
+    let mut add_path_env = serde_yaml::Mapping::new();
+    add_path_env.insert(
+        serde_yaml::Value::String("WORKSPACE_ROOT".to_string()),
+        serde_yaml::Value::String("<< parameters.workspace_root >>".to_string()),
+    );
+    let mut add_path_run = serde_yaml::Mapping::new();
+    add_path_run.insert(
+        serde_yaml::Value::String("name".to_string()),
+        serde_yaml::Value::String("Add workspace binaries to PATH".to_string()),
+    );
+    add_path_run.insert(
+        serde_yaml::Value::String("command".to_string()),
+        serde_yaml::Value::String("<<include(scripts/add-workspace-to-path.sh)>>".to_string()),
+    );
+    add_path_run.insert(
+        serde_yaml::Value::String("environment".to_string()),
+        serde_yaml::Value::Mapping(add_path_env),
+    );
+    let mut attach_ws_map = serde_yaml::Mapping::new();
+    attach_ws_map.insert(
+        serde_yaml::Value::String("attach_workspace".to_string()),
+        serde_yaml::Value::Mapping(attach_map),
+    );
+    let inner_steps = serde_yaml::Value::Sequence(vec![
+        serde_yaml::Value::Mapping(attach_ws_map),
+        serde_yaml::Value::Mapping({
+            let mut m = serde_yaml::Mapping::new();
+            m.insert(
+                serde_yaml::Value::String("run".to_string()),
+                serde_yaml::Value::Mapping(add_path_run),
+            );
+            m
+        }),
+    ]);
+    let mut when_inner = serde_yaml::Mapping::new();
+    when_inner.insert(
+        serde_yaml::Value::String("condition".to_string()),
+        serde_yaml::Value::String("<< parameters.attach_workspace >>".to_string()),
+    );
+    when_inner.insert(serde_yaml::Value::String("steps".to_string()), inner_steps);
+    let mut when_map = serde_yaml::Mapping::new();
+    when_map.insert(
+        serde_yaml::Value::String("when".to_string()),
+        serde_yaml::Value::Mapping(when_inner),
+    );
+    serde_yaml::Value::Mapping(when_map)
+}
+
+fn cli_param_to_orb_param(p: &crate::help_parser::types::Parameter) -> OrbParameter {
+    let (type_str, enum_vals) = match &p.param_type {
+        ParamType::String => ("string".to_string(), None),
+        ParamType::Boolean => ("boolean".to_string(), None),
+        ParamType::Integer => ("integer".to_string(), None),
+        ParamType::Enum(vals) => ("enum".to_string(), Some(vals.clone())),
+    };
+    let default = match &p.param_type {
+        ParamType::Boolean => {
+            let val = p.default.as_ref().map(|d| d == "true").unwrap_or(false);
+            Some(serde_yaml::Value::Bool(val))
+        }
+        _ if !p.required && p.default.is_none() => Some(serde_yaml::Value::String(String::new())),
+        _ => p
+            .default
+            .as_ref()
+            .map(|d| serde_yaml::Value::String(d.clone())),
+    };
+    OrbParameter {
+        param_type: type_str,
+        description: p.description.clone(),
+        default,
+        enum_values: enum_vals,
+    }
+}
+
+fn find_leaf_subcommand<'a>(cli: &'a CliDefinition, name: &str) -> Option<&'a SubCommand> {
+    fn search<'a>(subs: &'a [SubCommand], name: &str) -> Option<&'a SubCommand> {
+        for sub in subs {
+            if sub.is_leaf && sub.name == name {
+                return Some(sub);
+            }
+            if let Some(found) = search(&sub.subcommands, name) {
+                return Some(found);
+            }
+        }
+        None
+    }
+    search(&cli.subcommands, name)
+}
+
+fn build_job_group_params(
+    group: &crate::orb_config::JobGroup,
+    step_subs: &[&SubCommand],
+) -> IndexMap<String, OrbParameter> {
+    let mut params: IndexMap<String, OrbParameter> = if let Some(explicit) = &group.params {
+        // Explicit list: resolve each from the first step that defines it
+        let mut result = IndexMap::new();
+        for param_name in explicit {
+            for sub in step_subs.iter() {
+                if let Some(p) = sub.parameters.iter().find(|p| &p.long_name == param_name) {
+                    result.insert(param_name.clone(), cli_param_to_orb_param(p));
+                    break;
+                }
+            }
+        }
+        result
+    } else {
+        // Auto: compute intersection of param names across all steps
+        let mut result = IndexMap::new();
+        if let Some(first) = step_subs.first() {
+            let shared_names: std::collections::HashSet<&str> = step_subs[1..].iter().fold(
+                first
+                    .parameters
+                    .iter()
+                    .map(|p| p.long_name.as_str())
+                    .collect(),
+                |acc: std::collections::HashSet<&str>, sub| {
+                    let sub_names: std::collections::HashSet<&str> = sub
+                        .parameters
+                        .iter()
+                        .map(|p| p.long_name.as_str())
+                        .collect();
+                    acc.intersection(&sub_names).copied().collect()
+                },
+            );
+            // Preserve order from first step
+            for p in &first.parameters {
+                if shared_names.contains(p.long_name.as_str()) {
+                    result.insert(p.long_name.clone(), cli_param_to_orb_param(p));
+                }
+            }
+        }
+        result
+    };
+
+    // Always add mandatory params from each step not already present
+    let mut present: std::collections::HashSet<String> = params.keys().cloned().collect();
+    for sub in step_subs {
+        for p in &sub.parameters {
+            if !p.required || matches!(p.param_type, ParamType::Boolean) {
+                continue;
+            }
+            if present.contains(&p.long_name) {
+                continue;
+            }
+            // Prefix with step name if another step also has a param with the same name
+            let collides = step_subs.iter().any(|other| {
+                other.name != sub.name
+                    && other
+                        .parameters
+                        .iter()
+                        .any(|op| op.long_name == p.long_name)
+            });
+            let job_name = if collides {
+                format!("{}_{}", sub.name, p.long_name)
+            } else {
+                p.long_name.clone()
+            };
+            params.insert(job_name.clone(), cli_param_to_orb_param(p));
+            present.insert(job_name);
+        }
+    }
+
+    params
+}
+
+fn build_job_group_invoke_step(
+    sub: &SubCommand,
+    job_params: &IndexMap<String, OrbParameter>,
+) -> serde_yaml::Value {
+    let mut invoke_map = serde_yaml::Mapping::new();
+    for p in &sub.parameters {
+        // Find the name this param has in the merged job parameter set
+        let job_param_name = if job_params.contains_key(&p.long_name) {
+            Some(p.long_name.clone())
+        } else {
+            let prefixed = format!("{}_{}", sub.name, p.long_name);
+            if job_params.contains_key(&prefixed) {
+                Some(prefixed)
+            } else {
+                None
+            }
+        };
+        if let Some(job_name) = job_param_name {
+            invoke_map.insert(
+                serde_yaml::Value::String(p.long_name.clone()),
+                serde_yaml::Value::String(format!("<< parameters.{job_name} >>")),
+            );
+        }
+    }
+    serde_yaml::Value::Mapping({
+        let mut m = serde_yaml::Mapping::new();
+        m.insert(
+            serde_yaml::Value::String(sub.name.replace('-', "_")),
+            serde_yaml::Value::Mapping(invoke_map),
+        );
+        m
+    })
+}
+
+fn render_job_group(
+    group: &crate::orb_config::JobGroup,
+    cli: &CliDefinition,
+    _config: Option<&OrbConfig>,
+) -> String {
+    let step_subs: Vec<&SubCommand> = group
+        .steps
+        .iter()
+        .filter_map(|name| find_leaf_subcommand(cli, name))
+        .collect();
+
+    let mut parameters = build_job_group_params(group, &step_subs);
+
+    let (attach_param, root_param) = build_workspace_params();
+    parameters.insert("attach_workspace".to_string(), attach_param);
+    parameters.insert("workspace_root".to_string(), root_param);
+
+    let mut steps = vec![
+        serde_yaml::Value::String("checkout".to_string()),
+        build_attach_workspace_step(),
+    ];
+    for sub in &step_subs {
+        steps.push(build_job_group_invoke_step(sub, &parameters));
+    }
+
+    let description = group
+        .description
+        .clone()
+        .unwrap_or_else(|| format!("Run {} in sequence.", group.steps.join(", ")));
+
+    let job = OrbJob {
+        description,
+        executor: "default".to_string(),
+        parameters,
+        steps,
+    };
+    serde_yaml::to_string(&job).unwrap()
 }
 
 #[cfg(test)]
@@ -1932,6 +2134,155 @@ mod tests {
         assert!(
             files.contains_key(&PathBuf::from("src/commands/generate.yml")),
             "no-config generate must still produce command file"
+        );
+    }
+
+    // ── Phase 3: job_group composed job generation ─────────────────────────
+
+    fn make_param(name: &str, default: Option<&str>, required: bool) -> Parameter {
+        Parameter {
+            long_name: name.to_string(),
+            short: None,
+            param_type: ParamType::String,
+            default: default.map(String::from),
+            required,
+            description: format!("{name} param."),
+        }
+    }
+
+    #[test]
+    fn job_group_file_created_for_each_group() {
+        use crate::orb_config::{JobGroup, OrbConfig};
+
+        let subs = vec![make_leaf("generate", vec![]), make_leaf("validate", vec![])];
+        let cli = make_cli("mytool", subs);
+        let config = OrbConfig {
+            job_group: Some(vec![JobGroup {
+                name: "sync".to_string(),
+                description: Some("Regenerate and validate".to_string()),
+                steps: vec!["generate".to_string(), "validate".to_string()],
+                params: None,
+            }]),
+            ..OrbConfig::default()
+        };
+        let files = generate(&cli, &default_opts(), Some(&config));
+        assert!(
+            files.contains_key(&PathBuf::from("src/jobs/sync.yml")),
+            "job_group must produce src/jobs/sync.yml"
+        );
+    }
+
+    #[test]
+    fn job_group_contains_both_steps_in_order() {
+        use crate::orb_config::{JobGroup, OrbConfig};
+
+        let subs = vec![make_leaf("generate", vec![]), make_leaf("validate", vec![])];
+        let cli = make_cli("mytool", subs);
+        let config = OrbConfig {
+            job_group: Some(vec![JobGroup {
+                name: "sync".to_string(),
+                description: None,
+                steps: vec!["generate".to_string(), "validate".to_string()],
+                params: None,
+            }]),
+            ..OrbConfig::default()
+        };
+        let files = generate(&cli, &default_opts(), Some(&config));
+        let job = &files[&PathBuf::from("src/jobs/sync.yml")];
+        let gen_pos = job.find("generate:").expect("generate step missing");
+        let val_pos = job.find("validate:").expect("validate step missing");
+        assert!(
+            gen_pos < val_pos,
+            "generate step must appear before validate step:\n{job}"
+        );
+    }
+
+    #[test]
+    fn job_group_description_in_job_yaml() {
+        use crate::orb_config::{JobGroup, OrbConfig};
+
+        let subs = vec![make_leaf("generate", vec![]), make_leaf("validate", vec![])];
+        let cli = make_cli("mytool", subs);
+        let config = OrbConfig {
+            job_group: Some(vec![JobGroup {
+                name: "sync".to_string(),
+                description: Some("Regenerate and validate".to_string()),
+                steps: vec!["generate".to_string(), "validate".to_string()],
+                params: None,
+            }]),
+            ..OrbConfig::default()
+        };
+        let files = generate(&cli, &default_opts(), Some(&config));
+        let job = &files[&PathBuf::from("src/jobs/sync.yml")];
+        assert!(
+            job.contains("Regenerate and validate"),
+            "job_group description must appear in job YAML:\n{job}"
+        );
+    }
+
+    #[test]
+    fn job_group_shared_param_appears_in_merged_job() {
+        use crate::orb_config::{JobGroup, OrbConfig};
+
+        let shared_param = make_param("orb_path", Some("src/@orb.yml"), false);
+        let subs = vec![
+            make_leaf("generate", vec![shared_param.clone()]),
+            make_leaf("validate", vec![shared_param]),
+        ];
+        let cli = make_cli("mytool", subs);
+        let config = OrbConfig {
+            job_group: Some(vec![JobGroup {
+                name: "sync".to_string(),
+                description: None,
+                steps: vec!["generate".to_string(), "validate".to_string()],
+                params: None,
+            }]),
+            ..OrbConfig::default()
+        };
+        let files = generate(&cli, &default_opts(), Some(&config));
+        let job = &files[&PathBuf::from("src/jobs/sync.yml")];
+        assert!(
+            job.contains("orb_path:"),
+            "shared param orb_path must appear in merged job:\n{job}"
+        );
+    }
+
+    #[test]
+    fn job_group_explicit_params_restricts_to_listed_params() {
+        use crate::orb_config::{JobGroup, OrbConfig};
+
+        let subs = vec![
+            make_leaf(
+                "generate",
+                vec![
+                    make_param("orb_path", Some("src/@orb.yml"), false),
+                    make_param("format", Some("yaml"), false),
+                ],
+            ),
+            make_leaf(
+                "validate",
+                vec![make_param("orb_path", Some("src/@orb.yml"), false)],
+            ),
+        ];
+        let cli = make_cli("mytool", subs);
+        let config = OrbConfig {
+            job_group: Some(vec![JobGroup {
+                name: "sync".to_string(),
+                description: None,
+                steps: vec!["generate".to_string(), "validate".to_string()],
+                params: Some(vec!["orb_path".to_string()]),
+            }]),
+            ..OrbConfig::default()
+        };
+        let files = generate(&cli, &default_opts(), Some(&config));
+        let job = &files[&PathBuf::from("src/jobs/sync.yml")];
+        assert!(
+            job.contains("orb_path:"),
+            "explicitly listed orb_path must appear in job:\n{job}"
+        );
+        assert!(
+            !job.contains("format:"),
+            "non-listed format param must not appear in job:\n{job}"
         );
     }
 }
