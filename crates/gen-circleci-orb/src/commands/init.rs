@@ -1,7 +1,12 @@
 use anyhow::Result;
+use indexmap::IndexMap;
 use std::path::PathBuf;
 
-use crate::{ci_patcher, commands::generate::Generate};
+use crate::{
+    ci_patcher,
+    commands::generate::Generate,
+    orb_config::{OrbConfig, OrbSection, SubcommandConfig},
+};
 
 pub const DEFAULT_DOCKER_ORB_VERSION: &str = "3.0.1";
 
@@ -101,6 +106,36 @@ pub struct Init {
     pub dry_run: bool,
 }
 
+pub(crate) fn build_bootstrap_config(
+    binary: &str,
+    namespaces: &[String],
+    orb_dir: &str,
+) -> OrbConfig {
+    let mut subcommands = IndexMap::new();
+    subcommands.insert(
+        "help".to_string(),
+        SubcommandConfig {
+            generate_job: Some(false),
+            param: None,
+        },
+    );
+    OrbConfig {
+        orb: Some(OrbSection {
+            binary: Some(binary.to_string()),
+            namespaces: Some(namespaces.to_vec()),
+            orb_dir: Some(orb_dir.to_string()),
+            base_image: None,
+            install_method: None,
+            home_url: None,
+            source_url: None,
+        }),
+        orbs: None,
+        subcommand: Some(subcommands),
+        job_group: None,
+        extra_job: None,
+    }
+}
+
 impl Init {
     pub fn run(&self) -> Result<()> {
         let namespaces: Vec<String> = self
@@ -156,9 +191,18 @@ impl Init {
             println!("{line}");
         }
 
+        // Step 3: write bootstrap gen-circleci-orb.toml
+        let config_path = std::path::Path::new("gen-circleci-orb.toml");
+        let bootstrap =
+            build_bootstrap_config(&self.binary, opts.namespaces.as_slice(), &self.orb_dir);
         if self.dry_run {
+            let content = toml::to_string_pretty(&bootstrap)?;
+            println!("(dry-run) Would write {}", config_path.display());
+            println!("{content}");
             println!("(dry-run: no files written)");
         } else {
+            crate::orb_config::save_config(config_path, &bootstrap)?;
+            println!("Wrote {}", config_path.display());
             println!("Done.");
         }
 
@@ -168,7 +212,7 @@ impl Init {
 
 #[cfg(test)]
 mod tests {
-    use super::DEFAULT_DOCKER_ORB_VERSION;
+    use super::*;
 
     #[test]
     fn default_docker_orb_version_matches_registry() {
@@ -177,6 +221,55 @@ mod tests {
         assert_eq!(
             DEFAULT_DOCKER_ORB_VERSION, "3.0.1",
             "DEFAULT_DOCKER_ORB_VERSION must be the registry-available version"
+        );
+    }
+
+    // ── Phase 6: bootstrap config written by init ───────────────────────────
+
+    #[test]
+    fn bootstrap_config_has_orb_section_with_binary() {
+        let config = build_bootstrap_config("mytool", &["my-org".to_string()], "orb");
+        assert!(
+            config.orb.is_some(),
+            "bootstrap config must have [orb] section"
+        );
+        assert_eq!(
+            config.orb.as_ref().unwrap().binary.as_deref(),
+            Some("mytool")
+        );
+    }
+
+    #[test]
+    fn bootstrap_config_has_namespaces() {
+        let config =
+            build_bootstrap_config("mytool", &["ns1".to_string(), "ns2".to_string()], "orb");
+        assert_eq!(
+            config.orb.as_ref().unwrap().namespaces.as_deref(),
+            Some(&["ns1".to_string(), "ns2".to_string()][..])
+        );
+    }
+
+    #[test]
+    fn bootstrap_config_suppresses_help_subcommand() {
+        let config = build_bootstrap_config("mytool", &["my-org".to_string()], "orb");
+        let subcommands = config
+            .subcommand
+            .as_ref()
+            .expect("subcommand section missing");
+        let help = subcommands.get("help").expect("help entry missing");
+        assert_eq!(
+            help.generate_job,
+            Some(false),
+            "help subcommand must be suppressed in bootstrap config"
+        );
+    }
+
+    #[test]
+    fn bootstrap_config_has_orb_dir() {
+        let config = build_bootstrap_config("mytool", &["my-org".to_string()], "custom-orb");
+        assert_eq!(
+            config.orb.as_ref().unwrap().orb_dir.as_deref(),
+            Some("custom-orb")
         );
     }
 }
