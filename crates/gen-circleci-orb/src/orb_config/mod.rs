@@ -36,6 +36,25 @@ mod tests {
     }
 
     #[test]
+    fn load_config_parses_git_push_subcommands() {
+        let dir = TempDir::new().unwrap();
+        let path = write_toml(
+            &dir,
+            r#"
+[orb]
+binary = "mytool"
+git_push_subcommands = ["save"]
+"#,
+        );
+        let config = load_config(&path).unwrap();
+        let orb = config.orb.as_ref().unwrap();
+        assert_eq!(
+            orb.git_push_subcommands.as_deref(),
+            Some(&["save".to_string()][..])
+        );
+    }
+
+    #[test]
     fn load_config_returns_default_when_file_not_found() {
         let path = std::path::Path::new("/tmp/does-not-exist/gen-circleci-orb.toml");
         let config = load_config(path).unwrap();
@@ -198,6 +217,7 @@ steps:
                 install_method: None,
                 home_url: None,
                 source_url: None,
+                git_push_subcommands: None,
             }),
             orbs: None,
             subcommand: Some(subcommands),

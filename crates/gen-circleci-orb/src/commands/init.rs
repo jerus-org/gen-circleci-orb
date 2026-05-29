@@ -149,6 +149,7 @@ pub(crate) fn build_bootstrap_config(
     orb_dir: &str,
     home_url: Option<&str>,
     source_url: Option<&str>,
+    git_push_subcommands: &[String],
 ) -> OrbConfig {
     let mut subcommands = IndexMap::new();
     subcommands.insert(
@@ -167,6 +168,11 @@ pub(crate) fn build_bootstrap_config(
             install_method: None,
             home_url: home_url.map(str::to_string),
             source_url: source_url.map(str::to_string),
+            git_push_subcommands: if git_push_subcommands.is_empty() {
+                None
+            } else {
+                Some(git_push_subcommands.to_vec())
+            },
         }),
         orbs: None,
         subcommand: Some(subcommands),
@@ -368,6 +374,7 @@ impl Init {
             &self.orb_dir,
             extras.home_url.as_deref(),
             extras.source_url.as_deref(),
+            &extras.git_push_subcommands,
         );
         if self.dry_run {
             let content = toml::to_string_pretty(&bootstrap)?;
@@ -402,7 +409,8 @@ mod tests {
 
     #[test]
     fn bootstrap_config_has_orb_section_with_binary() {
-        let config = build_bootstrap_config("mytool", &["my-org".to_string()], "orb", None, None);
+        let config =
+            build_bootstrap_config("mytool", &["my-org".to_string()], "orb", None, None, &[]);
         assert!(
             config.orb.is_some(),
             "bootstrap config must have [orb] section"
@@ -421,6 +429,7 @@ mod tests {
             "orb",
             None,
             None,
+            &[],
         );
         assert_eq!(
             config.orb.as_ref().unwrap().namespaces.as_deref(),
@@ -430,7 +439,8 @@ mod tests {
 
     #[test]
     fn bootstrap_config_suppresses_help_subcommand() {
-        let config = build_bootstrap_config("mytool", &["my-org".to_string()], "orb", None, None);
+        let config =
+            build_bootstrap_config("mytool", &["my-org".to_string()], "orb", None, None, &[]);
         let subcommands = config
             .subcommand
             .as_ref()
@@ -480,6 +490,33 @@ mod tests {
     }
 
     #[test]
+    fn bootstrap_config_includes_git_push_subcommands() {
+        let config = build_bootstrap_config(
+            "mytool",
+            &["my-org".to_string()],
+            "orb",
+            None,
+            None,
+            &["save".to_string()],
+        );
+        assert_eq!(
+            config.orb.as_ref().unwrap().git_push_subcommands.as_deref(),
+            Some(&["save".to_string()][..])
+        );
+    }
+
+    #[test]
+    fn bootstrap_config_git_push_subcommands_none_when_empty() {
+        let config =
+            build_bootstrap_config("mytool", &["my-org".to_string()], "orb", None, None, &[]);
+        assert_eq!(
+            config.orb.as_ref().unwrap().git_push_subcommands,
+            None,
+            "empty slice must produce None (not an empty list) to keep the TOML clean"
+        );
+    }
+
+    #[test]
     fn bootstrap_config_includes_home_and_source_url() {
         let config = build_bootstrap_config(
             "mytool",
@@ -487,6 +524,7 @@ mod tests {
             "orb",
             Some("https://example.com/home"),
             Some("https://example.com/source"),
+            &[],
         );
         assert_eq!(
             config.orb.as_ref().unwrap().home_url.as_deref(),
@@ -587,8 +625,14 @@ mod tests {
 
     #[test]
     fn bootstrap_config_has_orb_dir() {
-        let config =
-            build_bootstrap_config("mytool", &["my-org".to_string()], "custom-orb", None, None);
+        let config = build_bootstrap_config(
+            "mytool",
+            &["my-org".to_string()],
+            "custom-orb",
+            None,
+            None,
+            &[],
+        );
         assert_eq!(
             config.orb.as_ref().unwrap().orb_dir.as_deref(),
             Some("custom-orb")

@@ -133,6 +133,21 @@ pub(crate) fn check_orb_dir(orb_root: &Path) -> Result<()> {
     Ok(())
 }
 
+/// CLI flag takes precedence; falls back to `[orb] git_push_subcommands` in the config.
+pub(crate) fn resolve_git_push_subcommands(
+    cli: &[String],
+    config: &crate::orb_config::OrbConfig,
+) -> Vec<String> {
+    if !cli.is_empty() {
+        return cli.to_vec();
+    }
+    config
+        .orb
+        .as_ref()
+        .and_then(|o| o.git_push_subcommands.clone())
+        .unwrap_or_default()
+}
+
 pub(crate) fn resolve_config_path(explicit: Option<&PathBuf>, output: &Path) -> PathBuf {
     explicit
         .cloned()
@@ -164,7 +179,10 @@ impl Generate {
             home_url,
             source_url,
             binary_name: cli_def.binary_name.clone(),
-            git_push_subcommands: self.git_push_subcommands.clone(),
+            git_push_subcommands: resolve_git_push_subcommands(
+                &self.git_push_subcommands,
+                &orb_config,
+            ),
             circleci_cli_version: self.circleci_cli_version.clone(),
             apt_packages: self.apt_packages.clone(),
         };
@@ -282,5 +300,38 @@ mod tests {
         let explicit = PathBuf::from("/custom/path/config.toml");
         let resolved = resolve_config_path(Some(&explicit), output);
         assert_eq!(resolved, explicit);
+    }
+
+    // ── git_push_subcommands: config fallback ───────────────────────────────
+
+    #[test]
+    fn git_push_subcommands_falls_back_to_config_when_cli_empty() {
+        // When --git-push-subcommand is not passed on the CLI but the config
+        // has [orb] git_push_subcommands = ["save"], generate must use the config value
+        // so that set_https_remote is generated without requiring the flag every time.
+        use crate::orb_config::{OrbConfig, OrbSection};
+        let config = OrbConfig {
+            orb: Some(OrbSection {
+                git_push_subcommands: Some(vec!["save".to_string()]),
+                ..OrbSection::default()
+            }),
+            ..OrbConfig::default()
+        };
+        let resolved = resolve_git_push_subcommands(&[], &config);
+        assert_eq!(resolved, vec!["save".to_string()]);
+    }
+
+    #[test]
+    fn git_push_subcommands_cli_takes_precedence_over_config() {
+        use crate::orb_config::{OrbConfig, OrbSection};
+        let config = OrbConfig {
+            orb: Some(OrbSection {
+                git_push_subcommands: Some(vec!["save".to_string()]),
+                ..OrbSection::default()
+            }),
+            ..OrbConfig::default()
+        };
+        let resolved = resolve_git_push_subcommands(&["commit".to_string()], &config);
+        assert_eq!(resolved, vec!["commit".to_string()]);
     }
 }

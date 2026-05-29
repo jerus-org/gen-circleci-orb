@@ -19,6 +19,9 @@ pub struct OrbSection {
     pub install_method: Option<String>,
     pub home_url: Option<String>,
     pub source_url: Option<String>,
+    /// Subcommand names whose generated jobs include a set_https_remote step.
+    /// Persisted here so `generate` can reproduce the same output without re-supplying the flag.
+    pub git_push_subcommands: Option<Vec<String>>,
 }
 
 #[derive(Debug, Default, Deserialize, Serialize, PartialEq)]
