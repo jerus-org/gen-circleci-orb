@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - render: generate add-workspace-to-path.sh alongside every orb(pr [#76])
+- config: persist git_push_subcommands in [orb] section(pr [#77])
 
 ## [0.0.36] - 2026-05-29
 
@@ -328,6 +329,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#74]: https://github.com/jerus-org/gen-circleci-orb/pull/74
 [#75]: https://github.com/jerus-org/gen-circleci-orb/pull/75
 [#76]: https://github.com/jerus-org/gen-circleci-orb/pull/76
+[#77]: https://github.com/jerus-org/gen-circleci-orb/pull/77
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.36...HEAD
 [0.0.36]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.35...v0.0.36
 [0.0.35]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.34...v0.0.35
