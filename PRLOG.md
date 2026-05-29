@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- render: generate add-workspace-to-path.sh alongside every orb(pr [#76])
+
 ## [0.0.36] - 2026-05-29
 
 ### Added
@@ -321,6 +327,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#72]: https://github.com/jerus-org/gen-circleci-orb/pull/72
 [#74]: https://github.com/jerus-org/gen-circleci-orb/pull/74
 [#75]: https://github.com/jerus-org/gen-circleci-orb/pull/75
+[#76]: https://github.com/jerus-org/gen-circleci-orb/pull/76
+[Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.36...HEAD
 [0.0.36]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.35...v0.0.36
 [0.0.35]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.34...v0.0.35
 [0.0.34]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.33...v0.0.34
