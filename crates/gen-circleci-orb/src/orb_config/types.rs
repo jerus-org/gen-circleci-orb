@@ -4,10 +4,28 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Default, Deserialize, Serialize, PartialEq)]
 pub struct OrbConfig {
     pub orb: Option<OrbSection>,
+    pub ci: Option<CiSection>,
     pub orbs: Option<IndexMap<String, String>>,
     pub subcommand: Option<IndexMap<String, SubcommandConfig>>,
     pub job_group: Option<Vec<JobGroup>>,
     pub extra_job: Option<Vec<ExtraJob>>,
+}
+
+/// CI pipeline values gathered at `init` time, stored so future re-runs
+/// can reproduce the same CI config without re-supplying every flag.
+#[derive(Debug, Default, Deserialize, Serialize, PartialEq)]
+pub struct CiSection {
+    pub build_workflow: Option<String>,
+    pub release_workflow: Option<String>,
+    pub requires_job: Option<String>,
+    pub release_after_job: Option<String>,
+    pub crate_tag_prefix: Option<String>,
+    pub docker_namespace: Option<String>,
+    pub docker_context: Option<String>,
+    pub orb_context: Option<String>,
+    pub mcp: Option<bool>,
+    pub mcp_context: Option<String>,
+    pub mcp_earliest_version: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize, Serialize, PartialEq)]
