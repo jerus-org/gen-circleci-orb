@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- chore(ci)-remove redundant toolkit/label from post-merge workflow(pr [#72])
+
 ### Fixed
 
 - parser, validation workflow, and init flags(pr [#71])
@@ -304,6 +308,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#69]: https://github.com/jerus-org/gen-circleci-orb/pull/69
 [#70]: https://github.com/jerus-org/gen-circleci-orb/pull/70
 [#71]: https://github.com/jerus-org/gen-circleci-orb/pull/71
+[#72]: https://github.com/jerus-org/gen-circleci-orb/pull/72
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.34...HEAD
 [0.0.34]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.33...v0.0.34
 [0.0.33]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.32...v0.0.33
