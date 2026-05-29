@@ -106,6 +106,14 @@ pub struct Init {
     #[arg(long, value_delimiter = ',')]
     pub git_push_subcommands: Vec<String>,
 
+    /// Home URL for the orb (shown in the CircleCI registry).
+    #[arg(long)]
+    pub home_url: Option<String>,
+
+    /// Source URL for the orb (shown in the CircleCI registry).
+    #[arg(long)]
+    pub source_url: Option<String>,
+
     /// Show planned changes without modifying any files.
     #[arg(long)]
     pub dry_run: bool,
@@ -115,6 +123,8 @@ pub(crate) fn build_bootstrap_config(
     binary: &str,
     namespaces: &[String],
     orb_dir: &str,
+    home_url: Option<&str>,
+    source_url: Option<&str>,
 ) -> OrbConfig {
     let mut subcommands = IndexMap::new();
     subcommands.insert(
@@ -131,8 +141,8 @@ pub(crate) fn build_bootstrap_config(
             orb_dir: Some(orb_dir.to_string()),
             base_image: None,
             install_method: None,
-            home_url: None,
-            source_url: None,
+            home_url: home_url.map(str::to_string),
+            source_url: source_url.map(str::to_string),
         }),
         orbs: None,
         subcommand: Some(subcommands),
@@ -159,8 +169,8 @@ impl Init {
             orb_dir: self.orb_dir.clone(),
             install_method: crate::commands::generate::InstallMethod::Binstall,
             base_image: crate::commands::generate::DEFAULT_BASE_IMAGE.to_string(),
-            home_url: None,
-            source_url: None,
+            home_url: self.home_url.clone(),
+            source_url: self.source_url.clone(),
             git_push_subcommands: self.git_push_subcommands.clone(),
             circleci_cli_version: None,
             apt_packages: vec![],
@@ -198,8 +208,13 @@ impl Init {
 
         // Step 3: write bootstrap gen-circleci-orb.toml
         let config_path = std::path::Path::new("gen-circleci-orb.toml");
-        let bootstrap =
-            build_bootstrap_config(&self.binary, opts.namespaces.as_slice(), &self.orb_dir);
+        let bootstrap = build_bootstrap_config(
+            &self.binary,
+            opts.namespaces.as_slice(),
+            &self.orb_dir,
+            self.home_url.as_deref(),
+            self.source_url.as_deref(),
+        );
         if self.dry_run {
             let content = toml::to_string_pretty(&bootstrap)?;
             println!("(dry-run) Would write {}", config_path.display());
@@ -233,7 +248,7 @@ mod tests {
 
     #[test]
     fn bootstrap_config_has_orb_section_with_binary() {
-        let config = build_bootstrap_config("mytool", &["my-org".to_string()], "orb");
+        let config = build_bootstrap_config("mytool", &["my-org".to_string()], "orb", None, None);
         assert!(
             config.orb.is_some(),
             "bootstrap config must have [orb] section"
@@ -246,8 +261,13 @@ mod tests {
 
     #[test]
     fn bootstrap_config_has_namespaces() {
-        let config =
-            build_bootstrap_config("mytool", &["ns1".to_string(), "ns2".to_string()], "orb");
+        let config = build_bootstrap_config(
+            "mytool",
+            &["ns1".to_string(), "ns2".to_string()],
+            "orb",
+            None,
+            None,
+        );
         assert_eq!(
             config.orb.as_ref().unwrap().namespaces.as_deref(),
             Some(&["ns1".to_string(), "ns2".to_string()][..])
@@ -256,7 +276,7 @@ mod tests {
 
     #[test]
     fn bootstrap_config_suppresses_help_subcommand() {
-        let config = build_bootstrap_config("mytool", &["my-org".to_string()], "orb");
+        let config = build_bootstrap_config("mytool", &["my-org".to_string()], "orb", None, None);
         let subcommands = config
             .subcommand
             .as_ref()
@@ -295,6 +315,8 @@ mod tests {
             mcp_context: "pcu-app".to_string(),
             dry_run: false,
             git_push_subcommands: vec!["save".to_string()],
+            home_url: None,
+            source_url: None,
         };
         assert_eq!(
             init.git_push_subcommands,
@@ -304,8 +326,28 @@ mod tests {
     }
 
     #[test]
+    fn bootstrap_config_includes_home_and_source_url() {
+        let config = build_bootstrap_config(
+            "mytool",
+            &["my-org".to_string()],
+            "orb",
+            Some("https://example.com/home"),
+            Some("https://example.com/source"),
+        );
+        assert_eq!(
+            config.orb.as_ref().unwrap().home_url.as_deref(),
+            Some("https://example.com/home")
+        );
+        assert_eq!(
+            config.orb.as_ref().unwrap().source_url.as_deref(),
+            Some("https://example.com/source")
+        );
+    }
+
+    #[test]
     fn bootstrap_config_has_orb_dir() {
-        let config = build_bootstrap_config("mytool", &["my-org".to_string()], "custom-orb");
+        let config =
+            build_bootstrap_config("mytool", &["my-org".to_string()], "custom-orb", None, None);
         assert_eq!(
             config.orb.as_ref().unwrap().orb_dir.as_deref(),
             Some("custom-orb")
