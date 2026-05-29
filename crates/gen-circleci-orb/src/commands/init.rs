@@ -9,6 +9,26 @@ use crate::{
 };
 
 pub const DEFAULT_DOCKER_ORB_VERSION: &str = "3.0.1";
+pub const DEFAULT_DOCKER_CONTEXT: &str = "docker-credentials";
+pub const DEFAULT_ORB_CONTEXT: &str = "orb-publishing";
+pub const DEFAULT_MCP_CONTEXT: &str = "pcu-app";
+pub const DEFAULT_MCP_EARLIEST_VERSION: &str = "0.0.1";
+
+/// Values resolved by the interactive dialogue (or non-interactive fallback).
+/// These are used by both `PatchOpts` and the bootstrap config.
+pub(crate) struct GatheredExtras {
+    pub home_url: Option<String>,
+    pub source_url: Option<String>,
+    pub git_push_subcommands: Vec<String>,
+    pub docker_context: String,
+    pub orb_context: String,
+    pub mcp_context: String,
+    pub mcp_earliest_version: String,
+}
+
+fn is_non_interactive(dry_run: bool) -> bool {
+    dry_run || std::env::var("CI").is_ok()
+}
 
 /// Wire orb generation into an existing repo's CI configuration.
 #[derive(Debug, clap::Args)]
@@ -73,13 +93,15 @@ pub struct Init {
     #[arg(long)]
     pub docker_namespace: String,
 
-    /// CircleCI context name holding Docker Hub credentials.
-    #[arg(long, default_value = "docker-credentials")]
-    pub docker_context: String,
+    /// CircleCI context name holding Docker Hub credentials (DOCKER_LOGIN, DOCKER_PASSWORD).
+    /// Prompted interactively if not supplied.
+    #[arg(long)]
+    pub docker_context: Option<String>,
 
-    /// CircleCI context name holding orb publishing credentials.
-    #[arg(long, default_value = "orb-publishing")]
-    pub orb_context: String,
+    /// CircleCI context name holding orb publishing credentials (CIRCLECI_CLI_TOKEN).
+    /// Prompted interactively if not supplied.
+    #[arg(long)]
+    pub orb_context: Option<String>,
 
     /// Version of the jerus-org/gen-circleci-orb orb to pin in generated CI.
     /// Defaults to the version of this binary (orb and crate are released together).
@@ -92,14 +114,16 @@ pub struct Init {
 
     /// Earliest orb version to include when priming prior-version snapshots.
     /// Passed to gen-circleci-orb/build_mcp_server as `earliest_version`.
-    /// Only used when --mcp is enabled.
-    #[arg(long, default_value = "0.0.1")]
-    pub mcp_earliest_version: String,
+    /// Only used when --mcp is enabled. Prompted interactively if not supplied.
+    #[arg(long)]
+    pub mcp_earliest_version: Option<String>,
 
     /// CircleCI context providing push authority for MCP server build + publish + save steps.
-    /// Only used when --mcp is enabled.
-    #[arg(long, default_value = "pcu-app")]
-    pub mcp_context: String,
+    /// Needs: GITHUB_TOKEN (GitHub App token, contents:write + bypass branch protection),
+    /// BOT_GPG_KEY, BOT_TRUST, BOT_USER_NAME, BOT_USER_EMAIL, BOT_SIGN_KEY.
+    /// Only used when --mcp is enabled. Prompted interactively if not supplied.
+    #[arg(long)]
+    pub mcp_context: Option<String>,
 
     /// Subcommand names whose generated jobs should include a `set_https_remote` step
     /// (repeatable). Use for subcommands that push to git (e.g. `save`).
@@ -152,7 +176,137 @@ pub(crate) fn build_bootstrap_config(
 }
 
 impl Init {
+    pub(crate) fn gather_extras(&self) -> Result<GatheredExtras> {
+        if is_non_interactive(self.dry_run) {
+            return Ok(GatheredExtras {
+                home_url: self.home_url.clone(),
+                source_url: self.source_url.clone(),
+                git_push_subcommands: self.git_push_subcommands.clone(),
+                docker_context: self
+                    .docker_context
+                    .clone()
+                    .unwrap_or_else(|| DEFAULT_DOCKER_CONTEXT.to_string()),
+                orb_context: self
+                    .orb_context
+                    .clone()
+                    .unwrap_or_else(|| DEFAULT_ORB_CONTEXT.to_string()),
+                mcp_context: self
+                    .mcp_context
+                    .clone()
+                    .unwrap_or_else(|| DEFAULT_MCP_CONTEXT.to_string()),
+                mcp_earliest_version: self
+                    .mcp_earliest_version
+                    .clone()
+                    .unwrap_or_else(|| DEFAULT_MCP_EARLIEST_VERSION.to_string()),
+            });
+        }
+
+        // Interactive mode — prompt for each field not already provided.
+        use dialoguer::Input;
+
+        let home_url = {
+            let val = Input::<String>::new()
+                .with_prompt("Home URL for orb registry (Enter to skip)")
+                .default(self.home_url.clone().unwrap_or_default())
+                .allow_empty(true)
+                .interact_text()?;
+            if val.is_empty() {
+                None
+            } else {
+                Some(val)
+            }
+        };
+
+        let source_url = {
+            let val = Input::<String>::new()
+                .with_prompt("Source URL for orb registry (Enter to skip)")
+                .default(self.source_url.clone().unwrap_or_default())
+                .allow_empty(true)
+                .interact_text()?;
+            if val.is_empty() {
+                None
+            } else {
+                Some(val)
+            }
+        };
+
+        let git_push_subcommands = {
+            let current = self.git_push_subcommands.join(",");
+            let val = Input::<String>::new()
+                .with_prompt("Subcommands that push to git, comma-separated (e.g. save)")
+                .default(current)
+                .allow_empty(true)
+                .interact_text()?;
+            val.split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect()
+        };
+
+        let docker_context = Input::<String>::new()
+            .with_prompt("Docker context name (needs: DOCKER_LOGIN, DOCKER_PASSWORD)")
+            .default(
+                self.docker_context
+                    .clone()
+                    .unwrap_or_else(|| DEFAULT_DOCKER_CONTEXT.to_string()),
+            )
+            .interact_text()?;
+
+        let orb_context = Input::<String>::new()
+            .with_prompt("Orb publishing context name (needs: CIRCLECI_CLI_TOKEN)")
+            .default(
+                self.orb_context
+                    .clone()
+                    .unwrap_or_else(|| DEFAULT_ORB_CONTEXT.to_string()),
+            )
+            .interact_text()?;
+
+        let mcp_context = if self.mcp {
+            Input::<String>::new()
+                .with_prompt(
+                    "MCP context name (needs: GITHUB_TOKEN with contents:write + bypass branch protection, BOT_GPG_KEY, BOT_TRUST, BOT_USER_NAME, BOT_USER_EMAIL, BOT_SIGN_KEY)",
+                )
+                .default(
+                    self.mcp_context
+                        .clone()
+                        .unwrap_or_else(|| DEFAULT_MCP_CONTEXT.to_string()),
+                )
+                .interact_text()?
+        } else {
+            self.mcp_context
+                .clone()
+                .unwrap_or_else(|| DEFAULT_MCP_CONTEXT.to_string())
+        };
+
+        let mcp_earliest_version = if self.mcp {
+            Input::<String>::new()
+                .with_prompt("Earliest orb version to include in MCP snapshots")
+                .default(
+                    self.mcp_earliest_version
+                        .clone()
+                        .unwrap_or_else(|| DEFAULT_MCP_EARLIEST_VERSION.to_string()),
+                )
+                .interact_text()?
+        } else {
+            self.mcp_earliest_version
+                .clone()
+                .unwrap_or_else(|| DEFAULT_MCP_EARLIEST_VERSION.to_string())
+        };
+
+        Ok(GatheredExtras {
+            home_url,
+            source_url,
+            git_push_subcommands,
+            docker_context,
+            orb_context,
+            mcp_context,
+            mcp_earliest_version,
+        })
+    }
+
     pub fn run(&self) -> Result<()> {
+        let extras = self.gather_extras()?;
         let namespaces: Vec<String> = self
             .public_orb_namespaces
             .iter()
@@ -169,9 +323,9 @@ impl Init {
             orb_dir: self.orb_dir.clone(),
             install_method: crate::commands::generate::InstallMethod::Binstall,
             base_image: crate::commands::generate::DEFAULT_BASE_IMAGE.to_string(),
-            home_url: self.home_url.clone(),
-            source_url: self.source_url.clone(),
-            git_push_subcommands: self.git_push_subcommands.clone(),
+            home_url: extras.home_url.clone(),
+            source_url: extras.source_url.clone(),
+            git_push_subcommands: extras.git_push_subcommands.clone(),
             circleci_cli_version: None,
             apt_packages: vec![],
             dry_run: self.dry_run,
@@ -192,13 +346,13 @@ impl Init {
             release_after_job: self.release_after_job.clone(),
             orb_tools_version: self.orb_tools_version.clone(),
             docker_orb_version: self.docker_orb_version.clone(),
-            docker_context: self.docker_context.clone(),
-            orb_context: self.orb_context.clone(),
+            docker_context: extras.docker_context.clone(),
+            orb_context: extras.orb_context.clone(),
             private_namespaces: self.private_orb_namespaces.clone(),
             gen_circleci_orb_version: self.gen_circleci_orb_version.clone(),
             mcp: self.mcp,
-            mcp_earliest_version: self.mcp_earliest_version.clone(),
-            mcp_context: self.mcp_context.clone(),
+            mcp_earliest_version: extras.mcp_earliest_version.clone(),
+            mcp_context: extras.mcp_context.clone(),
         };
 
         let summary = ci_patcher::apply_patches(&self.ci_dir, &opts, self.dry_run)?;
@@ -212,8 +366,8 @@ impl Init {
             &self.binary,
             opts.namespaces.as_slice(),
             &self.orb_dir,
-            self.home_url.as_deref(),
-            self.source_url.as_deref(),
+            extras.home_url.as_deref(),
+            extras.source_url.as_deref(),
         );
         if self.dry_run {
             let content = toml::to_string_pretty(&bootstrap)?;
@@ -307,12 +461,12 @@ mod tests {
             orb_tools_version: "12.3.3".to_string(),
             docker_orb_version: "3.0.1".to_string(),
             docker_namespace: "my-docker-ns".to_string(),
-            docker_context: "docker-credentials".to_string(),
-            orb_context: "orb-publishing".to_string(),
+            docker_context: None,
+            orb_context: None,
             gen_circleci_orb_version: "0.0.1".to_string(),
             mcp: false,
-            mcp_earliest_version: "0.0.1".to_string(),
-            mcp_context: "pcu-app".to_string(),
+            mcp_earliest_version: None,
+            mcp_context: None,
             dry_run: false,
             git_push_subcommands: vec!["save".to_string()],
             home_url: None,
@@ -342,6 +496,93 @@ mod tests {
             config.orb.as_ref().unwrap().source_url.as_deref(),
             Some("https://example.com/source")
         );
+    }
+
+    // ── gather_extras / dialogue ────────────────────────────────────────────
+
+    fn make_init(dry_run: bool) -> Init {
+        Init {
+            binary: "mytool".to_string(),
+            public_orb_namespaces: vec!["my-org".to_string()],
+            private_orb_namespaces: vec![],
+            build_workflow: "validation".to_string(),
+            release_workflow: "orb-release".to_string(),
+            requires_job: None,
+            crate_tag_prefix: "mytool-v".to_string(),
+            release_after_job: "publish-orb".to_string(),
+            orb_dir: "orb".to_string(),
+            ci_dir: std::path::PathBuf::from(".circleci"),
+            orb_tools_version: "12.3.3".to_string(),
+            docker_orb_version: "3.0.1".to_string(),
+            docker_namespace: "my-docker-ns".to_string(),
+            docker_context: None,
+            orb_context: None,
+            gen_circleci_orb_version: "0.0.1".to_string(),
+            mcp: false,
+            mcp_earliest_version: None,
+            mcp_context: None,
+            dry_run,
+            git_push_subcommands: vec![],
+            home_url: None,
+            source_url: None,
+        }
+    }
+
+    #[test]
+    fn gather_extras_non_interactive_uses_hardcoded_defaults() {
+        let init = make_init(true); // dry_run=true → non-interactive
+        let extras = init.gather_extras().unwrap();
+        assert_eq!(extras.docker_context, DEFAULT_DOCKER_CONTEXT);
+        assert_eq!(extras.orb_context, DEFAULT_ORB_CONTEXT);
+        assert_eq!(extras.mcp_context, DEFAULT_MCP_CONTEXT);
+        assert_eq!(extras.mcp_earliest_version, DEFAULT_MCP_EARLIEST_VERSION);
+        assert_eq!(extras.home_url, None);
+        assert_eq!(extras.source_url, None);
+        assert!(extras.git_push_subcommands.is_empty());
+    }
+
+    #[test]
+    fn gather_extras_cli_values_take_precedence_over_defaults() {
+        let init = Init {
+            docker_context: Some("my-docker".to_string()),
+            orb_context: Some("my-orb-ctx".to_string()),
+            mcp_context: Some("my-mcp-ctx".to_string()),
+            mcp_earliest_version: Some("1.2.3".to_string()),
+            home_url: Some("https://example.com".to_string()),
+            source_url: Some("https://src.example.com".to_string()),
+            git_push_subcommands: vec!["save".to_string()],
+            dry_run: true,
+            ..make_init(true)
+        };
+        let extras = init.gather_extras().unwrap();
+        assert_eq!(extras.docker_context, "my-docker");
+        assert_eq!(extras.orb_context, "my-orb-ctx");
+        assert_eq!(extras.mcp_context, "my-mcp-ctx");
+        assert_eq!(extras.mcp_earliest_version, "1.2.3");
+        assert_eq!(extras.home_url.as_deref(), Some("https://example.com"));
+        assert_eq!(
+            extras.source_url.as_deref(),
+            Some("https://src.example.com")
+        );
+        assert_eq!(extras.git_push_subcommands, vec!["save"]);
+    }
+
+    #[test]
+    fn gather_extras_ci_env_var_is_non_interactive() {
+        // When $CI is set the dialogue must be skipped even without --dry-run
+        std::env::set_var("CI", "true");
+        let init = make_init(false);
+        let extras = init.gather_extras().unwrap();
+        std::env::remove_var("CI");
+        assert_eq!(extras.docker_context, DEFAULT_DOCKER_CONTEXT);
+    }
+
+    #[test]
+    fn init_docker_context_field_is_option() {
+        // Compile-time guard: field must be Option<String> so we can distinguish
+        // "explicitly set" from "not set (will prompt or use default)".
+        let init = make_init(true);
+        let _: Option<String> = init.docker_context;
     }
 
     #[test]
