@@ -386,7 +386,14 @@ fn extract_default(block: &str) -> Option<String> {
         }
     }
     let end = end?;
-    Some(block[value_start..end].trim().to_string())
+    let raw = block[value_start..end].trim();
+    // clap wraps string defaults in double quotes: [default: "value"].
+    // Strip them so the stored default is the bare value, not `"value"`.
+    let value = raw
+        .strip_prefix('"')
+        .and_then(|s| s.strip_suffix('"'))
+        .unwrap_or(raw);
+    Some(value.to_string())
 }
 
 /// Remove all occurrences of `marker`...matching-`]` from `text`, handling nested brackets.
@@ -520,6 +527,32 @@ Commands:
     // ── parameter parsing ──────────────────────────────────────────────────
 
     #[test]
+    fn string_default_strips_clap_double_quote_wrapper() {
+        // clap renders string defaults as [default: "value"] — the outer double
+        // quotes are formatting, not part of the value.  The parser must strip them.
+        let help = r#"Do something
+
+Usage: tool cmd [OPTIONS]
+
+Options:
+  -m, --message <MESSAGE>
+          Commit message
+
+          [default: "chore: update artifacts [skip ci]"]
+
+  -h, --help
+          Print help
+"#;
+        let params = parse_parameters(help);
+        let p = params.iter().find(|p| p.long_name == "message").unwrap();
+        assert_eq!(
+            p.default.as_deref(),
+            Some("chore: update artifacts [skip ci]"),
+            "surrounding clap double-quote wrapper must be stripped from string default"
+        );
+    }
+
+    #[test]
     fn boolean_flag_detected() {
         let help = r#"Run the tool
 
@@ -585,8 +618,8 @@ Options:
         let p = params.iter().find(|p| p.long_name == "message").unwrap();
         assert_eq!(
             p.default.as_deref(),
-            Some("\"chore: update generated MCP server artifacts [skip ci]\""),
-            "default must include the full value including inner brackets"
+            Some("chore: update generated MCP server artifacts [skip ci]"),
+            "default must be the bare value: brackets preserved, surrounding clap quotes stripped"
         );
         assert_eq!(
             p.description, "Commit message",

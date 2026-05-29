@@ -85,6 +85,18 @@ pub fn generate(
         }
     }
 
+    // set_https_remote command + script (generated whenever any push subcommand is named)
+    if !opts.git_push_subcommands.is_empty() {
+        files.insert(
+            PathBuf::from("src/commands/set_https_remote.yml"),
+            render_set_https_remote_command(),
+        );
+        files.insert(
+            PathBuf::from("src/scripts/set_https_remote.sh"),
+            render_set_https_remote_script(),
+        );
+    }
+
     // examples/example.yml (RC003)
     files.insert(
         PathBuf::from("src/examples/example.yml"),
@@ -405,6 +417,19 @@ fn render_dockerfile(
     }
 }
 
+fn render_set_https_remote_command() -> String {
+    // CircleCI checkout injects url."ssh://git@github.com".insteadOf = https://github.com
+    // into ~/.gitconfig.  This causes any subsequent HTTPS git operation (including libgit2
+    // used by pcu) to be silently rewritten to SSH, bypassing the GitHub App token.
+    // This command removes that rewrite and switches the remote to HTTPS so that jobs
+    // that push (e.g. save) can authenticate with the GitHub App token.
+    "description: >\n  Remove the SSH insteadOf rewrite rule that CircleCI checkout injects and\n  set both the fetch and push URLs for origin to HTTPS.\nsteps:\n- run:\n    name: Set HTTPS remote URLs (fetch and push)\n    command: <<include(scripts/set_https_remote.sh)>>\n".to_string()
+}
+
+fn render_set_https_remote_script() -> String {
+    "# CircleCI's checkout step injects this rule into ~/.gitconfig:\n#   url.\"ssh://git@github.com\".insteadOf = https://github.com\n# This causes git (and libgit2 used by pcu) to transparently rewrite every\n# HTTPS GitHub URL back to SSH, so git remote set-url has no observable effect\n# on the effective URL. Remove the rule before setting the remote URLs.\ngit config --global --unset-all \"url.ssh://git@github.com.insteadOf\" 2>/dev/null || true\nHTTPS_ORIGIN=\"https://github.com/${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME}.git\"\ngit remote set-url origin \"${HTTPS_ORIGIN}\"\ngit remote set-url --push origin \"${HTTPS_ORIGIN}\"\n".to_string()
+}
+
 fn render_example(cli: &CliDefinition, opts: &GenerateOpts, config: Option<&OrbConfig>) -> String {
     let namespace = opts
         .namespaces
@@ -442,7 +467,11 @@ fn render_example(cli: &CliDefinition, opts: &GenerateOpts, config: Option<&OrbC
     } else {
         out.push_str(&format!("        - {binary}/{job_name}:\n"));
         for p in required_params {
-            out.push_str(&format!("            {}: my-value\n", p.long_name));
+            let placeholder = p.long_name.replace('_', "-");
+            out.push_str(&format!(
+                "            {}: your-{placeholder}\n",
+                p.long_name
+            ));
         }
     }
     out
@@ -1831,6 +1860,89 @@ mod tests {
         assert!(
             dockerfile.contains("ca-certificates libssl-dev pkg-config"),
             "builder packages must be sorted: ca-certificates libssl-dev pkg-config\n{dockerfile}"
+        );
+    }
+
+    // ── set_https_remote command + script generation ────────────────────────
+
+    #[test]
+    fn set_https_remote_command_file_generated_when_git_push_subcommands_set() {
+        let sub = make_leaf("save", vec![]);
+        let cli = make_cli("mytool", vec![sub]);
+        let opts = GenerateOpts {
+            git_push_subcommands: vec!["save".to_string()],
+            ..default_opts()
+        };
+        let files = generate(&cli, &opts, None);
+        assert!(
+            files.contains_key(&PathBuf::from("src/commands/set_https_remote.yml")),
+            "set_https_remote command file must be generated when git_push_subcommands is set"
+        );
+    }
+
+    #[test]
+    fn set_https_remote_script_file_generated_when_git_push_subcommands_set() {
+        let sub = make_leaf("save", vec![]);
+        let cli = make_cli("mytool", vec![sub]);
+        let opts = GenerateOpts {
+            git_push_subcommands: vec!["save".to_string()],
+            ..default_opts()
+        };
+        let files = generate(&cli, &opts, None);
+        assert!(
+            files.contains_key(&PathBuf::from("src/scripts/set_https_remote.sh")),
+            "set_https_remote script file must be generated when git_push_subcommands is set"
+        );
+    }
+
+    #[test]
+    fn set_https_remote_command_contains_include_script() {
+        let sub = make_leaf("save", vec![]);
+        let cli = make_cli("mytool", vec![sub]);
+        let opts = GenerateOpts {
+            git_push_subcommands: vec!["save".to_string()],
+            ..default_opts()
+        };
+        let files = generate(&cli, &opts, None);
+        let cmd = &files[&PathBuf::from("src/commands/set_https_remote.yml")];
+        assert!(
+            cmd.contains("<<include(scripts/set_https_remote.sh)>>"),
+            "set_https_remote command must include the script:\n{cmd}"
+        );
+    }
+
+    #[test]
+    fn set_https_remote_script_unsets_insteadof_rule() {
+        let sub = make_leaf("save", vec![]);
+        let cli = make_cli("mytool", vec![sub]);
+        let opts = GenerateOpts {
+            git_push_subcommands: vec!["save".to_string()],
+            ..default_opts()
+        };
+        let files = generate(&cli, &opts, None);
+        let script = &files[&PathBuf::from("src/scripts/set_https_remote.sh")];
+        assert!(
+            script.contains("insteadOf") || script.contains("unset"),
+            "set_https_remote script must unset the CircleCI SSH insteadOf rule:\n{script}"
+        );
+        assert!(
+            script.contains("git remote set-url"),
+            "set_https_remote script must set the remote URL to HTTPS:\n{script}"
+        );
+    }
+
+    #[test]
+    fn set_https_remote_not_generated_when_no_push_subcommands() {
+        let sub = make_leaf("generate", vec![]);
+        let cli = make_cli("mytool", vec![sub]);
+        let files = generate(&cli, &default_opts(), None);
+        assert!(
+            !files.contains_key(&PathBuf::from("src/commands/set_https_remote.yml")),
+            "set_https_remote command must NOT be generated when git_push_subcommands is empty"
+        );
+        assert!(
+            !files.contains_key(&PathBuf::from("src/scripts/set_https_remote.sh")),
+            "set_https_remote script must NOT be generated when git_push_subcommands is empty"
         );
     }
 
