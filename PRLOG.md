@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- interactive dialogue for CI context names(pr [#75])
+
 ### Fixed
 
 - orb generation gaps from regeneration test(pr [#74])
@@ -316,6 +320,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#71]: https://github.com/jerus-org/gen-circleci-orb/pull/71
 [#72]: https://github.com/jerus-org/gen-circleci-orb/pull/72
 [#74]: https://github.com/jerus-org/gen-circleci-orb/pull/74
+[#75]: https://github.com/jerus-org/gen-circleci-orb/pull/75
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.35...HEAD
 [0.0.35]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.34...v0.0.35
 [0.0.34]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.33...v0.0.34
