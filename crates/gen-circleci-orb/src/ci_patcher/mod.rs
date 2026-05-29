@@ -102,12 +102,13 @@ fn patch_step1_orb_tools(
 
 fn patch_step2_build_regen_jobs(
     content: &str,
-    lines: &mut Vec<String>,
-    opts: &PatchOpts,
+    _lines: &mut Vec<String>,
+    _opts: &PatchOpts,
     report: &mut PatchReport,
 ) {
-    // Detect either the old inline-job approach ("build-binary:" top-level job) or the
-    // newer orb-reference approach ("gen-circleci-orb/build_rust_binary:" in workflow).
+    // Detect either the old inline-job approach or the orb-reference approach.
+    // Both are considered "already present" for idempotency — no inline job defs are
+    // added any more; the workflow steps reference gen-circleci-orb orb jobs directly.
     let has_build = content.contains("build-binary:")
         || content.contains("gen-circleci-orb/build_rust_binary:");
     let has_regen =
@@ -116,36 +117,12 @@ fn patch_step2_build_regen_jobs(
         report
             .skipped
             .push("build-binary and regenerate-orb jobs".to_string());
-        return;
-    }
-    let build_block = build_binary_job(opts);
-    let regen_block = regenerate_orb_job(opts);
-    if let Some(pos) = find_section_end(lines, "jobs:") {
-        insert_block_at(lines, pos, &build_block);
-        insert_block_at(lines, pos + build_block.len(), &regen_block);
     } else {
-        insert_jobs_before_workflows(lines, &build_block, &regen_block);
-    }
-    report
-        .insertions
-        .push("build-binary and regenerate-orb jobs".to_string());
-}
-
-fn insert_jobs_before_workflows(
-    lines: &mut Vec<String>,
-    build_block: &[String],
-    regen_block: &[String],
-) {
-    let Some(wf_pos) = find_top_level(lines, "workflows:") else {
-        return;
-    };
-    let mut block = vec!["jobs:".to_string()];
-    block.extend_from_slice(build_block);
-    block.extend_from_slice(regen_block);
-    block.push(String::new());
-    block.push(String::new());
-    for (i, l) in block.into_iter().enumerate() {
-        lines.insert(wf_pos + i, l);
+        // Nothing to insert — the workflow steps added by patch_step3 now reference
+        // gen-circleci-orb orb jobs directly so no inline job definitions are needed.
+        report
+            .insertions
+            .push("build-binary and regenerate-orb jobs".to_string());
     }
 }
 
@@ -290,63 +267,28 @@ fn find_workflow_jobs_end(lines: &[String], workflow: &str) -> Option<usize> {
     Some(lines.len())
 }
 
-fn build_binary_job(opts: &PatchOpts) -> Vec<String> {
-    let binary = &opts.binary;
-    vec![
-        "  build-binary:".to_string(),
-        "    docker:".to_string(),
-        "      - image: rust:latest".to_string(),
-        "    steps:".to_string(),
-        "      - checkout".to_string(),
-        "      - run:".to_string(),
-        "          name: Build binary".to_string(),
-        "          command: cargo build --release".to_string(),
-        "      - persist_to_workspace:".to_string(),
-        "          root: target/release".to_string(),
-        format!("          paths: [{binary}]"),
-    ]
-}
-
-fn regenerate_orb_job(opts: &PatchOpts) -> Vec<String> {
-    let binary = &opts.binary;
-    let orb_dir = &opts.orb_dir;
-    // gen-circleci-orb is pre-installed in its own Docker image (jerusdp/gen-circleci-orb).
-    // The target binary is attached from the build-binary workspace — no runtime installs needed.
-    let mut lines = vec![
-        "  regenerate-orb:".to_string(),
-        "    docker:".to_string(),
-        "      - image: jerusdp/gen-circleci-orb:latest".to_string(),
-        "    steps:".to_string(),
-        "      - checkout".to_string(),
-        "      - attach_workspace:".to_string(),
-        "          at: /tmp/bin".to_string(),
-        "      - run:".to_string(),
-        "          name: Regenerate orb source".to_string(),
-        "          command: |".to_string(),
-        "            export PATH=\"/tmp/bin:$PATH\"".to_string(),
-        "            gen-circleci-orb generate \\".to_string(),
-        format!("              --binary {binary} \\"),
-    ];
-    // Each namespace gets its own --orb-namespace flag (repeatable CLI arg).
-    for ns in &opts.namespaces {
-        lines.push(format!("              --orb-namespace {ns} \\"));
-    }
-    lines.push(format!("              --orb-dir {orb_dir}"));
-    lines
-}
-
 fn pack_validate_steps(opts: &PatchOpts) -> Vec<String> {
     let orb_dir = &opts.orb_dir;
+    let binary = &opts.binary;
     let mut steps = vec![];
 
-    // build-binary workflow step — compiles the binary and persists to workspace
-    steps.push("      - build-binary:".to_string());
+    // gen-circleci-orb/build_rust_binary — compiles the binary and persists to workspace
+    steps.push("      - gen-circleci-orb/build_rust_binary:".to_string());
+    steps.push("          name: build-binary".to_string());
+    steps.push(format!("          package: {binary}"));
     if let Some(req) = &opts.requires_job {
         steps.push(format!("          requires: [{req}]"));
     }
 
-    // regenerate-orb workflow step — attaches workspace, installs gen-circleci-orb, runs generate
-    steps.push("      - regenerate-orb:".to_string());
+    // gen-circleci-orb/generate — attaches workspace, runs gen-circleci-orb generate
+    steps.push("      - gen-circleci-orb/generate:".to_string());
+    steps.push("          name: regenerate-orb".to_string());
+    steps.push(format!("          binary: {binary}"));
+    for ns in &opts.namespaces {
+        steps.push(format!("          orb_namespace: {ns}"));
+    }
+    steps.push(format!("          orb_dir: {orb_dir}"));
+    steps.push("          attach_workspace: true".to_string());
     steps.push("          requires: [build-binary]".to_string());
 
     // orb-tools/pack (source_dir + workspace persistence; validates on pack)
@@ -1089,6 +1031,85 @@ mod tests {
         );
     }
 
+    // ── validation workflow: orb job references (not inline job defs) ────────
+
+    #[test]
+    fn validation_workflow_uses_build_rust_binary_orb_job() {
+        let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
+        let wf_start = output
+            .find("  validation:")
+            .expect("no validation workflow");
+        let wf_section = &output[wf_start..];
+        assert!(
+            wf_section.contains("gen-circleci-orb/build_rust_binary:"),
+            "validation workflow must reference gen-circleci-orb/build_rust_binary orb job (not an inline job def):\n{wf_section}"
+        );
+        assert!(
+            wf_section.contains("name: build-binary"),
+            "build_rust_binary step must be named build-binary:\n{wf_section}"
+        );
+    }
+
+    #[test]
+    fn validation_workflow_uses_generate_orb_job() {
+        let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
+        let wf_start = output
+            .find("  validation:")
+            .expect("no validation workflow");
+        let wf_section = &output[wf_start..];
+        assert!(
+            wf_section.contains("gen-circleci-orb/generate:"),
+            "validation workflow must reference gen-circleci-orb/generate orb job (not an inline job def):\n{wf_section}"
+        );
+        assert!(
+            wf_section.contains("name: regenerate-orb"),
+            "generate step must be named regenerate-orb:\n{wf_section}"
+        );
+    }
+
+    #[test]
+    fn no_inline_build_regen_job_defs_in_jobs_section() {
+        let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
+        // Only inspect content before `workflows:` to isolate the jobs section
+        let jobs_section = output.split("\nworkflows:").next().unwrap_or(&output);
+        assert!(
+            !jobs_section.contains("  build-binary:"),
+            "build-binary must NOT appear as an inline job definition:\n{jobs_section}"
+        );
+        assert!(
+            !jobs_section.contains("  regenerate-orb:"),
+            "regenerate-orb must NOT appear as an inline job definition:\n{jobs_section}"
+        );
+    }
+
+    #[test]
+    fn validation_build_step_requires_configured_job() {
+        let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
+        let after_bb = output
+            .split("gen-circleci-orb/build_rust_binary:")
+            .nth(1)
+            .expect("no build_rust_binary step in validation");
+        let step_block = after_bb.split("      - ").next().unwrap_or(after_bb);
+        assert!(
+            step_block.contains("requires: [common-tests]"),
+            "build_rust_binary step must require the configured job:\n{step_block}"
+        );
+    }
+
+    #[test]
+    fn validation_generate_step_requires_build_binary() {
+        let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
+        let after_regen = output
+            .split("gen-circleci-orb/generate:")
+            .nth(1)
+            .expect("no gen-circleci-orb/generate step");
+        let step_block = after_regen.split("      - ").next().unwrap_or(after_regen);
+        assert!(
+            step_block.contains("requires: [build-binary]"),
+            "generate step must require build-binary:\n{step_block}"
+        );
+    }
+
     const BUILD_FIXTURE: &str = "\
 version: 2.1
 
@@ -1160,8 +1181,12 @@ workflows:
     fn patch_build_wires_workflow_steps_when_no_jobs_section() {
         let (output, report) = patch_build(BUILD_FIXTURE_NO_JOBS, &make_opts());
         assert!(
-            output.contains("regenerate-orb:"),
-            "missing job def:\n{output}"
+            output.contains("gen-circleci-orb/build_rust_binary:"),
+            "missing build_rust_binary orb step when no pre-existing jobs section:\n{output}"
+        );
+        assert!(
+            output.contains("gen-circleci-orb/generate:"),
+            "missing generate orb step when no pre-existing jobs section:\n{output}"
         );
         assert!(
             output.contains("orb-tools/pack:"),
@@ -1170,14 +1195,6 @@ workflows:
         assert!(
             output.contains("orb-tools/review:"),
             "review step not wired into workflow:\n{output}"
-        );
-        // Both the job and the workflow steps should be in the report
-        assert!(
-            report
-                .insertions
-                .iter()
-                .any(|s| s.contains("regenerate-orb")),
-            "report missing regenerate-orb"
         );
         assert!(
             report.insertions.iter().any(|s| s.contains("workflow")),
@@ -1201,102 +1218,36 @@ workflows:
     }
 
     #[test]
-    fn patch_build_adds_build_binary_job() {
+    fn patch_build_adds_build_rust_binary_orb_step() {
         let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
         assert!(
-            output.contains("  build-binary:"),
-            "missing build-binary job:\n{output}"
+            output.contains("gen-circleci-orb/build_rust_binary:"),
+            "missing build_rust_binary orb step:\n{output}"
         );
-    }
-
-    /// Collect lines belonging to a top-level job block (2-space indented header).
-    /// Returns the content lines (not the header itself) as a single string.
-    fn job_block(output: &str, job_name: &str) -> String {
-        let header = format!("  {job_name}:");
-        let mut in_block = false;
-        let mut result = String::new();
-        for line in output.lines() {
-            if line.trim_end() == header.trim_end() {
-                in_block = true;
-                continue;
-            }
-            if in_block {
-                // A non-empty line starting with ≤2 spaces that isn't the header means a new
-                // top-level section or job; the block is done.
-                if !line.is_empty() && !line.starts_with("   ") && !line.starts_with('\t') {
-                    break;
-                }
-                result.push_str(line);
-                result.push('\n');
-            }
-        }
-        result
-    }
-
-    #[test]
-    fn build_binary_uses_public_rust_image() {
-        let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
-        let block = job_block(&output, "build-binary");
         assert!(
-            block.contains("rust:latest"),
-            "build-binary must use the public rust:latest image, not a private CI image:\n{block}"
+            output.contains("name: build-binary"),
+            "build_rust_binary step must be named build-binary:\n{output}"
+        );
+        assert!(
+            output.contains("package: mytool"),
+            "build_rust_binary step must set package param:\n{output}"
         );
     }
 
     #[test]
-    fn build_binary_runs_cargo_build_release() {
+    fn patch_build_adds_generate_orb_step() {
         let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
-        let block = job_block(&output, "build-binary");
         assert!(
-            block.contains("cargo build --release"),
-            "build-binary must run cargo build --release:\n{block}"
-        );
-    }
-
-    #[test]
-    fn build_binary_persists_to_workspace() {
-        let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
-        let block = job_block(&output, "build-binary");
-        assert!(
-            block.contains("persist_to_workspace"),
-            "build-binary must persist binary to workspace:\n{block}"
-        );
-    }
-
-    #[test]
-    fn patch_build_adds_regenerate_orb_job() {
-        let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
-        assert!(output.contains("regenerate-orb:"), "missing job:\n{output}");
-        // gen-circleci-orb is pre-installed in its own image; no install step needed
-        assert!(
-            !output.contains("install-from-binstall-release.sh"),
-            "regenerate-orb must not bootstrap cargo-binstall — use the gen-circleci-orb image:\n{output}"
+            output.contains("gen-circleci-orb/generate:"),
+            "missing gen-circleci-orb/generate orb step:\n{output}"
         );
         assert!(
-            !output.contains("cargo-binstall --no-confirm gen-circleci-orb"),
-            "regenerate-orb must not install gen-circleci-orb at runtime:\n{output}"
+            output.contains("name: regenerate-orb"),
+            "generate step must be named regenerate-orb:\n{output}"
         );
         assert!(
-            output.contains("gen-circleci-orb generate"),
-            "missing generate step:\n{output}"
-        );
-    }
-
-    #[test]
-    fn regenerate_orb_uses_gen_circleci_orb_image_and_attaches_workspace() {
-        let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
-        let block = job_block(&output, "regenerate-orb");
-        assert!(
-            block.contains("jerusdp/gen-circleci-orb:latest"),
-            "regenerate-orb must use the gen-circleci-orb Docker image (gen-circleci-orb is pre-installed):\n{block}"
-        );
-        assert!(
-            block.contains("attach_workspace"),
-            "regenerate-orb must attach workspace to get the target binary:\n{block}"
-        );
-        assert!(
-            !block.contains("cargo-binstall"),
-            "regenerate-orb must not install anything — gen-circleci-orb is in the image:\n{block}"
+            output.contains("attach_workspace: true"),
+            "generate step must set attach_workspace: true:\n{output}"
         );
     }
 
@@ -1304,43 +1255,14 @@ workflows:
     fn workflow_build_binary_precedes_regenerate_orb() {
         let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
         let bb_pos = output
-            .find("      - build-binary:")
-            .expect("no build-binary workflow step");
+            .find("name: build-binary")
+            .expect("no build-binary step");
         let regen_pos = output
-            .find("      - regenerate-orb:")
-            .expect("no regenerate-orb workflow step");
+            .find("name: regenerate-orb")
+            .expect("no regenerate-orb step");
         assert!(
             bb_pos < regen_pos,
             "build-binary must appear before regenerate-orb in the workflow"
-        );
-    }
-
-    #[test]
-    fn build_binary_workflow_step_requires_configured_job() {
-        let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
-        // The build-binary workflow step must require the user-configured prerequisite
-        let after_bb = output
-            .split("      - build-binary:")
-            .nth(1)
-            .expect("no build-binary workflow step");
-        let step_block = after_bb.split("      - ").next().unwrap_or(after_bb);
-        assert!(
-            step_block.contains("requires: [common-tests]"),
-            "build-binary workflow step must require the configured job:\n{step_block}"
-        );
-    }
-
-    #[test]
-    fn regenerate_orb_workflow_step_requires_build_binary() {
-        let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
-        let after_regen = output
-            .split("      - regenerate-orb:")
-            .nth(1)
-            .expect("no regenerate-orb workflow step");
-        let step_block = after_regen.split("      - ").next().unwrap_or(after_regen);
-        assert!(
-            step_block.contains("requires: [build-binary]"),
-            "regenerate-orb workflow step must require build-binary:\n{step_block}"
         );
     }
 
@@ -1391,15 +1313,23 @@ workflows:
     }
 
     #[test]
-    fn patch_build_job_in_jobs_section_not_workflows() {
+    fn patch_build_orb_steps_are_in_workflow_not_jobs_section() {
         let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
-        // The regenerate-orb: job definition must appear in the jobs section
-        let jobs_pos = output.find("\njobs:").expect("no jobs: section");
         let workflows_pos = output.find("\nworkflows:").expect("no workflows: section");
-        let job_def_pos = output.find("  regenerate-orb:").expect("no job def");
+        // orb job references live in the workflow, not as inline job defs
+        let build_ref_pos = output
+            .find("gen-circleci-orb/build_rust_binary:")
+            .expect("no build_rust_binary ref");
+        let regen_ref_pos = output
+            .find("gen-circleci-orb/generate:")
+            .expect("no generate ref");
         assert!(
-            job_def_pos > jobs_pos && job_def_pos < workflows_pos,
-            "job definition not in jobs section"
+            build_ref_pos > workflows_pos,
+            "build_rust_binary ref must be inside the workflows section"
+        );
+        assert!(
+            regen_ref_pos > workflows_pos,
+            "generate ref must be inside the workflows section"
         );
     }
 

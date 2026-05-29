@@ -101,6 +101,11 @@ pub struct Init {
     #[arg(long, default_value = "pcu-app")]
     pub mcp_context: String,
 
+    /// Subcommand names whose generated jobs should include a `set_https_remote` step
+    /// (repeatable). Use for subcommands that push to git (e.g. `save`).
+    #[arg(long, value_delimiter = ',')]
+    pub git_push_subcommands: Vec<String>,
+
     /// Show planned changes without modifying any files.
     #[arg(long)]
     pub dry_run: bool,
@@ -156,7 +161,7 @@ impl Init {
             base_image: crate::commands::generate::DEFAULT_BASE_IMAGE.to_string(),
             home_url: None,
             source_url: None,
-            git_push_subcommands: vec![],
+            git_push_subcommands: self.git_push_subcommands.clone(),
             circleci_cli_version: None,
             apt_packages: vec![],
             dry_run: self.dry_run,
@@ -261,6 +266,40 @@ mod tests {
             help.generate_job,
             Some(false),
             "help subcommand must be suppressed in bootstrap config"
+        );
+    }
+
+    #[test]
+    fn init_has_git_push_subcommands_field() {
+        // Init must expose --git-push-subcommands so the caller can name subcommands
+        // (e.g. "save") that need a set_https_remote step in their generated job.
+        let init = Init {
+            binary: "mytool".to_string(),
+            public_orb_namespaces: vec!["my-org".to_string()],
+            private_orb_namespaces: vec![],
+            build_workflow: "validation".to_string(),
+            release_workflow: "orb-release".to_string(),
+            requires_job: None,
+            crate_tag_prefix: "mytool-v".to_string(),
+            release_after_job: "publish-orb".to_string(),
+            orb_dir: "orb".to_string(),
+            ci_dir: std::path::PathBuf::from(".circleci"),
+            orb_tools_version: "12.3.3".to_string(),
+            docker_orb_version: "3.0.1".to_string(),
+            docker_namespace: "my-docker-ns".to_string(),
+            docker_context: "docker-credentials".to_string(),
+            orb_context: "orb-publishing".to_string(),
+            gen_circleci_orb_version: "0.0.1".to_string(),
+            mcp: false,
+            mcp_earliest_version: "0.0.1".to_string(),
+            mcp_context: "pcu-app".to_string(),
+            dry_run: false,
+            git_push_subcommands: vec!["save".to_string()],
+        };
+        assert_eq!(
+            init.git_push_subcommands,
+            vec!["save".to_string()],
+            "Init must hold git_push_subcommands and pass it through to Generate"
         );
     }
 
