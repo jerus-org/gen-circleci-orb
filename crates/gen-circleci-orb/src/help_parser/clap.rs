@@ -365,9 +365,56 @@ fn has_value_metavar(block: &str, long_flag: &str) -> bool {
 }
 
 fn extract_default(block: &str) -> Option<String> {
-    let re = regex::Regex::new(r"\[default:\s*([^\]]+)\]").ok()?;
-    let cap = re.captures(block)?;
-    Some(cap[1].trim().to_string())
+    // Find `[default:` then locate the matching outer `]` using bracket depth counting
+    // so that default values containing `[...]` (e.g. "[skip ci]") are captured whole.
+    let marker = "[default:";
+    let start = block.find(marker)?;
+    let value_start = start + marker.len();
+    let mut depth = 1usize;
+    let mut end = None;
+    for (i, ch) in block[value_start..].char_indices() {
+        match ch {
+            '[' => depth += 1,
+            ']' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = Some(value_start + i);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let end = end?;
+    Some(block[value_start..end].trim().to_string())
+}
+
+/// Remove all occurrences of `marker`...matching-`]` from `text`, handling nested brackets.
+fn strip_bracket_annotation(text: &str, marker: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let mut remaining = text;
+    while let Some(start) = remaining.find(marker) {
+        result.push_str(remaining[..start].trim_end());
+        let after = &remaining[start + marker.len()..];
+        let mut depth = 1usize;
+        let mut end = after.len();
+        for (i, ch) in after.char_indices() {
+            match ch {
+                '[' => depth += 1,
+                ']' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = i + 1;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        remaining = &after[end..];
+    }
+    result.push_str(remaining);
+    result
 }
 
 fn extract_param_description(block: &str) -> String {
@@ -386,15 +433,15 @@ fn extract_param_description(block: &str) -> String {
     };
 
     // Strip annotations: [default: ...], [possible values: ...], "Possible values: ..."
-    let re_default = regex::Regex::new(r"\s*\[default:[^\]]*\]").unwrap();
-    let re_pv_inline = regex::Regex::new(r"\s*\[possible values:[^\]]*\]").unwrap();
+    // Use bracket-counting removal so values containing nested `[...]` are removed whole.
+    let candidate = strip_bracket_annotation(&candidate, "[default:");
+    let candidate = strip_bracket_annotation(&candidate, "[possible values:");
     let candidate = if let Some(pv) = candidate.find("Possible values:") {
         candidate[..pv].trim().to_string()
     } else {
         candidate
     };
-    let candidate = re_pv_inline.replace_all(&candidate, "").to_string();
-    re_default.replace_all(&candidate, "").trim().to_string()
+    candidate.trim().to_string()
 }
 
 /// True only for top-level section headers (no leading whitespace).
@@ -513,6 +560,37 @@ Options:
         assert_eq!(
             fmt.param_type,
             ParamType::Enum(vec!["binary".to_string(), "source".to_string()])
+        );
+    }
+
+    #[test]
+    fn default_value_with_nested_brackets_extracted() {
+        // clap renders defaults that contain `[...]` inside the outer [default: ...] annotation.
+        // The regex [^\]]+ stops at the first `]`, truncating the value.  The bracket-counting
+        // parser must find the correct matching outer `]`.
+        let help = r#"Save artifacts
+
+Usage: tool save [OPTIONS] --paths <PATHS>
+
+Options:
+  -m, --message <MESSAGE>
+          Commit message
+
+          [default: "chore: update generated MCP server artifacts [skip ci]"]
+
+  -h, --help
+          Print help
+"#;
+        let params = parse_parameters(help);
+        let p = params.iter().find(|p| p.long_name == "message").unwrap();
+        assert_eq!(
+            p.default.as_deref(),
+            Some("\"chore: update generated MCP server artifacts [skip ci]\""),
+            "default must include the full value including inner brackets"
+        );
+        assert_eq!(
+            p.description, "Commit message",
+            "description must not contain the stray `]` from the annotation"
         );
     }
 
