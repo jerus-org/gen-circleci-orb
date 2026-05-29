@@ -1,6 +1,8 @@
 mod types;
 
-pub use types::{ExtraJob, JobGroup, OrbConfig, OrbSection, ParamOverride, SubcommandConfig};
+pub use types::{
+    CiSection, ExtraJob, JobGroup, OrbConfig, OrbSection, ParamOverride, SubcommandConfig,
+};
 
 use anyhow::Result;
 use std::path::Path;
@@ -52,6 +54,34 @@ git_push_subcommands = ["save"]
             orb.git_push_subcommands.as_deref(),
             Some(&["save".to_string()][..])
         );
+    }
+
+    #[test]
+    fn load_config_parses_ci_section() {
+        let dir = TempDir::new().unwrap();
+        let path = write_toml(
+            &dir,
+            r#"
+[ci]
+build_workflow = "validation"
+release_workflow = "orb-release"
+requires_job = "toolkit/common_tests"
+release_after_job = "publish-orb-jerus-org"
+crate_tag_prefix = "mytool-v"
+docker_namespace = "myns"
+docker_context = "docker"
+orb_context = "orb-publishing"
+mcp = true
+mcp_context = "pcu-app"
+mcp_earliest_version = "0.1.0"
+"#,
+        );
+        let config = load_config(&path).unwrap();
+        let ci = config.ci.as_ref().expect("ci section missing");
+        assert_eq!(ci.build_workflow.as_deref(), Some("validation"));
+        assert_eq!(ci.docker_context.as_deref(), Some("docker"));
+        assert_eq!(ci.mcp, Some(true));
+        assert_eq!(ci.mcp_earliest_version.as_deref(), Some("0.1.0"));
     }
 
     #[test]
@@ -219,6 +249,7 @@ steps:
                 source_url: None,
                 git_push_subcommands: None,
             }),
+            ci: None,
             orbs: None,
             subcommand: Some(subcommands),
             job_group: Some(vec![JobGroup {

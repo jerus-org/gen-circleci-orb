@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use crate::{
     ci_patcher,
     commands::generate::Generate,
-    orb_config::{OrbConfig, OrbSection, SubcommandConfig},
+    orb_config::{CiSection, OrbConfig, OrbSection, SubcommandConfig},
 };
 
 pub const DEFAULT_DOCKER_ORB_VERSION: &str = "3.0.1";
@@ -174,6 +174,7 @@ pub(crate) fn build_bootstrap_config(
                 Some(git_push_subcommands.to_vec())
             },
         }),
+        ci: None, // populated by run() after gathering extras
         orbs: None,
         subcommand: Some(subcommands),
         job_group: None,
@@ -368,7 +369,7 @@ impl Init {
 
         // Step 3: write bootstrap gen-circleci-orb.toml
         let config_path = std::path::Path::new("gen-circleci-orb.toml");
-        let bootstrap = build_bootstrap_config(
+        let mut bootstrap = build_bootstrap_config(
             &self.binary,
             opts.namespaces.as_slice(),
             &self.orb_dir,
@@ -376,6 +377,19 @@ impl Init {
             extras.source_url.as_deref(),
             &extras.git_push_subcommands,
         );
+        bootstrap.ci = Some(CiSection {
+            build_workflow: Some(self.build_workflow.clone()),
+            release_workflow: Some(self.release_workflow.clone()),
+            requires_job: self.requires_job.clone(),
+            release_after_job: Some(self.release_after_job.clone()),
+            crate_tag_prefix: Some(self.crate_tag_prefix.clone()),
+            docker_namespace: Some(self.docker_namespace.clone()),
+            docker_context: Some(extras.docker_context.clone()),
+            orb_context: Some(extras.orb_context.clone()),
+            mcp: Some(self.mcp),
+            mcp_context: Some(extras.mcp_context.clone()),
+            mcp_earliest_version: Some(extras.mcp_earliest_version.clone()),
+        });
         if self.dry_run {
             let content = toml::to_string_pretty(&bootstrap)?;
             println!("(dry-run) Would write {}", config_path.display());
@@ -514,6 +528,28 @@ mod tests {
             None,
             "empty slice must produce None (not an empty list) to keep the TOML clean"
         );
+    }
+
+    #[test]
+    fn init_run_writes_ci_section_to_config() {
+        let init = make_init(true);
+        let extras = init.gather_extras().unwrap();
+        let ci = CiSection {
+            build_workflow: Some(init.build_workflow.clone()),
+            release_workflow: Some(init.release_workflow.clone()),
+            requires_job: init.requires_job.clone(),
+            release_after_job: Some(init.release_after_job.clone()),
+            crate_tag_prefix: Some(init.crate_tag_prefix.clone()),
+            docker_namespace: Some(init.docker_namespace.clone()),
+            docker_context: Some(extras.docker_context.clone()),
+            orb_context: Some(extras.orb_context.clone()),
+            mcp: Some(init.mcp),
+            mcp_context: Some(extras.mcp_context.clone()),
+            mcp_earliest_version: Some(extras.mcp_earliest_version.clone()),
+        };
+        assert_eq!(ci.build_workflow.as_deref(), Some("validation"));
+        assert_eq!(ci.docker_context.as_deref(), Some(DEFAULT_DOCKER_CONTEXT));
+        assert_eq!(ci.mcp, Some(false));
     }
 
     #[test]
