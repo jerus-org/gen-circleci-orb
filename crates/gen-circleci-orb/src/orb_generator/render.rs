@@ -85,6 +85,13 @@ pub fn generate(
         }
     }
 
+    // add-workspace-to-path.sh — always generated; referenced by every job's
+    // attach_workspace conditional step via <<include(scripts/add-workspace-to-path.sh)>>
+    files.insert(
+        PathBuf::from("src/scripts/add-workspace-to-path.sh"),
+        "export PATH=\"${WORKSPACE_ROOT}:${PATH}\"\n".to_string(),
+    );
+
     // set_https_remote command + script (generated whenever any push subcommand is named)
     if !opts.git_push_subcommands.is_empty() {
         files.insert(
@@ -1860,6 +1867,38 @@ mod tests {
         assert!(
             dockerfile.contains("ca-certificates libssl-dev pkg-config"),
             "builder packages must be sorted: ca-certificates libssl-dev pkg-config\n{dockerfile}"
+        );
+    }
+
+    // ── add-workspace-to-path.sh always generated ───────────────────────────
+
+    #[test]
+    fn add_workspace_to_path_script_always_generated() {
+        // Every generated orb includes jobs with an attach_workspace conditional that
+        // references <<include(scripts/add-workspace-to-path.sh)>>.  The script must
+        // always be generated so `circleci orb pack` does not fail with "could not open".
+        let sub = make_leaf("generate", vec![]);
+        let cli = make_cli("mytool", vec![sub]);
+        let files = generate(&cli, &default_opts(), None);
+        assert!(
+            files.contains_key(&PathBuf::from("src/scripts/add-workspace-to-path.sh")),
+            "add-workspace-to-path.sh must always be generated; orb pack fails without it"
+        );
+    }
+
+    #[test]
+    fn add_workspace_script_exports_path() {
+        let sub = make_leaf("generate", vec![]);
+        let cli = make_cli("mytool", vec![sub]);
+        let files = generate(&cli, &default_opts(), None);
+        let script = &files[&PathBuf::from("src/scripts/add-workspace-to-path.sh")];
+        assert!(
+            script.contains("PATH"),
+            "add-workspace-to-path.sh must export the workspace root onto PATH:\n{script}"
+        );
+        assert!(
+            script.contains("WORKSPACE_ROOT"),
+            "add-workspace-to-path.sh must use the WORKSPACE_ROOT env var:\n{script}"
         );
     }
 
