@@ -72,7 +72,7 @@ docker_namespace = "myns"
 docker_context = "docker"
 orb_context = "orb-publishing"
 mcp = true
-mcp_context = "pcu-app"
+mcp_context = ["release", "bot-check", "pcu-app"]
 mcp_earliest_version = "0.1.0"
 "#,
         );
@@ -82,6 +82,16 @@ mcp_earliest_version = "0.1.0"
         assert_eq!(ci.docker_context.as_deref(), Some("docker"));
         assert_eq!(ci.mcp, Some(true));
         assert_eq!(ci.mcp_earliest_version.as_deref(), Some("0.1.0"));
+        assert_eq!(
+            ci.mcp_context.as_deref(),
+            Some(
+                &[
+                    "release".to_string(),
+                    "bot-check".to_string(),
+                    "pcu-app".to_string()
+                ][..]
+            )
+        );
     }
 
     #[test]

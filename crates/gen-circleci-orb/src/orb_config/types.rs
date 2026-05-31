@@ -24,7 +24,7 @@ pub struct CiSection {
     pub docker_context: Option<String>,
     pub orb_context: Option<String>,
     pub mcp: Option<bool>,
-    pub mcp_context: Option<String>,
+    pub mcp_context: Option<Vec<String>>,
     pub mcp_earliest_version: Option<String>,
 }
 

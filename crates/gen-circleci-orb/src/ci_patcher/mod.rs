@@ -33,7 +33,7 @@ pub struct PatchOpts {
     pub mcp_earliest_version: String,
     /// CircleCI context providing push authority for MCP server build + publish + save steps.
     /// Only used when `mcp` is true.
-    pub mcp_context: String,
+    pub mcp_context: Vec<String>,
 }
 
 pub struct PatchReport {
@@ -432,7 +432,7 @@ fn push_mcp_workflow_steps(
     let binary = &opts.binary;
     let orb_dir = &opts.orb_dir;
     let prefix = &opts.crate_tag_prefix;
-    let mcp_ctx = &opts.mcp_context;
+    let mcp_ctx_str = opts.mcp_context.join(", ");
     let earliest = &opts.mcp_earliest_version;
 
     // Build the requires list from all publish-orb-<ns> steps
@@ -451,7 +451,7 @@ fn push_mcp_workflow_steps(
     lines.push(format!("          orb_path: {orb_dir}/src/@orb.yml"));
     lines.push(format!("          earliest_version: \"{earliest}\""));
     lines.push(format!("          requires: [{requires_str}]"));
-    lines.push(format!("          context: [{mcp_ctx}]"));
+    lines.push(format!("          context: [{mcp_ctx_str}]"));
     push_tag_filters(lines, only_tag, ignore_branches);
 }
 
@@ -478,7 +478,7 @@ mod tests {
             gen_circleci_orb_version: "0.0.1".to_string(),
             mcp: false,
             mcp_earliest_version: "1.0.0".to_string(),
-            mcp_context: "pcu-app".to_string(),
+            mcp_context: vec!["pcu-app".to_string()],
         }
     }
 
@@ -1438,6 +1438,29 @@ workflows:
         assert!(
             step.contains("context: [pcu-app]"),
             "build_mcp_server must use mcp_context:\n{step}"
+        );
+    }
+
+    #[test]
+    fn patch_build_mcp_server_supports_multiple_contexts() {
+        let opts = PatchOpts {
+            mcp: true,
+            mcp_context: vec![
+                "release".to_string(),
+                "bot-check".to_string(),
+                "pcu-app".to_string(),
+            ],
+            ..make_opts()
+        };
+        let (output, _) = patch_build(BUILD_FIXTURE, &opts);
+        let after_step = output
+            .split("name: build-mcp-server")
+            .nth(1)
+            .expect("no build-mcp-server step");
+        let step = after_step.split("\n      - ").next().unwrap_or(after_step);
+        assert!(
+            step.contains("context: [release, bot-check, pcu-app]"),
+            "build_mcp_server must emit all contexts:\n{step}"
         );
     }
 
