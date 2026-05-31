@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- ci: support multiple contexts for build_mcp_server(pr [#79])
+
 ## [0.0.37] - 2026-05-29
 
 ### Added
@@ -335,6 +341,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#76]: https://github.com/jerus-org/gen-circleci-orb/pull/76
 [#77]: https://github.com/jerus-org/gen-circleci-orb/pull/77
 [#78]: https://github.com/jerus-org/gen-circleci-orb/pull/78
+[#79]: https://github.com/jerus-org/gen-circleci-orb/pull/79
+[Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.37...HEAD
 [0.0.37]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.36...v0.0.37
 [0.0.36]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.35...v0.0.36
 [0.0.35]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.34...v0.0.35
