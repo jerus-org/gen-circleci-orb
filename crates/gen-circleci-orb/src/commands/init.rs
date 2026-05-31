@@ -333,10 +333,10 @@ impl Init {
         // Step 1: generate orb source files
         tracing::info!("Generating orb source into ./{}", self.orb_dir);
         let gen = Generate {
-            binary: self.binary.clone(),
+            binary: Some(self.binary.clone()),
             namespaces: namespaces.clone(),
             output: PathBuf::from("."),
-            orb_dir: self.orb_dir.clone(),
+            orb_dir: Some(self.orb_dir.clone()),
             install_method: crate::commands::generate::InstallMethod::Binstall,
             base_image: crate::commands::generate::DEFAULT_BASE_IMAGE.to_string(),
             home_url: extras.home_url.clone(),
