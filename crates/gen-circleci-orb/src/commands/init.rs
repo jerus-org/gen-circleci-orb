@@ -22,7 +22,7 @@ pub(crate) struct GatheredExtras {
     pub git_push_subcommands: Vec<String>,
     pub docker_context: String,
     pub orb_context: String,
-    pub mcp_context: String,
+    pub mcp_context: Vec<String>,
     pub mcp_earliest_version: String,
 }
 
@@ -118,12 +118,12 @@ pub struct Init {
     #[arg(long)]
     pub mcp_earliest_version: Option<String>,
 
-    /// CircleCI context providing push authority for MCP server build + publish + save steps.
+    /// CircleCI context name(s) for MCP server build + publish + save steps (repeatable or comma-separated).
     /// Needs: GITHUB_TOKEN (GitHub App token, contents:write + bypass branch protection),
     /// BOT_GPG_KEY, BOT_TRUST, BOT_USER_NAME, BOT_USER_EMAIL, BOT_SIGN_KEY.
     /// Only used when --mcp is enabled. Prompted interactively if not supplied.
-    #[arg(long)]
-    pub mcp_context: Option<String>,
+    #[arg(long = "mcp-context", value_delimiter = ',')]
+    pub mcp_context: Vec<String>,
 
     /// Subcommand names whose generated jobs should include a `set_https_remote` step
     /// (repeatable). Use for subcommands that push to git (e.g. `save`).
@@ -197,10 +197,11 @@ impl Init {
                     .orb_context
                     .clone()
                     .unwrap_or_else(|| DEFAULT_ORB_CONTEXT.to_string()),
-                mcp_context: self
-                    .mcp_context
-                    .clone()
-                    .unwrap_or_else(|| DEFAULT_MCP_CONTEXT.to_string()),
+                mcp_context: if self.mcp_context.is_empty() {
+                    vec![DEFAULT_MCP_CONTEXT.to_string()]
+                } else {
+                    self.mcp_context.clone()
+                },
                 mcp_earliest_version: self
                     .mcp_earliest_version
                     .clone()
@@ -270,20 +271,28 @@ impl Init {
             .interact_text()?;
 
         let mcp_context = if self.mcp {
-            Input::<String>::new()
+            let current = if self.mcp_context.is_empty() {
+                DEFAULT_MCP_CONTEXT.to_string()
+            } else {
+                self.mcp_context.join(",")
+            };
+            let val = Input::<String>::new()
                 .with_prompt(
-                    "MCP context name (needs: GITHUB_TOKEN with contents:write + bypass branch protection, BOT_GPG_KEY, BOT_TRUST, BOT_USER_NAME, BOT_USER_EMAIL, BOT_SIGN_KEY)",
+                    "MCP context names, comma-separated (needs: GITHUB_TOKEN with contents:write + bypass branch protection, BOT_GPG_KEY, BOT_TRUST, BOT_USER_NAME, BOT_USER_EMAIL, BOT_SIGN_KEY)",
                 )
-                .default(
-                    self.mcp_context
-                        .clone()
-                        .unwrap_or_else(|| DEFAULT_MCP_CONTEXT.to_string()),
-                )
-                .interact_text()?
+                .default(current)
+                .interact_text()?;
+            val.split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect()
         } else {
-            self.mcp_context
-                .clone()
-                .unwrap_or_else(|| DEFAULT_MCP_CONTEXT.to_string())
+            if self.mcp_context.is_empty() {
+                vec![DEFAULT_MCP_CONTEXT.to_string()]
+            } else {
+                self.mcp_context.clone()
+            }
         };
 
         let mcp_earliest_version = if self.mcp {
@@ -490,7 +499,7 @@ mod tests {
             gen_circleci_orb_version: "0.0.1".to_string(),
             mcp: false,
             mcp_earliest_version: None,
-            mcp_context: None,
+            mcp_context: vec![],
             dry_run: false,
             git_push_subcommands: vec!["save".to_string()],
             home_url: None,
@@ -594,7 +603,7 @@ mod tests {
             gen_circleci_orb_version: "0.0.1".to_string(),
             mcp: false,
             mcp_earliest_version: None,
-            mcp_context: None,
+            mcp_context: vec![],
             dry_run,
             git_push_subcommands: vec![],
             home_url: None,
@@ -608,7 +617,7 @@ mod tests {
         let extras = init.gather_extras().unwrap();
         assert_eq!(extras.docker_context, DEFAULT_DOCKER_CONTEXT);
         assert_eq!(extras.orb_context, DEFAULT_ORB_CONTEXT);
-        assert_eq!(extras.mcp_context, DEFAULT_MCP_CONTEXT);
+        assert_eq!(extras.mcp_context, vec![DEFAULT_MCP_CONTEXT.to_string()]);
         assert_eq!(extras.mcp_earliest_version, DEFAULT_MCP_EARLIEST_VERSION);
         assert_eq!(extras.home_url, None);
         assert_eq!(extras.source_url, None);
@@ -620,7 +629,7 @@ mod tests {
         let init = Init {
             docker_context: Some("my-docker".to_string()),
             orb_context: Some("my-orb-ctx".to_string()),
-            mcp_context: Some("my-mcp-ctx".to_string()),
+            mcp_context: vec!["my-mcp-ctx".to_string()],
             mcp_earliest_version: Some("1.2.3".to_string()),
             home_url: Some("https://example.com".to_string()),
             source_url: Some("https://src.example.com".to_string()),
@@ -631,7 +640,7 @@ mod tests {
         let extras = init.gather_extras().unwrap();
         assert_eq!(extras.docker_context, "my-docker");
         assert_eq!(extras.orb_context, "my-orb-ctx");
-        assert_eq!(extras.mcp_context, "my-mcp-ctx");
+        assert_eq!(extras.mcp_context, vec!["my-mcp-ctx".to_string()]);
         assert_eq!(extras.mcp_earliest_version, "1.2.3");
         assert_eq!(extras.home_url.as_deref(), Some("https://example.com"));
         assert_eq!(
