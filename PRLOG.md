@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- read binary, namespaces, orb_dir from [orb] config(pr [#84])
+
 ### Fixed
 
 - ci: support multiple contexts for build_mcp_server(pr [#79])
@@ -342,6 +346,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#77]: https://github.com/jerus-org/gen-circleci-orb/pull/77
 [#78]: https://github.com/jerus-org/gen-circleci-orb/pull/78
 [#79]: https://github.com/jerus-org/gen-circleci-orb/pull/79
+[#84]: https://github.com/jerus-org/gen-circleci-orb/pull/84
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.37...HEAD
 [0.0.37]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.36...v0.0.37
 [0.0.36]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.35...v0.0.36
