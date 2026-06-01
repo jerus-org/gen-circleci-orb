@@ -1,7 +1,7 @@
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Default, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq)]
 pub struct OrbConfig {
     pub orb: Option<OrbSection>,
     pub ci: Option<CiSection>,
@@ -13,7 +13,7 @@ pub struct OrbConfig {
 
 /// CI pipeline values gathered at `init` time, stored so future re-runs
 /// can reproduce the same CI config without re-supplying every flag.
-#[derive(Debug, Default, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq)]
 pub struct CiSection {
     pub build_workflow: Option<String>,
     pub release_workflow: Option<String>,
@@ -28,7 +28,7 @@ pub struct CiSection {
     pub mcp_earliest_version: Option<String>,
 }
 
-#[derive(Debug, Default, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq)]
 pub struct OrbSection {
     pub binary: Option<String>,
     pub namespaces: Option<Vec<String>>,
@@ -42,18 +42,18 @@ pub struct OrbSection {
     pub git_push_subcommands: Option<Vec<String>>,
 }
 
-#[derive(Debug, Default, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq)]
 pub struct SubcommandConfig {
     pub generate_job: Option<bool>,
     pub param: Option<IndexMap<String, ParamOverride>>,
 }
 
-#[derive(Debug, Default, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq)]
 pub struct ParamOverride {
     pub default: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct JobGroup {
     pub name: String,
     pub description: Option<String>,
@@ -61,7 +61,7 @@ pub struct JobGroup {
     pub params: Option<Vec<String>>,
 }
 
-#[derive(Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct ExtraJob {
     pub name: String,
     pub yaml: String,
