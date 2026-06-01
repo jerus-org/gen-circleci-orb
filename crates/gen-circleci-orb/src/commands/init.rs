@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use crate::{
     ci_patcher,
     commands::generate::Generate,
+    help_parser::types::CliDefinition,
     orb_config::{CiSection, OrbConfig, OrbSection, SubcommandConfig},
 };
 
@@ -28,6 +29,22 @@ pub(crate) struct GatheredExtras {
 
 fn is_non_interactive(dry_run: bool) -> bool {
     dry_run || std::env::var("CI").is_ok()
+}
+
+/// Detect leaf subcommands that are likely to push to git, based on whether
+/// they have a `--push`, `--no-push`, or `--sign` parameter.
+pub(crate) fn detect_git_push_subcommands(cli: &CliDefinition) -> Vec<String> {
+    cli.subcommands
+        .iter()
+        .filter(|sub| {
+            sub.is_leaf
+                && sub
+                    .parameters
+                    .iter()
+                    .any(|p| matches!(p.long_name.as_str(), "push" | "no_push" | "sign"))
+        })
+        .map(|sub| sub.name.clone())
+        .collect()
 }
 
 /// Wire orb generation into an existing repo's CI configuration.
@@ -183,12 +200,19 @@ pub(crate) fn build_bootstrap_config(
 }
 
 impl Init {
-    pub(crate) fn gather_extras(&self) -> Result<GatheredExtras> {
+    pub(crate) fn gather_extras(&self, detected: &[String]) -> Result<GatheredExtras> {
+        // CLI flag takes precedence; fall back to auto-detected candidates.
+        let effective_push = if !self.git_push_subcommands.is_empty() {
+            self.git_push_subcommands.clone()
+        } else {
+            detected.to_vec()
+        };
+
         if is_non_interactive(self.dry_run) {
             return Ok(GatheredExtras {
                 home_url: self.home_url.clone(),
                 source_url: self.source_url.clone(),
-                git_push_subcommands: self.git_push_subcommands.clone(),
+                git_push_subcommands: effective_push,
                 docker_context: self
                     .docker_context
                     .clone()
@@ -239,10 +263,17 @@ impl Init {
         };
 
         let git_push_subcommands = {
-            let current = self.git_push_subcommands.join(",");
+            let prompt = if !detected.is_empty() && self.git_push_subcommands.is_empty() {
+                format!(
+                    "Push-capable subcommands detected: {} — confirm or override (comma-separated)",
+                    detected.join(", ")
+                )
+            } else {
+                "Subcommands that push to git, comma-separated (e.g. save)".to_string()
+            };
             let val = Input::<String>::new()
-                .with_prompt("Subcommands that push to git, comma-separated (e.g. save)")
-                .default(current)
+                .with_prompt(prompt)
+                .default(effective_push.join(","))
                 .allow_empty(true)
                 .interact_text()?;
             val.split(',')
@@ -322,7 +353,12 @@ impl Init {
     }
 
     pub fn run(&self) -> Result<()> {
-        let extras = self.gather_extras()?;
+        // Parse binary early to detect push-capable subcommands before the dialogue.
+        let detected = crate::help_parser::parse_binary(&self.binary)
+            .map(|cli| detect_git_push_subcommands(&cli))
+            .unwrap_or_default();
+
+        let extras = self.gather_extras(&detected)?;
         let namespaces: Vec<String> = self
             .public_orb_namespaces
             .iter()
@@ -542,7 +578,7 @@ mod tests {
     #[test]
     fn init_run_writes_ci_section_to_config() {
         let init = make_init(true);
-        let extras = init.gather_extras().unwrap();
+        let extras = init.gather_extras(&[]).unwrap();
         let ci = CiSection {
             build_workflow: Some(init.build_workflow.clone()),
             release_workflow: Some(init.release_workflow.clone()),
@@ -581,6 +617,115 @@ mod tests {
         );
     }
 
+    // ── detect_git_push_subcommands ─────────────────────────────────────────
+
+    #[test]
+    fn detect_push_subcommand_with_push_param() {
+        use crate::help_parser::types::{CliDefinition, ParamType, Parameter, SubCommand};
+        let push_param = Parameter {
+            long_name: "push".to_string(),
+            short: None,
+            param_type: ParamType::Enum(vec!["true".to_string(), "false".to_string()]),
+            default: Some("true".to_string()),
+            required: false,
+            description: "Push after committing".to_string(),
+        };
+        let sub = SubCommand {
+            name: "save".to_string(),
+            description: "Save artifacts".to_string(),
+            is_leaf: true,
+            parameters: vec![push_param],
+            subcommands: vec![],
+        };
+        let cli = CliDefinition {
+            binary_name: "mytool".to_string(),
+            description: "My tool".to_string(),
+            subcommands: vec![sub],
+        };
+        let detected = detect_git_push_subcommands(&cli);
+        assert_eq!(detected, vec!["save".to_string()]);
+    }
+
+    #[test]
+    fn detect_push_subcommand_with_sign_param() {
+        use crate::help_parser::types::{CliDefinition, ParamType, Parameter, SubCommand};
+        let sign_param = Parameter {
+            long_name: "sign".to_string(),
+            short: None,
+            param_type: ParamType::Boolean,
+            default: None,
+            required: false,
+            description: "GPG sign".to_string(),
+        };
+        let sub = SubCommand {
+            name: "commit".to_string(),
+            description: "Commit".to_string(),
+            is_leaf: true,
+            parameters: vec![sign_param],
+            subcommands: vec![],
+        };
+        let cli = CliDefinition {
+            binary_name: "mytool".to_string(),
+            description: "My tool".to_string(),
+            subcommands: vec![sub],
+        };
+        let detected = detect_git_push_subcommands(&cli);
+        assert_eq!(detected, vec!["commit".to_string()]);
+    }
+
+    #[test]
+    fn non_push_subcommand_not_detected() {
+        use crate::help_parser::types::{CliDefinition, ParamType, Parameter, SubCommand};
+        let other_param = Parameter {
+            long_name: "output".to_string(),
+            short: None,
+            param_type: ParamType::String,
+            default: Some("./dist".to_string()),
+            required: false,
+            description: "Output dir".to_string(),
+        };
+        let sub = SubCommand {
+            name: "generate".to_string(),
+            description: "Generate".to_string(),
+            is_leaf: true,
+            parameters: vec![other_param],
+            subcommands: vec![],
+        };
+        let cli = CliDefinition {
+            binary_name: "mytool".to_string(),
+            description: "My tool".to_string(),
+            subcommands: vec![sub],
+        };
+        let detected = detect_git_push_subcommands(&cli);
+        assert!(detected.is_empty());
+    }
+
+    #[test]
+    fn gather_extras_uses_detected_when_cli_empty() {
+        let init = make_init(true); // dry_run = true → non-interactive
+        let extras = init.gather_extras(&["save".to_string()]).unwrap();
+        assert_eq!(
+            extras.git_push_subcommands,
+            vec!["save".to_string()],
+            "detected candidates must be used when --git-push-subcommands not set"
+        );
+    }
+
+    #[test]
+    fn gather_extras_cli_overrides_detected() {
+        let init = Init {
+            git_push_subcommands: vec!["custom".to_string()],
+            dry_run: true,
+            ..make_init(true)
+        };
+        let extras = init.gather_extras(&["save".to_string()]).unwrap();
+        assert_eq!(
+            extras.git_push_subcommands,
+            vec!["custom".to_string()],
+            "explicit CLI value must override detected candidates"
+        );
+    }
+
     // ── gather_extras / dialogue ────────────────────────────────────────────
 
     fn make_init(dry_run: bool) -> Init {
@@ -614,7 +759,7 @@ mod tests {
     #[test]
     fn gather_extras_non_interactive_uses_hardcoded_defaults() {
         let init = make_init(true); // dry_run=true → non-interactive
-        let extras = init.gather_extras().unwrap();
+        let extras = init.gather_extras(&[]).unwrap();
         assert_eq!(extras.docker_context, DEFAULT_DOCKER_CONTEXT);
         assert_eq!(extras.orb_context, DEFAULT_ORB_CONTEXT);
         assert_eq!(extras.mcp_context, vec![DEFAULT_MCP_CONTEXT.to_string()]);
@@ -637,7 +782,7 @@ mod tests {
             dry_run: true,
             ..make_init(true)
         };
-        let extras = init.gather_extras().unwrap();
+        let extras = init.gather_extras(&[]).unwrap();
         assert_eq!(extras.docker_context, "my-docker");
         assert_eq!(extras.orb_context, "my-orb-ctx");
         assert_eq!(extras.mcp_context, vec!["my-mcp-ctx".to_string()]);
@@ -655,7 +800,7 @@ mod tests {
         // When $CI is set the dialogue must be skipped even without --dry-run
         std::env::set_var("CI", "true");
         let init = make_init(false);
-        let extras = init.gather_extras().unwrap();
+        let extras = init.gather_extras(&[]).unwrap();
         std::env::remove_var("CI");
         assert_eq!(extras.docker_context, DEFAULT_DOCKER_CONTEXT);
     }
