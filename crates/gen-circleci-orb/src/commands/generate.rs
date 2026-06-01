@@ -16,11 +16,13 @@ pub enum InstallMethod {
 #[derive(Debug, clap::Args)]
 pub struct Generate {
     /// Name of the binary to introspect (must be on PATH).
+    /// Falls back to `binary` in the [orb] section of gen-circleci-orb.toml.
     #[arg(long)]
-    pub binary: String,
+    pub binary: Option<String>,
 
     /// CircleCI orb namespace(s) to publish the orb under (repeatable).
-    #[arg(long = "orb-namespace", required = true)]
+    /// Falls back to `namespaces` in the [orb] section of gen-circleci-orb.toml.
+    #[arg(long = "orb-namespace")]
     pub namespaces: Vec<String>,
 
     /// Project root directory (orb source is written to <output>/<orb-dir>/).
@@ -36,16 +38,19 @@ pub struct Generate {
     pub base_image: String,
 
     /// Home URL for the orb registry display section.
+    /// Falls back to `home_url` in the [orb] section of gen-circleci-orb.toml.
     #[arg(long)]
     pub home_url: Option<String>,
 
     /// Source URL for the orb registry display section.
+    /// Falls back to `source_url` in the [orb] section of gen-circleci-orb.toml.
     #[arg(long)]
     pub source_url: Option<String>,
 
-    /// Subdirectory within --output where orb source is written (default: orb).
-    #[arg(long, default_value = "orb")]
-    pub orb_dir: String,
+    /// Subdirectory within --output where orb source is written.
+    /// Falls back to `orb_dir` in the [orb] section of gen-circleci-orb.toml, then "orb".
+    #[arg(long)]
+    pub orb_dir: Option<String>,
 
     /// Subcommand name(s) whose generated jobs should include a set_https_remote step
     /// (repeatable). Use for subcommands that push to git, e.g. --git-push-subcommand save.
@@ -133,6 +138,57 @@ pub(crate) fn check_orb_dir(orb_root: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Resolve the binary name: CLI flag takes precedence, then `[orb].binary` in config.
+/// Returns an error with a helpful message when neither is provided.
+pub(crate) fn resolve_binary(
+    cli: Option<&str>,
+    config: &crate::orb_config::OrbConfig,
+) -> Result<String> {
+    if let Some(b) = cli.filter(|s| !s.is_empty()) {
+        return Ok(b.to_string());
+    }
+    config
+        .orb
+        .as_ref()
+        .and_then(|o| o.binary.clone())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "binary name is required — pass --binary <NAME> or add `binary = \"<name>\"` \
+                 to the [orb] section of gen-circleci-orb.toml"
+            )
+        })
+}
+
+/// Resolve namespaces: CLI flags take precedence, then `[orb].namespaces` in config.
+/// Returns an error with a helpful message when neither is provided.
+pub(crate) fn resolve_namespaces(
+    cli: &[String],
+    config: &crate::orb_config::OrbConfig,
+) -> Result<Vec<String>> {
+    if !cli.is_empty() {
+        return Ok(cli.to_vec());
+    }
+    config
+        .orb
+        .as_ref()
+        .and_then(|o| o.namespaces.clone())
+        .filter(|ns| !ns.is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "at least one namespace is required — pass --orb-namespace <NS> or add \
+                 `namespaces = [\"<ns>\"]` to the [orb] section of gen-circleci-orb.toml"
+            )
+        })
+}
+
+/// Resolve orb_dir: CLI value takes precedence, then `[orb].orb_dir` in config, then "orb".
+pub(crate) fn resolve_orb_dir(cli: Option<&str>, config: &crate::orb_config::OrbConfig) -> String {
+    cli.filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .or_else(|| config.orb.as_ref().and_then(|o| o.orb_dir.clone()))
+        .unwrap_or_else(|| "orb".to_string())
+}
+
 /// CLI flag takes precedence; falls back to `[orb] git_push_subcommands` in the config.
 pub(crate) fn resolve_git_push_subcommands(
     cli: &[String],
@@ -156,24 +212,37 @@ pub(crate) fn resolve_config_path(explicit: Option<&PathBuf>, output: &Path) -> 
 
 impl Generate {
     pub fn run(&self) -> Result<()> {
-        let orb_root = self.output.join(&self.orb_dir);
-
-        check_orb_dir(&orb_root)?;
-
         let config_path = resolve_config_path(self.config.as_ref(), &self.output);
         let orb_config = orb_config::load_config(&config_path)?;
 
-        tracing::info!("Parsing {} --help", self.binary);
-        let cli_def = help_parser::parse_binary(&self.binary)?;
+        // Resolve fields that may come from config when not provided on CLI.
+        let binary = resolve_binary(self.binary.as_deref(), &orb_config)?;
+        let namespaces = resolve_namespaces(&self.namespaces, &orb_config)?;
+        let orb_dir = resolve_orb_dir(self.orb_dir.as_deref(), &orb_config);
+
+        let orb_root = self.output.join(&orb_dir);
+        check_orb_dir(&orb_root)?;
+
+        tracing::info!("Parsing {} --help", binary);
+        let cli_def = help_parser::parse_binary(&binary)?;
 
         tracing::info!("Discovered {} subcommand(s)", cli_def.subcommands.len());
 
+        let config_url = orb_config.orb.as_ref();
         let detected_url = self.source_url.is_none().then(detect_source_url).flatten();
-        let source_url = self.source_url.clone().or_else(|| detected_url.clone());
-        let home_url = self.home_url.clone().or_else(|| detected_url.clone());
+        let source_url = self
+            .source_url
+            .clone()
+            .or_else(|| config_url.and_then(|o| o.source_url.clone()))
+            .or_else(|| detected_url.clone());
+        let home_url = self
+            .home_url
+            .clone()
+            .or_else(|| config_url.and_then(|o| o.home_url.clone()))
+            .or_else(|| detected_url.clone());
 
         let opts = orb_generator::GenerateOpts {
-            namespaces: self.namespaces.clone(),
+            namespaces,
             install_method: self.install_method.clone(),
             base_image: self.base_image.clone(),
             home_url,
@@ -300,6 +369,101 @@ mod tests {
         let explicit = PathBuf::from("/custom/path/config.toml");
         let resolved = resolve_config_path(Some(&explicit), output);
         assert_eq!(resolved, explicit);
+    }
+
+    // ── resolve_orb_opts: config fallbacks for required fields ─────────────
+
+    #[test]
+    fn resolve_binary_uses_cli_when_provided() {
+        use crate::orb_config::OrbConfig;
+        let config = OrbConfig::default();
+        let binary = resolve_binary(Some("mytool"), &config).unwrap();
+        assert_eq!(binary, "mytool");
+    }
+
+    #[test]
+    fn resolve_binary_falls_back_to_config() {
+        use crate::orb_config::{OrbConfig, OrbSection};
+        let config = OrbConfig {
+            orb: Some(OrbSection {
+                binary: Some("config-tool".to_string()),
+                ..OrbSection::default()
+            }),
+            ..OrbConfig::default()
+        };
+        let binary = resolve_binary(None, &config).unwrap();
+        assert_eq!(binary, "config-tool");
+    }
+
+    #[test]
+    fn resolve_binary_errors_when_neither_provided() {
+        use crate::orb_config::OrbConfig;
+        let result = resolve_binary(None, &OrbConfig::default());
+        assert!(
+            result.is_err(),
+            "must error when no binary in CLI or config"
+        );
+        assert!(result.unwrap_err().to_string().contains("binary"));
+    }
+
+    #[test]
+    fn resolve_namespaces_uses_cli_when_provided() {
+        use crate::orb_config::OrbConfig;
+        let ns = resolve_namespaces(&["my-org".to_string()], &OrbConfig::default()).unwrap();
+        assert_eq!(ns, vec!["my-org".to_string()]);
+    }
+
+    #[test]
+    fn resolve_namespaces_falls_back_to_config() {
+        use crate::orb_config::{OrbConfig, OrbSection};
+        let config = OrbConfig {
+            orb: Some(OrbSection {
+                namespaces: Some(vec!["cfg-org".to_string()]),
+                ..OrbSection::default()
+            }),
+            ..OrbConfig::default()
+        };
+        let ns = resolve_namespaces(&[], &config).unwrap();
+        assert_eq!(ns, vec!["cfg-org".to_string()]);
+    }
+
+    #[test]
+    fn resolve_namespaces_errors_when_neither_provided() {
+        use crate::orb_config::OrbConfig;
+        let result = resolve_namespaces(&[], &OrbConfig::default());
+        assert!(
+            result.is_err(),
+            "must error when no namespaces in CLI or config"
+        );
+        assert!(result.unwrap_err().to_string().contains("namespace"));
+    }
+
+    #[test]
+    fn resolve_orb_dir_uses_cli_when_provided() {
+        use crate::orb_config::OrbConfig;
+        let dir = resolve_orb_dir(Some("custom-orb"), &OrbConfig::default());
+        assert_eq!(dir, "custom-orb");
+    }
+
+    #[test]
+    fn resolve_orb_dir_falls_back_to_config() {
+        use crate::orb_config::{OrbConfig, OrbSection};
+        let config = OrbConfig {
+            orb: Some(OrbSection {
+                orb_dir: Some("src/orb".to_string()),
+                ..OrbSection::default()
+            }),
+            ..OrbConfig::default()
+        };
+        let dir = resolve_orb_dir(None, &config);
+        assert_eq!(dir, "src/orb");
+    }
+
+    #[test]
+    fn resolve_orb_dir_defaults_to_orb_when_nothing_provided() {
+        use crate::orb_config::OrbConfig;
+        let dir = resolve_orb_dir(None, &OrbConfig::default());
+        assert_eq!(dir, "orb");
     }
 
     // ── git_push_subcommands: config fallback ───────────────────────────────
