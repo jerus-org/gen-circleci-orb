@@ -23,6 +23,7 @@ indexmap.workspace = true
 regex.workspace = true
 toml.workspace = true
 dialoguer.workspace = true
+console.workspace = true
 
 [features]
 integration = []

@@ -259,6 +259,7 @@ version = "0.0.37"
 dependencies = [
  "anyhow",
  "clap",
+ "console",
  "dialoguer",
  "indexmap",
  "regex",
