@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - ci: support multiple contexts for build_mcp_server(pr [#79])
+- init: skip dialogue when stderr is not a TTY(pr [#86])
 
 ## [0.0.37] - 2026-05-29
 
@@ -349,6 +350,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#79]: https://github.com/jerus-org/gen-circleci-orb/pull/79
 [#84]: https://github.com/jerus-org/gen-circleci-orb/pull/84
 [#85]: https://github.com/jerus-org/gen-circleci-orb/pull/85
+[#86]: https://github.com/jerus-org/gen-circleci-orb/pull/86
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.37...HEAD
 [0.0.37]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.36...v0.0.37
 [0.0.36]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.35...v0.0.36
