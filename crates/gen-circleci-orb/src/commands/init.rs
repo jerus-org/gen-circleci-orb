@@ -806,21 +806,29 @@ mod tests {
     }
 
     #[test]
-    fn is_non_interactive_true_when_not_a_tty() {
-        // In a test/subprocess environment stderr is not a TTY.
-        // is_non_interactive must return true (via TTY check) even when
-        // --dry-run is false and $CI is not set.
+    fn is_non_interactive_reflects_tty_state() {
+        // Verify that is_non_interactive() correctly responds to the TTY state
+        // of the current process. CI environments may allocate a PTY; local
+        // subprocess runs (e.g. cargo test piped) do not.
         let ci_was = std::env::var("CI").ok();
         std::env::remove_var("CI");
+        let is_tty = console::Term::stderr().is_term();
         let result = is_non_interactive(false);
         if let Some(val) = ci_was {
             std::env::set_var("CI", val);
         }
-        assert!(
-            result,
-            "is_non_interactive must be true in non-TTY environments \
-             (test processes have no terminal)"
-        );
+        if is_tty {
+            assert!(
+                !result,
+                "is_non_interactive must be false when stderr IS a terminal \
+                 (and neither dry_run nor $CI is set)"
+            );
+        } else {
+            assert!(
+                result,
+                "is_non_interactive must be true when stderr is NOT a terminal"
+            );
+        }
     }
 
     #[test]
