@@ -28,7 +28,7 @@ pub(crate) struct GatheredExtras {
 }
 
 fn is_non_interactive(dry_run: bool) -> bool {
-    dry_run || std::env::var("CI").is_ok()
+    dry_run || std::env::var("CI").is_ok() || !console::Term::stderr().is_term()
 }
 
 /// Detect leaf subcommands that are likely to push to git, based on whether
@@ -803,6 +803,24 @@ mod tests {
         let extras = init.gather_extras(&[]).unwrap();
         std::env::remove_var("CI");
         assert_eq!(extras.docker_context, DEFAULT_DOCKER_CONTEXT);
+    }
+
+    #[test]
+    fn is_non_interactive_true_when_not_a_tty() {
+        // In a test/subprocess environment stderr is not a TTY.
+        // is_non_interactive must return true (via TTY check) even when
+        // --dry-run is false and $CI is not set.
+        let ci_was = std::env::var("CI").ok();
+        std::env::remove_var("CI");
+        let result = is_non_interactive(false);
+        if let Some(val) = ci_was {
+            std::env::set_var("CI", val);
+        }
+        assert!(
+            result,
+            "is_non_interactive must be true in non-TTY environments \
+             (test processes have no terminal)"
+        );
     }
 
     #[test]
