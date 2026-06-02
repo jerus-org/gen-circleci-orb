@@ -31,6 +31,47 @@ fn is_non_interactive(dry_run: bool) -> bool {
     dry_run || std::env::var("CI").is_ok() || !console::Term::stderr().is_term()
 }
 
+/// Detect leaf subcommands that have a required `orb_path` parameter.
+/// These should receive `default = "src/@orb.yml"` in the config so
+/// orb consumers don't have to supply the path on every invocation.
+pub(crate) fn detect_orb_path_subcommands(cli: &CliDefinition) -> Vec<String> {
+    cli.subcommands
+        .iter()
+        .filter(|sub| {
+            sub.is_leaf
+                && sub
+                    .parameters
+                    .iter()
+                    .any(|p| p.long_name == "orb_path" && p.required)
+        })
+        .map(|sub| sub.name.clone())
+        .collect()
+}
+
+/// Add `[subcommand.<name>.param.orb_path] default = "src/@orb.yml"` for each
+/// detected subcommand.  Existing entries (e.g. help suppression) are preserved.
+pub(crate) fn populate_orb_path_defaults(
+    config: &mut crate::orb_config::OrbConfig,
+    subcommands: &[String],
+) {
+    use crate::orb_config::ParamOverride;
+    if subcommands.is_empty() {
+        return;
+    }
+    let sc_map = config
+        .subcommand
+        .get_or_insert_with(indexmap::IndexMap::new);
+    for name in subcommands {
+        let sc = sc_map.entry(name.clone()).or_default();
+        let params = sc.param.get_or_insert_with(indexmap::IndexMap::new);
+        params
+            .entry("orb_path".to_string())
+            .or_insert(ParamOverride {
+                default: Some("src/@orb.yml".to_string()),
+            });
+    }
+}
+
 /// Detect leaf subcommands that are likely to push to git, based on whether
 /// they have a `--push`, `--no-push`, or `--sign` parameter.
 pub(crate) fn detect_git_push_subcommands(cli: &CliDefinition) -> Vec<String> {
@@ -353,12 +394,18 @@ impl Init {
     }
 
     pub fn run(&self) -> Result<()> {
-        // Parse binary early to detect push-capable subcommands before the dialogue.
-        let detected = crate::help_parser::parse_binary(&self.binary)
-            .map(|cli| detect_git_push_subcommands(&cli))
-            .unwrap_or_default();
+        // Parse binary early: detect push-capable subcommands (for dialogue default)
+        // and subcommands with a required orb_path param (for config defaults).
+        let (detected_push, detected_orb_path) =
+            match crate::help_parser::parse_binary(&self.binary) {
+                Ok(cli) => (
+                    detect_git_push_subcommands(&cli),
+                    detect_orb_path_subcommands(&cli),
+                ),
+                Err(_) => (vec![], vec![]),
+            };
 
-        let extras = self.gather_extras(&detected)?;
+        let extras = self.gather_extras(&detected_push)?;
         let namespaces: Vec<String> = self
             .public_orb_namespaces
             .iter()
@@ -422,6 +469,7 @@ impl Init {
             extras.source_url.as_deref(),
             &extras.git_push_subcommands,
         );
+        populate_orb_path_defaults(&mut bootstrap, &detected_orb_path);
         bootstrap.ci = Some(CiSection {
             build_workflow: Some(self.build_workflow.clone()),
             release_workflow: Some(self.release_workflow.clone()),
@@ -614,6 +662,96 @@ mod tests {
         assert_eq!(
             config.orb.as_ref().unwrap().source_url.as_deref(),
             Some("https://example.com/source")
+        );
+    }
+
+    // ── detect_orb_path_subcommands + populate_orb_path_defaults ───────────
+
+    fn make_cli_with_orb_path(
+        sub_name: &str,
+        required: bool,
+    ) -> crate::help_parser::types::CliDefinition {
+        use crate::help_parser::types::{CliDefinition, ParamType, Parameter, SubCommand};
+        let p = Parameter {
+            long_name: "orb_path".to_string(),
+            short: Some('p'),
+            param_type: ParamType::String,
+            default: None,
+            required,
+            description: "Path to orb YAML".to_string(),
+        };
+        let sub = SubCommand {
+            name: sub_name.to_string(),
+            description: String::new(),
+            is_leaf: true,
+            parameters: vec![p],
+            subcommands: vec![],
+        };
+        CliDefinition {
+            binary_name: "mytool".to_string(),
+            description: "My tool".to_string(),
+            subcommands: vec![sub],
+        }
+    }
+
+    #[test]
+    fn detect_required_orb_path_subcommand() {
+        let cli = make_cli_with_orb_path("generate", true);
+        let detected = detect_orb_path_subcommands(&cli);
+        assert_eq!(detected, vec!["generate".to_string()]);
+    }
+
+    #[test]
+    fn optional_orb_path_not_detected() {
+        let cli = make_cli_with_orb_path("generate", false);
+        let detected = detect_orb_path_subcommands(&cli);
+        assert!(
+            detected.is_empty(),
+            "optional orb_path must not trigger default injection"
+        );
+    }
+
+    #[test]
+    fn populate_orb_path_defaults_adds_subcommand_entries() {
+        let mut config =
+            build_bootstrap_config("mytool", &["my-org".to_string()], "orb", None, None, &[]);
+        populate_orb_path_defaults(
+            &mut config,
+            &["generate".to_string(), "validate".to_string()],
+        );
+        let subcommands = config.subcommand.as_ref().unwrap();
+        let gen_params = subcommands.get("generate").unwrap().param.as_ref().unwrap();
+        assert_eq!(
+            gen_params.get("orb_path").unwrap().default.as_deref(),
+            Some("src/@orb.yml")
+        );
+        let val_params = subcommands.get("validate").unwrap().param.as_ref().unwrap();
+        assert_eq!(
+            val_params.get("orb_path").unwrap().default.as_deref(),
+            Some("src/@orb.yml")
+        );
+    }
+
+    #[test]
+    fn populate_orb_path_defaults_preserves_existing_subcommand_entries() {
+        // [subcommand.help] generate_job = false must not be disturbed
+        let mut config =
+            build_bootstrap_config("mytool", &["my-org".to_string()], "orb", None, None, &[]);
+        populate_orb_path_defaults(&mut config, &["generate".to_string()]);
+        // help suppression added by build_bootstrap_config must still be there
+        let subcommands = config.subcommand.as_ref().unwrap();
+        assert_eq!(subcommands.get("help").unwrap().generate_job, Some(false));
+    }
+
+    #[test]
+    fn populate_orb_path_defaults_noop_when_empty() {
+        let mut config =
+            build_bootstrap_config("mytool", &["my-org".to_string()], "orb", None, None, &[]);
+        let before = config.subcommand.clone();
+        populate_orb_path_defaults(&mut config, &[]);
+        assert_eq!(
+            config.subcommand, before,
+            "no change when no subcommands detected"
         );
     }
 
