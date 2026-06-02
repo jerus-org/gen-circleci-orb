@@ -30,12 +30,14 @@ pub struct Generate {
     pub output: PathBuf,
 
     /// How the binary is installed in the generated Docker image.
-    #[arg(long, value_enum, default_value = "binstall")]
-    pub install_method: InstallMethod,
+    /// Falls back to `install_method` in the [orb] section of gen-circleci-orb.toml, then "binstall".
+    #[arg(long, value_enum)]
+    pub install_method: Option<InstallMethod>,
 
     /// Base Docker image for the generated executor.
-    #[arg(long, default_value = DEFAULT_BASE_IMAGE)]
-    pub base_image: String,
+    /// Falls back to `base_image` in the [orb] section of gen-circleci-orb.toml, then "debian:12-slim".
+    #[arg(long)]
+    pub base_image: Option<String>,
 
     /// Home URL for the orb registry display section.
     /// Falls back to `home_url` in the [orb] section of gen-circleci-orb.toml.
@@ -204,6 +206,37 @@ pub(crate) fn resolve_git_push_subcommands(
         .unwrap_or_default()
 }
 
+/// CLI flag takes precedence; falls back to `[orb].install_method` in config, then Binstall.
+pub(crate) fn resolve_install_method(
+    cli: Option<&InstallMethod>,
+    config: &crate::orb_config::OrbConfig,
+) -> InstallMethod {
+    if let Some(m) = cli {
+        return m.clone();
+    }
+    config
+        .orb
+        .as_ref()
+        .and_then(|o| o.install_method.as_deref())
+        .and_then(|s| match s {
+            "apt" => Some(InstallMethod::Apt),
+            "binstall" => Some(InstallMethod::Binstall),
+            _ => None,
+        })
+        .unwrap_or(InstallMethod::Binstall)
+}
+
+/// CLI flag takes precedence; falls back to `[orb].base_image` in config, then DEFAULT_BASE_IMAGE.
+pub(crate) fn resolve_base_image(
+    cli: Option<&str>,
+    config: &crate::orb_config::OrbConfig,
+) -> String {
+    cli.filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .or_else(|| config.orb.as_ref().and_then(|o| o.base_image.clone()))
+        .unwrap_or_else(|| DEFAULT_BASE_IMAGE.to_string())
+}
+
 pub(crate) fn resolve_config_path(explicit: Option<&PathBuf>, output: &Path) -> PathBuf {
     explicit
         .cloned()
@@ -243,8 +276,8 @@ impl Generate {
 
         let opts = orb_generator::GenerateOpts {
             namespaces,
-            install_method: self.install_method.clone(),
-            base_image: self.base_image.clone(),
+            install_method: resolve_install_method(self.install_method.as_ref(), &orb_config),
+            base_image: resolve_base_image(self.base_image.as_deref(), &orb_config),
             home_url,
             source_url,
             binary_name: cli_def.binary_name.clone(),
@@ -464,6 +497,97 @@ mod tests {
         use crate::orb_config::OrbConfig;
         let dir = resolve_orb_dir(None, &OrbConfig::default());
         assert_eq!(dir, "orb");
+    }
+
+    // ── resolve_install_method ─────────────────────────────────────────────
+
+    #[test]
+    fn resolve_install_method_uses_cli_when_provided() {
+        use crate::orb_config::OrbConfig;
+        let result = resolve_install_method(Some(&InstallMethod::Apt), &OrbConfig::default());
+        assert!(matches!(result, InstallMethod::Apt));
+    }
+
+    #[test]
+    fn resolve_install_method_falls_back_to_config() {
+        use crate::orb_config::{OrbConfig, OrbSection};
+        let config = OrbConfig {
+            orb: Some(OrbSection {
+                install_method: Some("apt".to_string()),
+                ..OrbSection::default()
+            }),
+            ..OrbConfig::default()
+        };
+        let result = resolve_install_method(None, &config);
+        assert!(
+            matches!(result, InstallMethod::Apt),
+            "expected Apt from config, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn resolve_install_method_cli_overrides_config() {
+        use crate::orb_config::{OrbConfig, OrbSection};
+        let config = OrbConfig {
+            orb: Some(OrbSection {
+                install_method: Some("apt".to_string()),
+                ..OrbSection::default()
+            }),
+            ..OrbConfig::default()
+        };
+        let result = resolve_install_method(Some(&InstallMethod::Binstall), &config);
+        assert!(matches!(result, InstallMethod::Binstall));
+    }
+
+    #[test]
+    fn resolve_install_method_defaults_to_binstall() {
+        use crate::orb_config::OrbConfig;
+        let result = resolve_install_method(None, &OrbConfig::default());
+        assert!(matches!(result, InstallMethod::Binstall));
+    }
+
+    // ── resolve_base_image ─────────────────────────────────────────────────
+
+    #[test]
+    fn resolve_base_image_uses_cli_when_provided() {
+        use crate::orb_config::OrbConfig;
+        let result = resolve_base_image(Some("ubuntu:22.04"), &OrbConfig::default());
+        assert_eq!(result, "ubuntu:22.04");
+    }
+
+    #[test]
+    fn resolve_base_image_falls_back_to_config() {
+        use crate::orb_config::{OrbConfig, OrbSection};
+        let config = OrbConfig {
+            orb: Some(OrbSection {
+                base_image: Some("ubuntu:22.04".to_string()),
+                ..OrbSection::default()
+            }),
+            ..OrbConfig::default()
+        };
+        let result = resolve_base_image(None, &config);
+        assert_eq!(result, "ubuntu:22.04");
+    }
+
+    #[test]
+    fn resolve_base_image_cli_overrides_config() {
+        use crate::orb_config::{OrbConfig, OrbSection};
+        let config = OrbConfig {
+            orb: Some(OrbSection {
+                base_image: Some("ubuntu:22.04".to_string()),
+                ..OrbSection::default()
+            }),
+            ..OrbConfig::default()
+        };
+        let result = resolve_base_image(Some("alpine:3.19"), &config);
+        assert_eq!(result, "alpine:3.19");
+    }
+
+    #[test]
+    fn resolve_base_image_defaults_to_debian() {
+        use crate::orb_config::OrbConfig;
+        let result = resolve_base_image(None, &OrbConfig::default());
+        assert_eq!(result, DEFAULT_BASE_IMAGE);
     }
 
     // ── git_push_subcommands: config fallback ───────────────────────────────
