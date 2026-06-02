@@ -241,48 +241,74 @@ pub(crate) fn build_bootstrap_config(
 }
 
 impl Init {
-    pub(crate) fn gather_extras(&self, detected: &[String]) -> Result<GatheredExtras> {
-        // CLI flag takes precedence; fall back to auto-detected candidates.
+    pub(crate) fn gather_extras(
+        &self,
+        detected: &[String],
+        existing: &OrbConfig,
+    ) -> Result<GatheredExtras> {
+        // Resolution order: CLI flag > existing config > auto-detected / hardcoded default.
+        let existing_ci = existing.ci.as_ref();
+        let existing_orb = existing.orb.as_ref();
+
         let effective_push = if !self.git_push_subcommands.is_empty() {
             self.git_push_subcommands.clone()
         } else {
-            detected.to_vec()
+            existing_orb
+                .and_then(|o| o.git_push_subcommands.clone())
+                .filter(|v| !v.is_empty())
+                .unwrap_or_else(|| detected.to_vec())
         };
 
         if is_non_interactive(self.dry_run) {
             return Ok(GatheredExtras {
-                home_url: self.home_url.clone(),
-                source_url: self.source_url.clone(),
+                home_url: self
+                    .home_url
+                    .clone()
+                    .or_else(|| existing_orb.and_then(|o| o.home_url.clone())),
+                source_url: self
+                    .source_url
+                    .clone()
+                    .or_else(|| existing_orb.and_then(|o| o.source_url.clone())),
                 git_push_subcommands: effective_push,
                 docker_context: self
                     .docker_context
                     .clone()
+                    .or_else(|| existing_ci.and_then(|ci| ci.docker_context.clone()))
                     .unwrap_or_else(|| DEFAULT_DOCKER_CONTEXT.to_string()),
                 orb_context: self
                     .orb_context
                     .clone()
+                    .or_else(|| existing_ci.and_then(|ci| ci.orb_context.clone()))
                     .unwrap_or_else(|| DEFAULT_ORB_CONTEXT.to_string()),
-                mcp_context: if self.mcp_context.is_empty() {
-                    vec![DEFAULT_MCP_CONTEXT.to_string()]
-                } else {
+                mcp_context: if !self.mcp_context.is_empty() {
                     self.mcp_context.clone()
+                } else {
+                    existing_ci
+                        .and_then(|ci| ci.mcp_context.clone())
+                        .filter(|v| !v.is_empty())
+                        .unwrap_or_else(|| vec![DEFAULT_MCP_CONTEXT.to_string()])
                 },
                 mcp_earliest_version: self
                     .mcp_earliest_version
                     .clone()
+                    .or_else(|| existing_ci.and_then(|ci| ci.mcp_earliest_version.clone()))
                     .unwrap_or_else(|| DEFAULT_MCP_EARLIEST_VERSION.to_string()),
             });
         }
 
         // Interactive mode — prompt only for fields not already provided via CLI flag.
+        // For un-set fields, the existing config value becomes the prompt default.
         use dialoguer::Input;
 
         let home_url = if let Some(v) = self.home_url.clone() {
             Some(v).filter(|s| !s.is_empty())
         } else {
+            let default = existing_orb
+                .and_then(|o| o.home_url.clone())
+                .unwrap_or_default();
             let val = Input::<String>::new()
                 .with_prompt("Home URL for orb registry (Enter to skip)")
-                .default(String::new())
+                .default(default)
                 .allow_empty(true)
                 .interact_text()?;
             if val.is_empty() {
@@ -295,9 +321,12 @@ impl Init {
         let source_url = if let Some(v) = self.source_url.clone() {
             Some(v).filter(|s| !s.is_empty())
         } else {
+            let default = existing_orb
+                .and_then(|o| o.source_url.clone())
+                .unwrap_or_default();
             let val = Input::<String>::new()
                 .with_prompt("Source URL for orb registry (Enter to skip)")
-                .default(String::new())
+                .default(default)
                 .allow_empty(true)
                 .interact_text()?;
             if val.is_empty() {
@@ -310,7 +339,15 @@ impl Init {
         let git_push_subcommands = if !self.git_push_subcommands.is_empty() {
             effective_push
         } else {
-            let prompt = if !detected.is_empty() {
+            let cfg_push = existing_orb
+                .and_then(|o| o.git_push_subcommands.clone())
+                .unwrap_or_default();
+            let current = if !cfg_push.is_empty() {
+                cfg_push.join(",")
+            } else {
+                detected.join(",")
+            };
+            let prompt = if !detected.is_empty() && cfg_push.is_empty() {
                 format!(
                     "Push-capable subcommands detected: {} — confirm or override (comma-separated)",
                     detected.join(", ")
@@ -320,7 +357,7 @@ impl Init {
             };
             let val = Input::<String>::new()
                 .with_prompt(prompt)
-                .default(detected.join(","))
+                .default(current)
                 .allow_empty(true)
                 .interact_text()?;
             val.split(',')
@@ -333,18 +370,24 @@ impl Init {
         let docker_context = if let Some(v) = self.docker_context.clone() {
             v
         } else {
+            let default = existing_ci
+                .and_then(|ci| ci.docker_context.clone())
+                .unwrap_or_else(|| DEFAULT_DOCKER_CONTEXT.to_string());
             Input::<String>::new()
                 .with_prompt("Docker context name (needs: DOCKER_LOGIN, DOCKER_PASSWORD)")
-                .default(DEFAULT_DOCKER_CONTEXT.to_string())
+                .default(default)
                 .interact_text()?
         };
 
         let orb_context = if let Some(v) = self.orb_context.clone() {
             v
         } else {
+            let default = existing_ci
+                .and_then(|ci| ci.orb_context.clone())
+                .unwrap_or_else(|| DEFAULT_ORB_CONTEXT.to_string());
             Input::<String>::new()
                 .with_prompt("Orb publishing context name (needs: CIRCLECI_CLI_TOKEN)")
-                .default(DEFAULT_ORB_CONTEXT.to_string())
+                .default(default)
                 .interact_text()?
         };
 
@@ -352,11 +395,16 @@ impl Init {
             if !self.mcp_context.is_empty() {
                 self.mcp_context.clone()
             } else {
+                let default = existing_ci
+                    .and_then(|ci| ci.mcp_context.as_ref())
+                    .filter(|v| !v.is_empty())
+                    .map(|v| v.join(","))
+                    .unwrap_or_else(|| DEFAULT_MCP_CONTEXT.to_string());
                 let val = Input::<String>::new()
                     .with_prompt(
                         "MCP context names, comma-separated (needs: GITHUB_TOKEN with contents:write + bypass branch protection, BOT_GPG_KEY, BOT_TRUST, BOT_USER_NAME, BOT_USER_EMAIL, BOT_SIGN_KEY)",
                     )
-                    .default(DEFAULT_MCP_CONTEXT.to_string())
+                    .default(default)
                     .interact_text()?;
                 val.split(',')
                     .map(str::trim)
@@ -364,24 +412,31 @@ impl Init {
                     .map(str::to_string)
                     .collect()
             }
-        } else if self.mcp_context.is_empty() {
-            vec![DEFAULT_MCP_CONTEXT.to_string()]
-        } else {
+        } else if !self.mcp_context.is_empty() {
             self.mcp_context.clone()
+        } else {
+            existing_ci
+                .and_then(|ci| ci.mcp_context.clone())
+                .filter(|v| !v.is_empty())
+                .unwrap_or_else(|| vec![DEFAULT_MCP_CONTEXT.to_string()])
         };
 
         let mcp_earliest_version = if self.mcp {
             if let Some(v) = self.mcp_earliest_version.clone() {
                 v
             } else {
+                let default = existing_ci
+                    .and_then(|ci| ci.mcp_earliest_version.clone())
+                    .unwrap_or_else(|| DEFAULT_MCP_EARLIEST_VERSION.to_string());
                 Input::<String>::new()
                     .with_prompt("Earliest orb version to include in MCP snapshots")
-                    .default(DEFAULT_MCP_EARLIEST_VERSION.to_string())
+                    .default(default)
                     .interact_text()?
             }
         } else {
             self.mcp_earliest_version
                 .clone()
+                .or_else(|| existing_ci.and_then(|ci| ci.mcp_earliest_version.clone()))
                 .unwrap_or_else(|| DEFAULT_MCP_EARLIEST_VERSION.to_string())
         };
 
@@ -408,7 +463,9 @@ impl Init {
                 Err(_) => (vec![], vec![]),
             };
 
-        let extras = self.gather_extras(&detected_push)?;
+        let config_path = std::path::Path::new("gen-circleci-orb.toml");
+        let existing_config = crate::orb_config::load_config(config_path)?;
+        let extras = self.gather_extras(&detected_push, &existing_config)?;
         let namespaces: Vec<String> = self
             .public_orb_namespaces
             .iter()
@@ -629,7 +686,7 @@ mod tests {
     #[test]
     fn init_run_writes_ci_section_to_config() {
         let init = make_init(true);
-        let extras = init.gather_extras(&[]).unwrap();
+        let extras = init.gather_extras(&[], &OrbConfig::default()).unwrap();
         let ci = CiSection {
             build_workflow: Some(init.build_workflow.clone()),
             release_workflow: Some(init.release_workflow.clone()),
@@ -844,7 +901,9 @@ mod tests {
     #[test]
     fn gather_extras_uses_detected_when_cli_empty() {
         let init = make_init(true); // dry_run = true → non-interactive
-        let extras = init.gather_extras(&["save".to_string()]).unwrap();
+        let extras = init
+            .gather_extras(&["save".to_string()], &OrbConfig::default())
+            .unwrap();
         assert_eq!(
             extras.git_push_subcommands,
             vec!["save".to_string()],
@@ -859,7 +918,9 @@ mod tests {
             dry_run: true,
             ..make_init(true)
         };
-        let extras = init.gather_extras(&["save".to_string()]).unwrap();
+        let extras = init
+            .gather_extras(&["save".to_string()], &OrbConfig::default())
+            .unwrap();
         assert_eq!(
             extras.git_push_subcommands,
             vec!["custom".to_string()],
@@ -900,7 +961,7 @@ mod tests {
     #[test]
     fn gather_extras_non_interactive_uses_hardcoded_defaults() {
         let init = make_init(true); // dry_run=true → non-interactive
-        let extras = init.gather_extras(&[]).unwrap();
+        let extras = init.gather_extras(&[], &OrbConfig::default()).unwrap();
         assert_eq!(extras.docker_context, DEFAULT_DOCKER_CONTEXT);
         assert_eq!(extras.orb_context, DEFAULT_ORB_CONTEXT);
         assert_eq!(extras.mcp_context, vec![DEFAULT_MCP_CONTEXT.to_string()]);
@@ -923,7 +984,7 @@ mod tests {
             dry_run: true,
             ..make_init(true)
         };
-        let extras = init.gather_extras(&[]).unwrap();
+        let extras = init.gather_extras(&[], &OrbConfig::default()).unwrap();
         assert_eq!(extras.docker_context, "my-docker");
         assert_eq!(extras.orb_context, "my-orb-ctx");
         assert_eq!(extras.mcp_context, vec!["my-mcp-ctx".to_string()]);
@@ -941,7 +1002,7 @@ mod tests {
         // When $CI is set the dialogue must be skipped even without --dry-run
         std::env::set_var("CI", "true");
         let init = make_init(false);
-        let extras = init.gather_extras(&[]).unwrap();
+        let extras = init.gather_extras(&[], &OrbConfig::default()).unwrap();
         std::env::remove_var("CI");
         assert_eq!(extras.docker_context, DEFAULT_DOCKER_CONTEXT);
     }
@@ -955,7 +1016,7 @@ mod tests {
             dry_run: true,
             ..make_init(true)
         };
-        let extras = init.gather_extras(&[]).unwrap();
+        let extras = init.gather_extras(&[], &OrbConfig::default()).unwrap();
         assert_eq!(extras.docker_context, "explicit-docker");
     }
 
@@ -966,7 +1027,7 @@ mod tests {
             dry_run: true,
             ..make_init(true)
         };
-        let extras = init.gather_extras(&[]).unwrap();
+        let extras = init.gather_extras(&[], &OrbConfig::default()).unwrap();
         assert_eq!(extras.orb_context, "explicit-orb");
     }
 
@@ -978,7 +1039,7 @@ mod tests {
             dry_run: true,
             ..make_init(true)
         };
-        let extras = init.gather_extras(&[]).unwrap();
+        let extras = init.gather_extras(&[], &OrbConfig::default()).unwrap();
         assert_eq!(extras.mcp_context, vec!["ctx-a", "ctx-b"]);
     }
 
@@ -990,7 +1051,7 @@ mod tests {
             dry_run: true,
             ..make_init(true)
         };
-        let extras = init.gather_extras(&[]).unwrap();
+        let extras = init.gather_extras(&[], &OrbConfig::default()).unwrap();
         assert_eq!(extras.mcp_earliest_version, "3.0.0");
     }
 
@@ -1002,7 +1063,9 @@ mod tests {
             ..make_init(true)
         };
         // detected list is different — CLI must win without prompting
-        let extras = init.gather_extras(&["save".to_string()]).unwrap();
+        let extras = init
+            .gather_extras(&["save".to_string()], &OrbConfig::default())
+            .unwrap();
         assert_eq!(extras.git_push_subcommands, vec!["deploy"]);
     }
 
@@ -1013,7 +1076,7 @@ mod tests {
             dry_run: true,
             ..make_init(true)
         };
-        let extras = init.gather_extras(&[]).unwrap();
+        let extras = init.gather_extras(&[], &OrbConfig::default()).unwrap();
         assert_eq!(extras.home_url.as_deref(), Some("https://example.com/home"));
     }
 
@@ -1024,11 +1087,119 @@ mod tests {
             dry_run: true,
             ..make_init(true)
         };
-        let extras = init.gather_extras(&[]).unwrap();
+        let extras = init.gather_extras(&[], &OrbConfig::default()).unwrap();
         assert_eq!(
             extras.source_url.as_deref(),
             Some("https://example.com/src")
         );
+    }
+
+    // ── gather_extras: existing config as fallback ─────────────────────────
+
+    fn make_existing_config() -> OrbConfig {
+        use crate::orb_config::CiSection;
+        OrbConfig {
+            orb: Some(OrbSection {
+                home_url: Some("https://existing-home.example.com".to_string()),
+                source_url: Some("https://existing-src.example.com".to_string()),
+                git_push_subcommands: Some(vec!["existing-push".to_string()]),
+                ..OrbSection::default()
+            }),
+            ci: Some(CiSection {
+                docker_context: Some("existing-docker".to_string()),
+                orb_context: Some("existing-orb".to_string()),
+                mcp_context: Some(vec!["existing-mcp".to_string()]),
+                mcp_earliest_version: Some("9.9.9".to_string()),
+                ..CiSection::default()
+            }),
+            ..OrbConfig::default()
+        }
+    }
+
+    #[test]
+    fn gather_extras_falls_back_to_existing_docker_context() {
+        let init = make_init(true); // dry_run → non-interactive
+        let extras = init.gather_extras(&[], &make_existing_config()).unwrap();
+        assert_eq!(
+            extras.docker_context, "existing-docker",
+            "should use [ci].docker_context from existing config when CLI flag not set"
+        );
+    }
+
+    #[test]
+    fn gather_extras_falls_back_to_existing_orb_context() {
+        let init = make_init(true);
+        let extras = init.gather_extras(&[], &make_existing_config()).unwrap();
+        assert_eq!(extras.orb_context, "existing-orb");
+    }
+
+    #[test]
+    fn gather_extras_falls_back_to_existing_mcp_context() {
+        let init = Init {
+            mcp: true,
+            dry_run: true,
+            ..make_init(true)
+        };
+        let extras = init.gather_extras(&[], &make_existing_config()).unwrap();
+        assert_eq!(extras.mcp_context, vec!["existing-mcp"]);
+    }
+
+    #[test]
+    fn gather_extras_falls_back_to_existing_mcp_earliest_version() {
+        let init = make_init(true);
+        let extras = init.gather_extras(&[], &make_existing_config()).unwrap();
+        assert_eq!(extras.mcp_earliest_version, "9.9.9");
+    }
+
+    #[test]
+    fn gather_extras_falls_back_to_existing_home_url() {
+        let init = make_init(true);
+        let extras = init.gather_extras(&[], &make_existing_config()).unwrap();
+        assert_eq!(
+            extras.home_url.as_deref(),
+            Some("https://existing-home.example.com")
+        );
+    }
+
+    #[test]
+    fn gather_extras_falls_back_to_existing_source_url() {
+        let init = make_init(true);
+        let extras = init.gather_extras(&[], &make_existing_config()).unwrap();
+        assert_eq!(
+            extras.source_url.as_deref(),
+            Some("https://existing-src.example.com")
+        );
+    }
+
+    #[test]
+    fn gather_extras_falls_back_to_existing_git_push_subcommands() {
+        let init = make_init(true);
+        // No CLI flag, no detected — should fall back to existing config
+        let extras = init.gather_extras(&[], &make_existing_config()).unwrap();
+        assert_eq!(extras.git_push_subcommands, vec!["existing-push"]);
+    }
+
+    #[test]
+    fn gather_extras_cli_takes_precedence_over_existing_config() {
+        let init = Init {
+            docker_context: Some("cli-docker".to_string()),
+            orb_context: Some("cli-orb".to_string()),
+            dry_run: true,
+            ..make_init(true)
+        };
+        let extras = init.gather_extras(&[], &make_existing_config()).unwrap();
+        assert_eq!(extras.docker_context, "cli-docker");
+        assert_eq!(extras.orb_context, "cli-orb");
+    }
+
+    #[test]
+    fn gather_extras_detected_used_when_neither_cli_nor_config_has_push_subcommands() {
+        let init = make_init(true);
+        let existing = OrbConfig::default(); // no git_push_subcommands in config
+        let extras = init
+            .gather_extras(&["detected-push".to_string()], &existing)
+            .unwrap();
+        assert_eq!(extras.git_push_subcommands, vec!["detected-push"]);
     }
 
     #[test]
