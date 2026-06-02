@@ -410,6 +410,30 @@ fn render_dockerfile(
             out.push_str("WORKDIR /home/circleci/project\n");
             out
         }
+        InstallMethod::Local => {
+            let runtime_pkgs = sorted_package_list(apt_packages);
+            let mut out = String::new();
+            if let Some(ver) = circleci_cli_version {
+                out.push_str(&render_cli_installer_stage(ver));
+                out.push('\n');
+            }
+            out.push_str(&format!("FROM {base_image}\n"));
+            out.push_str("RUN apt-get update \\\n");
+            out.push_str(&format!(
+                "    && apt-get install -y --no-install-recommends {runtime_pkgs} \\\n"
+            ));
+            out.push_str("    && rm -rf /var/lib/apt/lists/* \\\n");
+            out.push_str("    && useradd -ms /bin/bash circleci\n");
+            out.push_str(&format!("COPY {binary} /usr/local/bin/{binary}\n"));
+            if circleci_cli_version.is_some() {
+                out.push_str(
+                    "COPY --from=cli-installer /usr/local/bin/circleci /usr/local/bin/circleci\n",
+                );
+            }
+            out.push_str("USER circleci\n");
+            out.push_str("WORKDIR /home/circleci/project\n");
+            out
+        }
         InstallMethod::Apt => {
             let extra_pkgs: Vec<&str> = apt_packages.iter().map(String::as_str).collect();
             let mut all_pkgs = vec!["git", binary];
@@ -1867,6 +1891,121 @@ mod tests {
         assert!(
             dockerfile.contains("ca-certificates libssl-dev pkg-config"),
             "builder packages must be sorted: ca-certificates libssl-dev pkg-config\n{dockerfile}"
+        );
+    }
+
+    // ── InstallMethod::Local Dockerfile ────────────────────────────────────
+
+    fn local_opts() -> GenerateOpts {
+        GenerateOpts {
+            install_method: InstallMethod::Local,
+            ..default_opts()
+        }
+    }
+
+    #[test]
+    fn dockerfile_local_uses_copy_not_cargo_install() {
+        let dockerfile =
+            render_dockerfile("mytool", &InstallMethod::Local, "debian:12-slim", None, &[]);
+        assert!(
+            dockerfile.contains("COPY mytool /usr/local/bin/mytool"),
+            "local method must COPY binary from build context:\n{dockerfile}"
+        );
+        assert!(
+            !dockerfile.contains("cargo install"),
+            "local method must not use cargo install:\n{dockerfile}"
+        );
+    }
+
+    #[test]
+    fn dockerfile_local_has_no_rust_builder_stage() {
+        let dockerfile =
+            render_dockerfile("mytool", &InstallMethod::Local, "debian:12-slim", None, &[]);
+        assert!(
+            !dockerfile.contains("FROM rust"),
+            "local method must not have a Rust builder stage:\n{dockerfile}"
+        );
+        assert!(
+            !dockerfile.contains("AS builder"),
+            "local method must not have a builder stage:\n{dockerfile}"
+        );
+    }
+
+    #[test]
+    fn dockerfile_local_runtime_has_ca_certs_and_git() {
+        let dockerfile =
+            render_dockerfile("mytool", &InstallMethod::Local, "debian:12-slim", None, &[]);
+        assert!(
+            dockerfile.contains("ca-certificates"),
+            "local runtime must install ca-certificates:\n{dockerfile}"
+        );
+        assert!(
+            dockerfile.contains("apt-get install") && dockerfile.contains(" git"),
+            "local runtime must install git:\n{dockerfile}"
+        );
+    }
+
+    #[test]
+    fn dockerfile_local_has_circleci_user_and_workdir() {
+        let dockerfile =
+            render_dockerfile("mytool", &InstallMethod::Local, "debian:12-slim", None, &[]);
+        assert!(
+            dockerfile.contains("useradd") && dockerfile.contains("circleci"),
+            "local method must create circleci user:\n{dockerfile}"
+        );
+        assert!(
+            dockerfile.contains("USER circleci"),
+            "local method must set USER circleci:\n{dockerfile}"
+        );
+        assert!(
+            dockerfile.contains("WORKDIR /home/circleci/project"),
+            "local method must set WORKDIR:\n{dockerfile}"
+        );
+    }
+
+    #[test]
+    fn dockerfile_local_does_not_run_as_root() {
+        let dockerfile =
+            render_dockerfile("mytool", &InstallMethod::Local, "debian:12-slim", None, &[]);
+        let copy_pos = dockerfile.find("COPY mytool").expect("COPY not found");
+        let user_pos = dockerfile.find("USER circleci").expect("USER not found");
+        assert!(
+            user_pos > copy_pos,
+            "USER circleci must appear after COPY:\n{dockerfile}"
+        );
+    }
+
+    #[test]
+    fn dockerfile_local_with_circleci_cli_includes_installer_stage() {
+        let dockerfile = render_dockerfile(
+            "mytool",
+            &InstallMethod::Local,
+            "debian:12-slim",
+            Some("0.1.36202"),
+            &[],
+        );
+        assert!(
+            dockerfile.contains("AS cli-installer"),
+            "local + circleci_cli must include cli-installer stage:\n{dockerfile}"
+        );
+        assert!(
+            dockerfile.contains("COPY --from=cli-installer /usr/local/bin/circleci"),
+            "local + circleci_cli must copy circleci binary:\n{dockerfile}"
+        );
+    }
+
+    #[test]
+    fn dockerfile_local_generate_produces_dockerfile() {
+        let cli = make_cli("mytool", vec![]);
+        let files = generate(&cli, &local_opts(), None);
+        assert!(
+            files.contains_key(&PathBuf::from("Dockerfile")),
+            "generate with Local install must produce a Dockerfile"
+        );
+        let content = &files[&PathBuf::from("Dockerfile")];
+        assert!(
+            content.contains("COPY mytool /usr/local/bin/mytool"),
+            "generated Dockerfile must COPY binary:\n{content}"
         );
     }
 
