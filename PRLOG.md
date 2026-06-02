@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - read binary, namespaces, orb_dir from [orb] config(pr [#84])
 - auto-detect push-capable subcommands(pr [#85])
 - auto-populate orb_path defaults in bootstrap config(pr [#90])
+- read install_method and base_image from [orb] config(pr [#92])
 
 ### Fixed
 
@@ -355,6 +356,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#86]: https://github.com/jerus-org/gen-circleci-orb/pull/86
 [#90]: https://github.com/jerus-org/gen-circleci-orb/pull/90
 [#91]: https://github.com/jerus-org/gen-circleci-orb/pull/91
+[#92]: https://github.com/jerus-org/gen-circleci-orb/pull/92
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.37...HEAD
 [0.0.37]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.36...v0.0.37
 [0.0.36]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.35...v0.0.36
