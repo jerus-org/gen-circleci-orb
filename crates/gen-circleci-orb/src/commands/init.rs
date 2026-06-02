@@ -62,9 +62,7 @@ pub(crate) fn populate_orb_path_defaults(
         .subcommand
         .get_or_insert_with(indexmap::IndexMap::new);
     for name in subcommands {
-        let sc = sc_map
-            .entry(name.clone())
-            .or_default();
+        let sc = sc_map.entry(name.clone()).or_default();
         let params = sc.param.get_or_insert_with(indexmap::IndexMap::new);
         params
             .entry("orb_path".to_string())
