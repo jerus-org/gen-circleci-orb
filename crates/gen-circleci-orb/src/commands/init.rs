@@ -274,13 +274,15 @@ impl Init {
             });
         }
 
-        // Interactive mode — prompt for each field not already provided.
+        // Interactive mode — prompt only for fields not already provided via CLI flag.
         use dialoguer::Input;
 
-        let home_url = {
+        let home_url = if let Some(v) = self.home_url.clone() {
+            Some(v).filter(|s| !s.is_empty())
+        } else {
             let val = Input::<String>::new()
                 .with_prompt("Home URL for orb registry (Enter to skip)")
-                .default(self.home_url.clone().unwrap_or_default())
+                .default(String::new())
                 .allow_empty(true)
                 .interact_text()?;
             if val.is_empty() {
@@ -290,10 +292,12 @@ impl Init {
             }
         };
 
-        let source_url = {
+        let source_url = if let Some(v) = self.source_url.clone() {
+            Some(v).filter(|s| !s.is_empty())
+        } else {
             let val = Input::<String>::new()
                 .with_prompt("Source URL for orb registry (Enter to skip)")
-                .default(self.source_url.clone().unwrap_or_default())
+                .default(String::new())
                 .allow_empty(true)
                 .interact_text()?;
             if val.is_empty() {
@@ -303,8 +307,10 @@ impl Init {
             }
         };
 
-        let git_push_subcommands = {
-            let prompt = if !detected.is_empty() && self.git_push_subcommands.is_empty() {
+        let git_push_subcommands = if !self.git_push_subcommands.is_empty() {
+            effective_push
+        } else {
+            let prompt = if !detected.is_empty() {
                 format!(
                     "Push-capable subcommands detected: {} — confirm or override (comma-separated)",
                     detected.join(", ")
@@ -314,7 +320,7 @@ impl Init {
             };
             let val = Input::<String>::new()
                 .with_prompt(prompt)
-                .default(effective_push.join(","))
+                .default(detected.join(","))
                 .allow_empty(true)
                 .interact_text()?;
             val.split(',')
@@ -324,58 +330,55 @@ impl Init {
                 .collect()
         };
 
-        let docker_context = Input::<String>::new()
-            .with_prompt("Docker context name (needs: DOCKER_LOGIN, DOCKER_PASSWORD)")
-            .default(
-                self.docker_context
-                    .clone()
-                    .unwrap_or_else(|| DEFAULT_DOCKER_CONTEXT.to_string()),
-            )
-            .interact_text()?;
+        let docker_context = if let Some(v) = self.docker_context.clone() {
+            v
+        } else {
+            Input::<String>::new()
+                .with_prompt("Docker context name (needs: DOCKER_LOGIN, DOCKER_PASSWORD)")
+                .default(DEFAULT_DOCKER_CONTEXT.to_string())
+                .interact_text()?
+        };
 
-        let orb_context = Input::<String>::new()
-            .with_prompt("Orb publishing context name (needs: CIRCLECI_CLI_TOKEN)")
-            .default(
-                self.orb_context
-                    .clone()
-                    .unwrap_or_else(|| DEFAULT_ORB_CONTEXT.to_string()),
-            )
-            .interact_text()?;
+        let orb_context = if let Some(v) = self.orb_context.clone() {
+            v
+        } else {
+            Input::<String>::new()
+                .with_prompt("Orb publishing context name (needs: CIRCLECI_CLI_TOKEN)")
+                .default(DEFAULT_ORB_CONTEXT.to_string())
+                .interact_text()?
+        };
 
         let mcp_context = if self.mcp {
-            let current = if self.mcp_context.is_empty() {
-                DEFAULT_MCP_CONTEXT.to_string()
-            } else {
-                self.mcp_context.join(",")
-            };
-            let val = Input::<String>::new()
-                .with_prompt(
-                    "MCP context names, comma-separated (needs: GITHUB_TOKEN with contents:write + bypass branch protection, BOT_GPG_KEY, BOT_TRUST, BOT_USER_NAME, BOT_USER_EMAIL, BOT_SIGN_KEY)",
-                )
-                .default(current)
-                .interact_text()?;
-            val.split(',')
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(str::to_string)
-                .collect()
-        } else {
-            if self.mcp_context.is_empty() {
-                vec![DEFAULT_MCP_CONTEXT.to_string()]
-            } else {
+            if !self.mcp_context.is_empty() {
                 self.mcp_context.clone()
+            } else {
+                let val = Input::<String>::new()
+                    .with_prompt(
+                        "MCP context names, comma-separated (needs: GITHUB_TOKEN with contents:write + bypass branch protection, BOT_GPG_KEY, BOT_TRUST, BOT_USER_NAME, BOT_USER_EMAIL, BOT_SIGN_KEY)",
+                    )
+                    .default(DEFAULT_MCP_CONTEXT.to_string())
+                    .interact_text()?;
+                val.split(',')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+                    .collect()
             }
+        } else if self.mcp_context.is_empty() {
+            vec![DEFAULT_MCP_CONTEXT.to_string()]
+        } else {
+            self.mcp_context.clone()
         };
 
         let mcp_earliest_version = if self.mcp {
-            Input::<String>::new()
-                .with_prompt("Earliest orb version to include in MCP snapshots")
-                .default(
-                    self.mcp_earliest_version
-                        .clone()
-                        .unwrap_or_else(|| DEFAULT_MCP_EARLIEST_VERSION.to_string()),
-                )
-                .interact_text()?
+            if let Some(v) = self.mcp_earliest_version.clone() {
+                v
+            } else {
+                Input::<String>::new()
+                    .with_prompt("Earliest orb version to include in MCP snapshots")
+                    .default(DEFAULT_MCP_EARLIEST_VERSION.to_string())
+                    .interact_text()?
+            }
         } else {
             self.mcp_earliest_version
                 .clone()
@@ -941,6 +944,91 @@ mod tests {
         let extras = init.gather_extras(&[]).unwrap();
         std::env::remove_var("CI");
         assert_eq!(extras.docker_context, DEFAULT_DOCKER_CONTEXT);
+    }
+
+    // ── gather_extras: skip prompts when field is explicitly set ───────────
+
+    #[test]
+    fn gather_extras_skips_docker_context_prompt_when_set() {
+        let init = Init {
+            docker_context: Some("explicit-docker".to_string()),
+            dry_run: true,
+            ..make_init(true)
+        };
+        let extras = init.gather_extras(&[]).unwrap();
+        assert_eq!(extras.docker_context, "explicit-docker");
+    }
+
+    #[test]
+    fn gather_extras_skips_orb_context_prompt_when_set() {
+        let init = Init {
+            orb_context: Some("explicit-orb".to_string()),
+            dry_run: true,
+            ..make_init(true)
+        };
+        let extras = init.gather_extras(&[]).unwrap();
+        assert_eq!(extras.orb_context, "explicit-orb");
+    }
+
+    #[test]
+    fn gather_extras_skips_mcp_context_prompt_when_set() {
+        let init = Init {
+            mcp: true,
+            mcp_context: vec!["ctx-a".to_string(), "ctx-b".to_string()],
+            dry_run: true,
+            ..make_init(true)
+        };
+        let extras = init.gather_extras(&[]).unwrap();
+        assert_eq!(extras.mcp_context, vec!["ctx-a", "ctx-b"]);
+    }
+
+    #[test]
+    fn gather_extras_skips_mcp_earliest_version_prompt_when_set() {
+        let init = Init {
+            mcp: true,
+            mcp_earliest_version: Some("3.0.0".to_string()),
+            dry_run: true,
+            ..make_init(true)
+        };
+        let extras = init.gather_extras(&[]).unwrap();
+        assert_eq!(extras.mcp_earliest_version, "3.0.0");
+    }
+
+    #[test]
+    fn gather_extras_skips_git_push_subcommands_prompt_when_set() {
+        let init = Init {
+            git_push_subcommands: vec!["deploy".to_string()],
+            dry_run: true,
+            ..make_init(true)
+        };
+        // detected list is different — CLI must win without prompting
+        let extras = init.gather_extras(&["save".to_string()]).unwrap();
+        assert_eq!(extras.git_push_subcommands, vec!["deploy"]);
+    }
+
+    #[test]
+    fn gather_extras_skips_home_url_prompt_when_set() {
+        let init = Init {
+            home_url: Some("https://example.com/home".to_string()),
+            dry_run: true,
+            ..make_init(true)
+        };
+        let extras = init.gather_extras(&[]).unwrap();
+        assert_eq!(extras.home_url.as_deref(), Some("https://example.com/home"));
+    }
+
+    #[test]
+    fn gather_extras_skips_source_url_prompt_when_set() {
+        let init = Init {
+            source_url: Some("https://example.com/src".to_string()),
+            dry_run: true,
+            ..make_init(true)
+        };
+        let extras = init.gather_extras(&[]).unwrap();
+        assert_eq!(
+            extras.source_url.as_deref(),
+            Some("https://example.com/src")
+        );
     }
 
     #[test]
