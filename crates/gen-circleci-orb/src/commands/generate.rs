@@ -10,6 +10,10 @@ pub const DEFAULT_BASE_IMAGE: &str = "debian:12-slim";
 pub enum InstallMethod {
     Binstall,
     Apt,
+    /// Binary is pre-built and present in the Docker build context as `./{binary}`.
+    /// Generates a single-stage Dockerfile with `COPY {binary}` — no crates.io download.
+    /// Use when the release pipeline builds the binary before `docker build`.
+    Local,
 }
 
 /// Generate orb source files from a CLI binary's --help output.
@@ -221,6 +225,7 @@ pub(crate) fn resolve_install_method(
         .and_then(|s| match s {
             "apt" => Some(InstallMethod::Apt),
             "binstall" => Some(InstallMethod::Binstall),
+            "local" => Some(InstallMethod::Local),
             _ => None,
         })
         .unwrap_or(InstallMethod::Binstall)
@@ -537,6 +542,20 @@ mod tests {
         };
         let result = resolve_install_method(Some(&InstallMethod::Binstall), &config);
         assert!(matches!(result, InstallMethod::Binstall));
+    }
+
+    #[test]
+    fn resolve_install_method_local_from_config() {
+        use crate::orb_config::{OrbConfig, OrbSection};
+        let config = OrbConfig {
+            orb: Some(OrbSection {
+                install_method: Some("local".to_string()),
+                ..OrbSection::default()
+            }),
+            ..OrbConfig::default()
+        };
+        let result = resolve_install_method(None, &config);
+        assert!(matches!(result, InstallMethod::Local));
     }
 
     #[test]
