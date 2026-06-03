@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- release: publish crate before building Docker image(pr [#97])
+
 ## [0.0.39] - 2026-06-03
 
 ### Fixed
@@ -366,6 +372,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#92]: https://github.com/jerus-org/gen-circleci-orb/pull/92
 [#93]: https://github.com/jerus-org/gen-circleci-orb/pull/93
 [#95]: https://github.com/jerus-org/gen-circleci-orb/pull/95
+[#97]: https://github.com/jerus-org/gen-circleci-orb/pull/97
+[Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.39...HEAD
 [0.0.39]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.38...v0.0.39
 [0.0.38]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.37...v0.0.38
 [0.0.37]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.36...v0.0.37
