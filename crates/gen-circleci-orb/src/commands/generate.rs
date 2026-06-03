@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use crate::{help_parser, orb_config, orb_generator, output_writer};
 
-pub const DEFAULT_BASE_IMAGE: &str = "debian:12-slim";
+pub const DEFAULT_BASE_IMAGE: &str = "debian:13-slim";
 
 #[derive(Debug, Clone, ValueEnum)]
 pub enum InstallMethod {
@@ -39,7 +39,7 @@ pub struct Generate {
     pub install_method: Option<InstallMethod>,
 
     /// Base Docker image for the generated executor.
-    /// Falls back to `base_image` in the [orb] section of gen-circleci-orb.toml, then "debian:12-slim".
+    /// Falls back to `base_image` in the [orb] section of gen-circleci-orb.toml, then "debian:13-slim".
     #[arg(long)]
     pub base_image: Option<String>,
 
