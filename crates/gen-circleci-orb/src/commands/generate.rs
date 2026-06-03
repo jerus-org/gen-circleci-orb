@@ -242,6 +242,21 @@ pub(crate) fn resolve_base_image(
         .unwrap_or_else(|| DEFAULT_BASE_IMAGE.to_string())
 }
 
+/// CLI flags take precedence; fall back to `[orb].apt_packages` in config, then empty.
+pub(crate) fn resolve_apt_packages(
+    cli: &[String],
+    config: &crate::orb_config::OrbConfig,
+) -> Vec<String> {
+    if !cli.is_empty() {
+        return cli.to_vec();
+    }
+    config
+        .orb
+        .as_ref()
+        .and_then(|o| o.apt_packages.clone())
+        .unwrap_or_default()
+}
+
 pub(crate) fn resolve_config_path(explicit: Option<&PathBuf>, output: &Path) -> PathBuf {
     explicit
         .cloned()
@@ -291,7 +306,7 @@ impl Generate {
                 &orb_config,
             ),
             circleci_cli_version: self.circleci_cli_version.clone(),
-            apt_packages: self.apt_packages.clone(),
+            apt_packages: resolve_apt_packages(&self.apt_packages, &orb_config),
         };
 
         let files = orb_generator::generate(&cli_def, &opts, Some(&orb_config));
@@ -607,6 +622,51 @@ mod tests {
         use crate::orb_config::OrbConfig;
         let result = resolve_base_image(None, &OrbConfig::default());
         assert_eq!(result, DEFAULT_BASE_IMAGE);
+    }
+
+    // ── resolve_apt_packages ───────────────────────────────────────────────
+
+    #[test]
+    fn resolve_apt_packages_uses_cli_when_provided() {
+        use crate::orb_config::OrbConfig;
+        let cli = vec!["libssl-dev".to_string(), "pkg-config".to_string()];
+        let result = resolve_apt_packages(&cli, &OrbConfig::default());
+        assert_eq!(result, vec!["libssl-dev", "pkg-config"]);
+    }
+
+    #[test]
+    fn resolve_apt_packages_falls_back_to_config() {
+        use crate::orb_config::{OrbConfig, OrbSection};
+        let config = OrbConfig {
+            orb: Some(OrbSection {
+                apt_packages: Some(vec!["libssl-dev".to_string(), "pkg-config".to_string()]),
+                ..OrbSection::default()
+            }),
+            ..OrbConfig::default()
+        };
+        let result = resolve_apt_packages(&[], &config);
+        assert_eq!(result, vec!["libssl-dev", "pkg-config"]);
+    }
+
+    #[test]
+    fn resolve_apt_packages_cli_overrides_config() {
+        use crate::orb_config::{OrbConfig, OrbSection};
+        let config = OrbConfig {
+            orb: Some(OrbSection {
+                apt_packages: Some(vec!["libssl-dev".to_string()]),
+                ..OrbSection::default()
+            }),
+            ..OrbConfig::default()
+        };
+        let result = resolve_apt_packages(&["cmake".to_string()], &config);
+        assert_eq!(result, vec!["cmake"]);
+    }
+
+    #[test]
+    fn resolve_apt_packages_defaults_to_empty() {
+        use crate::orb_config::OrbConfig;
+        let result = resolve_apt_packages(&[], &OrbConfig::default());
+        assert!(result.is_empty());
     }
 
     // ── git_push_subcommands: config fallback ───────────────────────────────

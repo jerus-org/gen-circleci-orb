@@ -35,6 +35,10 @@ pub struct OrbSection {
     pub orb_dir: Option<String>,
     pub base_image: Option<String>,
     pub install_method: Option<String>,
+    /// Extra apt packages installed in the generated Docker image's runtime stage.
+    /// Use for tools that need build dependencies at runtime (e.g. a tool that
+    /// compiles code via `cargo` needs libssl-dev + pkg-config).
+    pub apt_packages: Option<Vec<String>>,
     pub home_url: Option<String>,
     pub source_url: Option<String>,
     /// Subcommand names whose generated jobs include a set_https_remote step.
