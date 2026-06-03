@@ -12,9 +12,12 @@ orbs:
 jobs:
   build-binary:
     docker:
-      - image: rust:latest
+      - image: rust:1-slim-bookworm
     steps:
       - checkout
+      - run:
+          name: Install build dependencies
+          command: apt-get update && apt-get install -y --no-install-recommends libssl-dev pkg-config && rm -rf /var/lib/apt/lists/*
       - run:
           name: Build binary
           command: cargo build --release
@@ -23,7 +26,7 @@ jobs:
           paths: [gen-circleci-orb]
   regenerate-orb:
     docker:
-      - image: rust:latest
+      - image: rust:1-slim-bookworm
     steps:
       - checkout
       - attach_workspace:
