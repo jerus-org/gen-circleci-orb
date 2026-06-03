@@ -2,7 +2,6 @@
 binary = "gen-circleci-orb"
 namespaces = ["jerus-org"]
 orb_dir = "orb"
-install_method = "local"
 
 [subcommand.help]
 generate_job = false
