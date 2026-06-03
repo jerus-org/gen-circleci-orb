@@ -224,6 +224,7 @@ pub(crate) fn build_bootstrap_config(
             orb_dir: Some(orb_dir.to_string()),
             base_image: None,
             install_method: None,
+            apt_packages: None,
             home_url: home_url.map(str::to_string),
             source_url: source_url.map(str::to_string),
             git_push_subcommands: if git_push_subcommands.is_empty() {

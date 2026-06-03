@@ -255,6 +255,7 @@ steps:
                 orb_dir: Some("orb".to_string()),
                 base_image: None,
                 install_method: None,
+                apt_packages: None,
                 home_url: None,
                 source_url: None,
                 git_push_subcommands: None,
