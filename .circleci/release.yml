@@ -87,6 +87,15 @@ workflows:
           source_dir: orb/src
           requires: [approve-release]
 
+      # Builds and persists the gen-circleci-orb binary to the workspace at
+      # /tmp/workspace/gen-circleci-orb. build-mcp-server attaches this at
+      # /tmp/bin and chmods it (orb job contract). Dogfoods the orb's own job,
+      # matching the orb-release-binary step ci_patcher generates for consumers.
+      - gen-circleci-orb/build_rust_binary:
+          name: build-binary-release
+          package: gen-circleci-orb
+          requires: [approve-release]
+
       - ensure-orb-registered:
           requires: [approve-release]
           context: [orb-publishing]
@@ -147,6 +156,7 @@ workflows:
                   echo "export CIRCLE_TAG=v${WORKSPACE_VERSION}" >> "$BASH_ENV"
           requires:
             - release-prlog
+            - build-binary-release
           context:
             - bot-check
             - release
