@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- release: persist binary for build-mcp-server via build_rust_binary(pr [#98])
+
 ## [0.0.40] - 2026-06-03
 
 ### Fixed
@@ -373,6 +379,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#93]: https://github.com/jerus-org/gen-circleci-orb/pull/93
 [#95]: https://github.com/jerus-org/gen-circleci-orb/pull/95
 [#97]: https://github.com/jerus-org/gen-circleci-orb/pull/97
+[#98]: https://github.com/jerus-org/gen-circleci-orb/pull/98
+[Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.40...HEAD
 [0.0.40]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.39...v0.0.40
 [0.0.39]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.38...v0.0.39
 [0.0.38]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.37...v0.0.38
