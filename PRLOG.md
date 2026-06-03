@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- chore-revert errored release prlog marking(pr [#99])
+
 ### Fixed
 
 - release: persist binary for build-mcp-server via build_rust_binary(pr [#98])
@@ -380,6 +384,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#95]: https://github.com/jerus-org/gen-circleci-orb/pull/95
 [#97]: https://github.com/jerus-org/gen-circleci-orb/pull/97
 [#98]: https://github.com/jerus-org/gen-circleci-orb/pull/98
+[#99]: https://github.com/jerus-org/gen-circleci-orb/pull/99
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.40...HEAD
 [0.0.40]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.39...v0.0.40
 [0.0.39]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.38...v0.0.39
