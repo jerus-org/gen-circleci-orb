@@ -43,6 +43,12 @@ steps:
   - checkout
   - attach_workspace:
       at: << parameters.workspace_bin_path >>
+  # Unset CircleCI checkout's HTTPS->SSH insteadOf rewrite and switch origin to
+  # HTTPS BEFORE any git network operation. The setup script's `git fetch origin
+  # main` would otherwise be rewritten to SSH and fail with "cannot run ssh" on
+  # images without an ssh client (the generated executor images install only
+  # ca-certificates + git).
+  - set_https_remote
   - run:
       name: Set up git and environment
       command: <<include(scripts/build-mcp-server-setup.sh)>>
@@ -50,7 +56,6 @@ steps:
         NAME: << parameters.binary_name >>
         TAG_PREFIX: << parameters.tag_prefix >>
         WORKSPACE_BIN_PATH: << parameters.workspace_bin_path >>
-  - set_https_remote
   - run:
       name: Prime prior versions and migrations
       command: <<include(scripts/build-mcp-server-prime.sh)>>
