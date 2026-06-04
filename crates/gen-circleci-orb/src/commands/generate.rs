@@ -6,6 +6,23 @@ use crate::{help_parser, orb_config, orb_generator, output_writer};
 
 pub const DEFAULT_BASE_IMAGE: &str = "debian:13-slim";
 
+/// Base image used when the MCP feature is enabled. `build_mcp_server` compiles
+/// the MCP server at runtime via `gen-orb-mcp generate --format binary`, so the
+/// executor needs a Rust toolchain (cargo) present in the runtime stage.
+pub const MCP_DEFAULT_BASE_IMAGE: &str = "rust:1-slim-trixie";
+
+/// Apt packages the executor image needs to support `build_mcp_server`:
+/// `libssl-dev`/`pkg-config` for the cargo compile, `gnupg` for the
+/// `gen-orb-mcp save --sign` signed commit-back. Injected automatically when
+/// the MCP feature is enabled. (No `openssh-client`: git uses HTTPS via
+/// `set_https_remote`.)
+pub const MCP_APT_PACKAGES: &[&str] = &["gnupg", "libssl-dev", "pkg-config"];
+
+/// Whether the MCP feature is enabled in `[ci].mcp`.
+pub(crate) fn mcp_enabled(config: &crate::orb_config::OrbConfig) -> bool {
+    config.ci.as_ref().and_then(|c| c.mcp).unwrap_or(false)
+}
+
 #[derive(Debug, Clone, ValueEnum)]
 pub enum InstallMethod {
     Binstall,
@@ -231,7 +248,10 @@ pub(crate) fn resolve_install_method(
         .unwrap_or(InstallMethod::Binstall)
 }
 
-/// CLI flag takes precedence; falls back to `[orb].base_image` in config, then DEFAULT_BASE_IMAGE.
+/// CLI flag takes precedence, then `[orb].base_image`. When neither is set the
+/// default depends on the MCP feature: MCP needs a Rust runtime (cargo) for the
+/// `--format binary` compile, so it defaults to `MCP_DEFAULT_BASE_IMAGE`;
+/// otherwise `DEFAULT_BASE_IMAGE`.
 pub(crate) fn resolve_base_image(
     cli: Option<&str>,
     config: &crate::orb_config::OrbConfig,
@@ -239,22 +259,39 @@ pub(crate) fn resolve_base_image(
     cli.filter(|s| !s.is_empty())
         .map(str::to_string)
         .or_else(|| config.orb.as_ref().and_then(|o| o.base_image.clone()))
-        .unwrap_or_else(|| DEFAULT_BASE_IMAGE.to_string())
+        .unwrap_or_else(|| {
+            if mcp_enabled(config) {
+                MCP_DEFAULT_BASE_IMAGE.to_string()
+            } else {
+                DEFAULT_BASE_IMAGE.to_string()
+            }
+        })
 }
 
-/// CLI flags take precedence; fall back to `[orb].apt_packages` in config, then empty.
+/// CLI flags take precedence over `[orb].apt_packages`. When the MCP feature is
+/// enabled, the build dependencies it requires (`MCP_APT_PACKAGES`) are unioned
+/// in regardless, since `build_mcp_server` cannot run without them.
 pub(crate) fn resolve_apt_packages(
     cli: &[String],
     config: &crate::orb_config::OrbConfig,
 ) -> Vec<String> {
-    if !cli.is_empty() {
-        return cli.to_vec();
+    let mut pkgs = if !cli.is_empty() {
+        cli.to_vec()
+    } else {
+        config
+            .orb
+            .as_ref()
+            .and_then(|o| o.apt_packages.clone())
+            .unwrap_or_default()
+    };
+    if mcp_enabled(config) {
+        for pkg in MCP_APT_PACKAGES {
+            if !pkgs.iter().any(|p| p == pkg) {
+                pkgs.push((*pkg).to_string());
+            }
+        }
     }
-    config
-        .orb
-        .as_ref()
-        .and_then(|o| o.apt_packages.clone())
-        .unwrap_or_default()
+    pkgs
 }
 
 pub(crate) fn resolve_config_path(explicit: Option<&PathBuf>, output: &Path) -> PathBuf {
@@ -667,6 +704,117 @@ mod tests {
         use crate::orb_config::OrbConfig;
         let result = resolve_apt_packages(&[], &OrbConfig::default());
         assert!(result.is_empty());
+    }
+
+    // ── MCP feature auto-provisions the executor image ─────────────────────
+
+    fn mcp_config() -> crate::orb_config::OrbConfig {
+        use crate::orb_config::{CiSection, OrbConfig};
+        OrbConfig {
+            ci: Some(CiSection {
+                mcp: Some(true),
+                ..CiSection::default()
+            }),
+            ..OrbConfig::default()
+        }
+    }
+
+    #[test]
+    fn mcp_enabled_reads_ci_section() {
+        use crate::orb_config::OrbConfig;
+        assert!(mcp_enabled(&mcp_config()));
+        assert!(!mcp_enabled(&OrbConfig::default()));
+    }
+
+    #[test]
+    fn resolve_base_image_defaults_to_rust_when_mcp_enabled() {
+        let result = resolve_base_image(None, &mcp_config());
+        assert_eq!(result, MCP_DEFAULT_BASE_IMAGE);
+    }
+
+    #[test]
+    fn resolve_base_image_explicit_config_overrides_mcp_default() {
+        use crate::orb_config::{CiSection, OrbConfig, OrbSection};
+        let config = OrbConfig {
+            orb: Some(OrbSection {
+                base_image: Some("rust:1.85-slim".to_string()),
+                ..OrbSection::default()
+            }),
+            ci: Some(CiSection {
+                mcp: Some(true),
+                ..CiSection::default()
+            }),
+            ..OrbConfig::default()
+        };
+        assert_eq!(resolve_base_image(None, &config), "rust:1.85-slim");
+    }
+
+    #[test]
+    fn resolve_apt_packages_injects_mcp_deps_when_enabled() {
+        let result = resolve_apt_packages(&[], &mcp_config());
+        for pkg in MCP_APT_PACKAGES {
+            assert!(
+                result.iter().any(|p| p == pkg),
+                "mcp must inject {pkg}; got {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_apt_packages_mcp_deps_union_with_user_packages() {
+        use crate::orb_config::{CiSection, OrbConfig, OrbSection};
+        let config = OrbConfig {
+            orb: Some(OrbSection {
+                apt_packages: Some(vec!["cmake".to_string()]),
+                ..OrbSection::default()
+            }),
+            ci: Some(CiSection {
+                mcp: Some(true),
+                ..CiSection::default()
+            }),
+            ..OrbConfig::default()
+        };
+        let result = resolve_apt_packages(&[], &config);
+        assert!(
+            result.iter().any(|p| p == "cmake"),
+            "keep user pkg: {result:?}"
+        );
+        assert!(
+            result.iter().any(|p| p == "gnupg"),
+            "inject gnupg: {result:?}"
+        );
+    }
+
+    #[test]
+    fn resolve_apt_packages_no_mcp_deps_when_disabled() {
+        use crate::orb_config::OrbConfig;
+        let result = resolve_apt_packages(&[], &OrbConfig::default());
+        assert!(
+            !result.iter().any(|p| p == "gnupg"),
+            "no mcp deps when mcp disabled: {result:?}"
+        );
+    }
+
+    #[test]
+    fn resolve_apt_packages_mcp_deps_not_duplicated() {
+        use crate::orb_config::{CiSection, OrbConfig, OrbSection};
+        let config = OrbConfig {
+            orb: Some(OrbSection {
+                apt_packages: Some(vec!["gnupg".to_string()]),
+                ..OrbSection::default()
+            }),
+            ci: Some(CiSection {
+                mcp: Some(true),
+                ..CiSection::default()
+            }),
+            ..OrbConfig::default()
+        };
+        let result = resolve_apt_packages(&[], &config);
+        assert_eq!(
+            result.iter().filter(|p| *p == "gnupg").count(),
+            1,
+            "gnupg must not be duplicated: {result:?}"
+        );
     }
 
     // ── git_push_subcommands: config fallback ───────────────────────────────
