@@ -1,7 +1,8 @@
 mod types;
 
 pub use types::{
-    CiSection, ExtraJob, JobGroup, OrbConfig, OrbSection, ParamOverride, SubcommandConfig,
+    CiSection, ExtraJob, JobGroup, JobGroupParam, JobGroupStep, OrbConfig, OrbSection,
+    ParamOverride, SubcommandConfig,
 };
 
 use anyhow::Result;
@@ -178,6 +179,85 @@ params = ["orb_path", "binary"]
     }
 
     #[test]
+    fn load_config_parses_rich_job_group_with_parameters_and_steps() {
+        let dir = TempDir::new().unwrap();
+        let path = write_toml(
+            &dir,
+            r#"
+[[job_group]]
+name = "build_mcp_server"
+description = "Prime, generate, publish and commit back."
+
+[[job_group.parameter]]
+name = "binary_name"
+description = "Consumer binary name."
+
+[[job_group.parameter]]
+name = "tag_prefix"
+type = "string"
+default = "v"
+
+[[job_group.step]]
+builtin = "checkout"
+
+[[job_group.step]]
+command = "set_https_remote"
+
+[[job_group.step]]
+run = "Set up git and environment"
+script = "git fetch origin main"
+[job_group.step.environment]
+TAG_PREFIX = "<< parameters.tag_prefix >>"
+
+[[job_group.step]]
+command = "generate"
+[job_group.step.with]
+format = "binary"
+orb_path = "<< parameters.orb_path >>"
+
+[[job_group.step]]
+orb = "toolkit/setup"
+"#,
+        );
+        let config = load_config(&path).unwrap();
+        let groups = config.job_group.unwrap();
+        assert_eq!(groups.len(), 1);
+        let g = &groups[0];
+        assert_eq!(g.name, "build_mcp_server");
+
+        let params = g.parameter.as_ref().expect("parameters missing");
+        assert_eq!(params.len(), 2);
+        assert_eq!(params[0].name, "binary_name");
+        assert_eq!(params[1].param_type.as_deref(), Some("string"));
+        assert_eq!(params[1].default.as_deref(), Some("v"));
+
+        let steps = g.step.as_ref().expect("steps missing");
+        assert_eq!(steps.len(), 5);
+        assert_eq!(steps[0].builtin.as_deref(), Some("checkout"));
+        assert_eq!(steps[1].command.as_deref(), Some("set_https_remote"));
+        assert_eq!(steps[2].run.as_deref(), Some("Set up git and environment"));
+        assert_eq!(steps[2].script.as_deref(), Some("git fetch origin main"));
+        assert_eq!(
+            steps[2]
+                .environment
+                .as_ref()
+                .and_then(|e| e.get("TAG_PREFIX"))
+                .map(String::as_str),
+            Some("<< parameters.tag_prefix >>")
+        );
+        assert_eq!(steps[3].command.as_deref(), Some("generate"));
+        assert_eq!(
+            steps[3]
+                .with
+                .as_ref()
+                .and_then(|w| w.get("format"))
+                .map(String::as_str),
+            Some("binary")
+        );
+        assert_eq!(steps[4].orb.as_deref(), Some("toolkit/setup"));
+    }
+
+    #[test]
     fn load_config_parses_extra_job_verbatim_yaml() {
         let dir = TempDir::new().unwrap();
         let path = write_toml(
@@ -268,6 +348,7 @@ steps:
                 description: Some("Sync".to_string()),
                 steps: vec!["generate".to_string(), "validate".to_string()],
                 params: None,
+                ..Default::default()
             }]),
             extra_job: None,
         };

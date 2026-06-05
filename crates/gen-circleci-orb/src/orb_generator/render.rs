@@ -843,11 +843,155 @@ fn build_job_group_invoke_step(
     })
 }
 
+/// Coerce a rich-mode `with` value into a typed YAML scalar.
+///
+/// `true`/`false` become YAML booleans (orb boolean parameters reject quoted
+/// string values); every other value — string literals, integers, and
+/// `<< parameters.x >>` references — is emitted as a plain string.
+fn with_value_to_yaml(value: &str) -> serde_yaml::Value {
+    match value {
+        "true" => serde_yaml::Value::Bool(true),
+        "false" => serde_yaml::Value::Bool(false),
+        other => serde_yaml::Value::String(other.to_string()),
+    }
+}
+
+/// Build an invoke step for a tool command or third-party orb command.
+///
+/// With no parameter values the step is a bare list item (`- set_https_remote`);
+/// otherwise it is a mapping (`- generate: {format: binary, ...}`).
+fn build_with_invoke_step(key: &str, with: Option<&IndexMap<String, String>>) -> serde_yaml::Value {
+    match with {
+        Some(values) if !values.is_empty() => {
+            let mut params_map = serde_yaml::Mapping::new();
+            for (name, value) in values {
+                params_map.insert(
+                    serde_yaml::Value::String(name.clone()),
+                    with_value_to_yaml(value),
+                );
+            }
+            let mut m = serde_yaml::Mapping::new();
+            m.insert(
+                serde_yaml::Value::String(key.to_string()),
+                serde_yaml::Value::Mapping(params_map),
+            );
+            serde_yaml::Value::Mapping(m)
+        }
+        _ => serde_yaml::Value::String(key.to_string()),
+    }
+}
+
+/// Build a custom `run:` step (named, with inline shell body and optional env block).
+fn build_custom_run_step(name: &str, step: &crate::orb_config::JobGroupStep) -> serde_yaml::Value {
+    let mut run_map = serde_yaml::Mapping::new();
+    run_map.insert(
+        serde_yaml::Value::String("name".to_string()),
+        serde_yaml::Value::String(name.to_string()),
+    );
+    if let Some(script) = &step.script {
+        run_map.insert(
+            serde_yaml::Value::String("command".to_string()),
+            serde_yaml::Value::String(script.clone()),
+        );
+    }
+    if let Some(env) = &step.environment {
+        let mut env_map = serde_yaml::Mapping::new();
+        for (key, value) in env {
+            env_map.insert(
+                serde_yaml::Value::String(key.clone()),
+                serde_yaml::Value::String(value.clone()),
+            );
+        }
+        run_map.insert(
+            serde_yaml::Value::String("environment".to_string()),
+            serde_yaml::Value::Mapping(env_map),
+        );
+    }
+    let mut m = serde_yaml::Mapping::new();
+    m.insert(
+        serde_yaml::Value::String("run".to_string()),
+        serde_yaml::Value::Mapping(run_map),
+    );
+    serde_yaml::Value::Mapping(m)
+}
+
+/// Render a rich-mode job_group: explicit parameter declarations and an ordered,
+/// heterogeneous step list (built-ins, tool commands, third-party orb steps and
+/// custom run steps). The whole job is data declared in the config file.
+fn render_rich_job_group(group: &crate::orb_config::JobGroup) -> String {
+    let mut parameters: IndexMap<String, OrbParameter> = IndexMap::new();
+    if let Some(declared) = &group.parameter {
+        for p in declared {
+            parameters.insert(
+                p.name.clone(),
+                OrbParameter {
+                    param_type: p.param_type.clone().unwrap_or_else(|| "string".to_string()),
+                    description: p.description.clone().unwrap_or_default(),
+                    default: p.default.clone().map(serde_yaml::Value::String),
+                    enum_values: None,
+                },
+            );
+        }
+    }
+
+    let mut steps: Vec<serde_yaml::Value> = Vec::new();
+    let mut uses_attach_workspace = false;
+    for step in group.step.as_deref().unwrap_or_default() {
+        if let Some(builtin) = &step.builtin {
+            match builtin.as_str() {
+                "attach_workspace" => {
+                    steps.push(build_attach_workspace_step());
+                    uses_attach_workspace = true;
+                }
+                // checkout and any other built-in step name emit as a bare step.
+                other => steps.push(serde_yaml::Value::String(other.to_string())),
+            }
+        } else if let Some(run_name) = &step.run {
+            steps.push(build_custom_run_step(run_name, step));
+        } else if let Some(orb_ref) = &step.orb {
+            steps.push(build_with_invoke_step(orb_ref, step.with.as_ref()));
+        } else if let Some(command) = &step.command {
+            let key = command.replace('-', "_");
+            steps.push(build_with_invoke_step(&key, step.with.as_ref()));
+        }
+    }
+
+    if uses_attach_workspace {
+        let (attach_param, root_param) = build_workspace_params();
+        parameters
+            .entry("attach_workspace".to_string())
+            .or_insert(attach_param);
+        parameters
+            .entry("workspace_root".to_string())
+            .or_insert(root_param);
+    }
+
+    let description = group
+        .description
+        .clone()
+        .unwrap_or_else(|| format!("Composite job: {}.", group.name));
+
+    let job = OrbJob {
+        description,
+        executor: group
+            .executor
+            .clone()
+            .unwrap_or_else(|| "default".to_string()),
+        parameters,
+        steps,
+    };
+    serde_yaml::to_string(&job).unwrap()
+}
+
 fn render_job_group(
     group: &crate::orb_config::JobGroup,
     cli: &CliDefinition,
     _config: Option<&OrbConfig>,
 ) -> String {
+    // Rich mode (explicit `step` list) takes precedence over the simple `steps` list.
+    if group.step.is_some() {
+        return render_rich_job_group(group);
+    }
     let step_subs: Vec<&SubCommand> = group
         .steps
         .iter()
@@ -2472,6 +2616,7 @@ mod tests {
                 description: Some("Regenerate and validate".to_string()),
                 steps: vec!["generate".to_string(), "validate".to_string()],
                 params: None,
+                ..Default::default()
             }]),
             ..OrbConfig::default()
         };
@@ -2494,6 +2639,7 @@ mod tests {
                 description: None,
                 steps: vec!["generate".to_string(), "validate".to_string()],
                 params: None,
+                ..Default::default()
             }]),
             ..OrbConfig::default()
         };
@@ -2519,6 +2665,7 @@ mod tests {
                 description: Some("Regenerate and validate".to_string()),
                 steps: vec!["generate".to_string(), "validate".to_string()],
                 params: None,
+                ..Default::default()
             }]),
             ..OrbConfig::default()
         };
@@ -2546,6 +2693,7 @@ mod tests {
                 description: None,
                 steps: vec!["generate".to_string(), "validate".to_string()],
                 params: None,
+                ..Default::default()
             }]),
             ..OrbConfig::default()
         };
@@ -2581,6 +2729,7 @@ mod tests {
                 description: None,
                 steps: vec!["generate".to_string(), "validate".to_string()],
                 params: Some(vec!["orb_path".to_string()]),
+                ..Default::default()
             }]),
             ..OrbConfig::default()
         };
@@ -2593,6 +2742,152 @@ mod tests {
         assert!(
             !job.contains("format:"),
             "non-listed format param must not appear in job:\n{job}"
+        );
+    }
+
+    // ── Rich job_group composite builder ───────────────────────────────────
+
+    fn rich_build_group() -> crate::orb_config::JobGroup {
+        use crate::orb_config::{JobGroup, JobGroupParam, JobGroupStep};
+        let mut gen_with = IndexMap::new();
+        gen_with.insert("format".to_string(), "binary".to_string());
+        gen_with.insert(
+            "orb_path".to_string(),
+            "<< parameters.orb_path >>".to_string(),
+        );
+        gen_with.insert("force".to_string(), "true".to_string());
+        let mut env = IndexMap::new();
+        env.insert(
+            "TAG_PREFIX".to_string(),
+            "<< parameters.tag_prefix >>".to_string(),
+        );
+        JobGroup {
+            name: "build_mcp_server".to_string(),
+            description: Some("Goal-oriented composite job.".to_string()),
+            parameter: Some(vec![
+                JobGroupParam {
+                    name: "binary_name".to_string(),
+                    description: Some("Consumer binary name.".to_string()),
+                    ..Default::default()
+                },
+                JobGroupParam {
+                    name: "tag_prefix".to_string(),
+                    param_type: Some("string".to_string()),
+                    default: Some("v".to_string()),
+                    ..Default::default()
+                },
+            ]),
+            step: Some(vec![
+                JobGroupStep {
+                    builtin: Some("checkout".to_string()),
+                    ..Default::default()
+                },
+                JobGroupStep {
+                    command: Some("set_https_remote".to_string()),
+                    ..Default::default()
+                },
+                JobGroupStep {
+                    run: Some("Set up git and environment".to_string()),
+                    script: Some("git fetch origin main".to_string()),
+                    environment: Some(env),
+                    ..Default::default()
+                },
+                JobGroupStep {
+                    command: Some("generate".to_string()),
+                    with: Some(gen_with),
+                    ..Default::default()
+                },
+                JobGroupStep {
+                    orb: Some("toolkit/setup".to_string()),
+                    ..Default::default()
+                },
+            ]),
+            ..Default::default()
+        }
+    }
+
+    fn render_rich(group: crate::orb_config::JobGroup) -> String {
+        use crate::orb_config::OrbConfig;
+        // A `generate` leaf exists in the CLI but rich mode must not depend on it.
+        let cli = make_cli("mytool", vec![make_leaf("generate", vec![])]);
+        let config = OrbConfig {
+            job_group: Some(vec![group]),
+            ..OrbConfig::default()
+        };
+        let files = generate(&cli, &default_opts(), Some(&config));
+        files[&PathBuf::from("src/jobs/build_mcp_server.yml")].clone()
+    }
+
+    #[test]
+    fn rich_job_group_declares_explicit_parameters() {
+        let job = render_rich(rich_build_group());
+        assert!(
+            job.contains("binary_name:"),
+            "declared param binary_name must appear:\n{job}"
+        );
+        assert!(
+            job.contains("tag_prefix:") && job.contains("default: v"),
+            "tag_prefix with default must appear:\n{job}"
+        );
+    }
+
+    #[test]
+    fn rich_job_group_steps_render_in_declared_order() {
+        let job = render_rich(rich_build_group());
+        let checkout = job.find("checkout").expect("checkout missing");
+        let https = job
+            .find("set_https_remote")
+            .expect("set_https_remote missing");
+        let setup = job.find("Set up git").expect("run step missing");
+        let generate = job.find("generate:").expect("generate invoke missing");
+        let orb = job.find("toolkit/setup").expect("orb step missing");
+        assert!(
+            checkout < https && https < setup && setup < generate && generate < orb,
+            "steps must render in declared order:\n{job}"
+        );
+    }
+
+    #[test]
+    fn rich_job_group_command_with_emits_literal_and_ref_values() {
+        let job = render_rich(rich_build_group());
+        assert!(
+            job.contains("format: binary"),
+            "literal value must render unquoted:\n{job}"
+        );
+        assert!(
+            job.contains("orb_path: << parameters.orb_path >>"),
+            "parameter ref must render:\n{job}"
+        );
+        assert!(
+            job.contains("force: true"),
+            "boolean literal must coerce to YAML bool:\n{job}"
+        );
+    }
+
+    #[test]
+    fn rich_job_group_run_step_has_name_environment_and_script() {
+        let job = render_rich(rich_build_group());
+        assert!(
+            job.contains("name: Set up git and environment"),
+            "run step name must appear:\n{job}"
+        );
+        assert!(
+            job.contains("git fetch origin main"),
+            "run step script body must appear:\n{job}"
+        );
+        assert!(
+            job.contains("TAG_PREFIX: << parameters.tag_prefix >>"),
+            "run step environment must appear:\n{job}"
+        );
+    }
+
+    #[test]
+    fn rich_job_group_set_https_remote_renders_as_bare_step() {
+        let job = render_rich(rich_build_group());
+        // No-arg command must be a bare list item, not a mapping with params.
+        assert!(
+            job.contains("- set_https_remote\n"),
+            "set_https_remote must render as a bare step:\n{job}"
         );
     }
 
