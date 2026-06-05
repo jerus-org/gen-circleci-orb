@@ -97,6 +97,7 @@ impl Config {
                         description: description.clone(),
                         steps: steps.clone(),
                         params: params.clone(),
+                        ..Default::default()
                     },
                 );
                 orb_config::save_config(&self.config, &config)?;
@@ -217,6 +218,7 @@ mod tests {
                 description: Some("Sync".to_string()),
                 steps: vec!["generate".to_string(), "validate".to_string()],
                 params: None,
+                ..Default::default()
             },
         );
         let groups = config.job_group.as_ref().unwrap();
@@ -234,6 +236,7 @@ mod tests {
                 description: None,
                 steps: vec!["generate".to_string()],
                 params: None,
+                ..Default::default()
             },
         );
         add_job_group(
@@ -243,6 +246,7 @@ mod tests {
                 description: None,
                 steps: vec!["generate".to_string(), "validate".to_string()],
                 params: None,
+                ..Default::default()
             },
         );
         let groups = config.job_group.as_ref().unwrap();
