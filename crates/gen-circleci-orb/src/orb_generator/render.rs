@@ -67,10 +67,9 @@ pub fn generate(
     if let Some(groups) = config.and_then(|c| c.job_group.as_ref()) {
         for group in groups {
             let snake = group.name.replace('-', "_");
-            files.insert(
-                PathBuf::from(format!("src/jobs/{snake}.yml")),
-                render_job_group(group, cli, config),
-            );
+            // render_job_group may also emit run-step scripts into `files`.
+            let job_yaml = render_job_group(group, cli, config, &mut files);
+            files.insert(PathBuf::from(format!("src/jobs/{snake}.yml")), job_yaml);
         }
     }
 
@@ -882,19 +881,37 @@ fn build_with_invoke_step(key: &str, with: Option<&IndexMap<String, String>>) ->
 }
 
 /// Build a custom `run:` step (named, with inline shell body and optional env block).
-fn build_custom_run_step(name: &str, step: &crate::orb_config::JobGroupStep) -> serde_yaml::Value {
+/// Convert an arbitrary step name into a snake_case identifier suitable for a
+/// script filename (e.g. "Set up git and environment" -> "set_up_git_and_environment").
+fn snake_case(s: &str) -> String {
+    let mut out = String::new();
+    for c in s.chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c.to_ascii_lowercase());
+        } else if !out.is_empty() && !out.ends_with('_') {
+            out.push('_');
+        }
+    }
+    out.trim_matches('_').to_string()
+}
+
+fn build_custom_run_step(
+    name: &str,
+    command: Option<&str>,
+    environment: Option<&IndexMap<String, String>>,
+) -> serde_yaml::Value {
     let mut run_map = serde_yaml::Mapping::new();
     run_map.insert(
         serde_yaml::Value::String("name".to_string()),
         serde_yaml::Value::String(name.to_string()),
     );
-    if let Some(script) = &step.script {
+    if let Some(cmd) = command {
         run_map.insert(
             serde_yaml::Value::String("command".to_string()),
-            serde_yaml::Value::String(script.clone()),
+            serde_yaml::Value::String(cmd.to_string()),
         );
     }
-    if let Some(env) = &step.environment {
+    if let Some(env) = environment {
         let mut env_map = serde_yaml::Mapping::new();
         for (key, value) in env {
             env_map.insert(
@@ -918,7 +935,11 @@ fn build_custom_run_step(name: &str, step: &crate::orb_config::JobGroupStep) -> 
 /// Render a rich-mode job_group: explicit parameter declarations and an ordered,
 /// heterogeneous step list (built-ins, tool commands, third-party orb steps and
 /// custom run steps). The whole job is data declared in the config file.
-fn render_rich_job_group(group: &crate::orb_config::JobGroup) -> String {
+fn render_rich_job_group(
+    group: &crate::orb_config::JobGroup,
+    files: &mut HashMap<PathBuf, String>,
+) -> String {
+    let group_snake = group.name.replace('-', "_");
     let mut parameters: IndexMap<String, OrbParameter> = IndexMap::new();
     if let Some(declared) = &group.parameter {
         for p in declared {
@@ -947,7 +968,22 @@ fn render_rich_job_group(group: &crate::orb_config::JobGroup) -> String {
                 other => steps.push(serde_yaml::Value::String(other.to_string())),
             }
         } else if let Some(run_name) = &step.run {
-            steps.push(build_custom_run_step(run_name, step));
+            // Externalize the script to a scripts/ file and reference it via
+            // <<include(...)>> so the generated orb stays RC009-compliant
+            // (orb-tools flags long inline run commands).
+            let command = step.script.as_ref().map(|script| {
+                let script_name = format!("{group_snake}_{}", snake_case(run_name));
+                files.insert(
+                    PathBuf::from(format!("src/scripts/{script_name}.sh")),
+                    format!("{}\n", script.trim()),
+                );
+                format!("<<include(scripts/{script_name}.sh)>>")
+            });
+            steps.push(build_custom_run_step(
+                run_name,
+                command.as_deref(),
+                step.environment.as_ref(),
+            ));
         } else if let Some(orb_ref) = &step.orb {
             steps.push(build_with_invoke_step(orb_ref, step.with.as_ref()));
         } else if let Some(command) = &step.command {
@@ -987,10 +1023,11 @@ fn render_job_group(
     group: &crate::orb_config::JobGroup,
     cli: &CliDefinition,
     _config: Option<&OrbConfig>,
+    files: &mut HashMap<PathBuf, String>,
 ) -> String {
     // Rich mode (explicit `step` list) takes precedence over the simple `steps` list.
     if group.step.is_some() {
-        return render_rich_job_group(group);
+        return render_rich_job_group(group, files);
     }
     let step_subs: Vec<&SubCommand> = group
         .steps
@@ -2865,19 +2902,45 @@ mod tests {
     }
 
     #[test]
-    fn rich_job_group_run_step_has_name_environment_and_script() {
-        let job = render_rich(rich_build_group());
+    fn rich_job_group_run_step_externalizes_script_to_include() {
+        use crate::orb_config::OrbConfig;
+        let cli = make_cli("mytool", vec![make_leaf("generate", vec![])]);
+        let config = OrbConfig {
+            job_group: Some(vec![rich_build_group()]),
+            ..OrbConfig::default()
+        };
+        let files = generate(&cli, &default_opts(), Some(&config));
+        let job = &files[&PathBuf::from("src/jobs/build_mcp_server.yml")];
+
+        // The run step keeps its name + environment, but the (potentially long)
+        // script is externalized to a scripts file and referenced via include
+        // so the generated orb stays RC009-compliant.
         assert!(
             job.contains("name: Set up git and environment"),
             "run step name must appear:\n{job}"
         );
         assert!(
-            job.contains("git fetch origin main"),
-            "run step script body must appear:\n{job}"
-        );
-        assert!(
             job.contains("TAG_PREFIX: << parameters.tag_prefix >>"),
             "run step environment must appear:\n{job}"
+        );
+        assert!(
+            job.contains("<<include(scripts/build_mcp_server_set_up_git_and_environment.sh)>>"),
+            "run command must be an <<include(...)>>, not inline:\n{job}"
+        );
+        assert!(
+            !job.contains("git fetch origin main"),
+            "script body must NOT be inlined into the job:\n{job}"
+        );
+
+        // The script body lives in its own file.
+        let script = files
+            .get(&PathBuf::from(
+                "src/scripts/build_mcp_server_set_up_git_and_environment.sh",
+            ))
+            .expect("externalized run-step script file must be generated");
+        assert!(
+            script.contains("git fetch origin main"),
+            "externalized script must contain the body:\n{script}"
         );
     }
 
