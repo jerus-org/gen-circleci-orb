@@ -156,7 +156,7 @@ fn render_subcommand(
         let snake = sub.name.replace('-', "_");
         files.insert(
             PathBuf::from(format!("src/commands/{snake}.yml")),
-            render_command(sub),
+            render_command(sub, config),
         );
         if !is_job_suppressed(config, &sub.name) {
             files.insert(
@@ -204,9 +204,40 @@ const RESERVED_JOB_PARAMS: &[&str] = &[
     "post_steps",
 ];
 
-fn render_command(sub: &SubCommand) -> String {
+/// Extract a command's "short about" — the first sentence of its description,
+/// i.e. everything before the double-space (or newline) that separates clap's
+/// short about from its long help. Returns `None` when the result is blank.
+fn short_about(description: &str) -> Option<&str> {
+    let end = description
+        .find("  ")
+        .or_else(|| description.find('\n'))
+        .unwrap_or(description.len());
+    let trimmed = description[..end].trim();
+    (!trimmed.is_empty()).then_some(trimmed)
+}
+
+/// Resolve the display name for a command's `run` step, in priority order:
+/// a curated `label` from the subcommand config, then the command's short
+/// about, then the bare subcommand name.
+fn resolve_run_step_name(sub: &SubCommand, config: Option<&OrbConfig>) -> String {
+    if let Some(label) = config
+        .and_then(|c| c.subcommand.as_ref())
+        .and_then(|m| m.get(&sub.name))
+        .and_then(|sc| sc.label.as_deref())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        return label.to_string();
+    }
+    if let Some(about) = short_about(&sub.description) {
+        return about.to_string();
+    }
+    sub.name.clone()
+}
+
+fn render_command(sub: &SubCommand, config: Option<&OrbConfig>) -> String {
     let parameters = build_command_orb_parameters(sub);
-    let step = build_run_step(sub);
+    let step = build_run_step(sub, &resolve_run_step_name(sub, config));
     let cmd = OrbCommand {
         description: sub.description.clone(),
         parameters,
@@ -552,13 +583,13 @@ fn build_orb_parameters(sub: &SubCommand, skip: &[&str]) -> IndexMap<String, Orb
 
 /// Build the `run:` step for a command, referencing the script file (RC009 compliance).
 /// Adds an `environment:` block so the script can read params as uppercased env vars.
-fn build_run_step(sub: &SubCommand) -> serde_yaml::Value {
+fn build_run_step(sub: &SubCommand, run_name: &str) -> serde_yaml::Value {
     serde_yaml::Value::Mapping({
         let mut m = serde_yaml::Mapping::new();
         let mut run_map = serde_yaml::Mapping::new();
         run_map.insert(
             serde_yaml::Value::String("name".to_string()),
-            serde_yaml::Value::String(sub.name.clone()),
+            serde_yaml::Value::String(run_name.to_string()),
         );
         run_map.insert(
             serde_yaml::Value::String("command".to_string()),
@@ -1398,6 +1429,88 @@ mod tests {
         assert!(
             content.contains("<<include(scripts/generate.sh)>>"),
             "command step must use script include for RC009 compliance:\n{content}"
+        );
+    }
+
+    #[test]
+    fn short_about_takes_text_before_double_space() {
+        assert_eq!(
+            short_about("Populate snapshots from git history  Discovers tags..."),
+            Some("Populate snapshots from git history")
+        );
+    }
+
+    #[test]
+    fn short_about_is_whole_string_when_no_double_space() {
+        assert_eq!(
+            short_about("Generate an MCP server from an orb definition"),
+            Some("Generate an MCP server from an orb definition")
+        );
+    }
+
+    #[test]
+    fn short_about_none_when_empty_or_blank() {
+        assert_eq!(short_about(""), None);
+        assert_eq!(short_about("   "), None);
+    }
+
+    #[test]
+    fn resolve_run_step_name_prefers_curated_label() {
+        let sub = make_leaf("save", vec![]);
+        let mut subcommands = indexmap::IndexMap::new();
+        subcommands.insert(
+            "save".to_string(),
+            crate::orb_config::SubcommandConfig {
+                label: Some("Commit back generated artifacts".to_string()),
+                ..Default::default()
+            },
+        );
+        let config = OrbConfig {
+            subcommand: Some(subcommands),
+            ..Default::default()
+        };
+        assert_eq!(
+            resolve_run_step_name(&sub, Some(&config)),
+            "Commit back generated artifacts"
+        );
+    }
+
+    #[test]
+    fn resolve_run_step_name_falls_back_to_short_about() {
+        let mut sub = make_leaf("generate", vec![]);
+        sub.description = "Generate an MCP server  Long help here.".to_string();
+        // No label configured for this subcommand.
+        assert_eq!(resolve_run_step_name(&sub, None), "Generate an MCP server");
+    }
+
+    #[test]
+    fn resolve_run_step_name_falls_back_to_bare_name_without_description() {
+        let mut sub = make_leaf("prime", vec![]);
+        sub.description = String::new();
+        assert_eq!(resolve_run_step_name(&sub, None), "prime");
+    }
+
+    #[test]
+    fn curated_label_appears_as_command_run_step_name() {
+        let sub = make_leaf("save", vec![]);
+        let cli = make_cli("mytool", vec![sub]);
+        let mut subcommands = indexmap::IndexMap::new();
+        subcommands.insert(
+            "save".to_string(),
+            crate::orb_config::SubcommandConfig {
+                label: Some("Commit back generated artifacts".to_string()),
+                ..Default::default()
+            },
+        );
+        let config = OrbConfig {
+            subcommand: Some(subcommands),
+            ..Default::default()
+        };
+        let files = generate(&cli, &default_opts(), Some(&config));
+        let content = &files[&PathBuf::from("src/commands/save.yml")];
+        assert!(
+            content.contains("name: Commit back generated artifacts"),
+            "curated label must be the run-step name:\n{content}"
         );
     }
 
@@ -2472,6 +2585,7 @@ mod tests {
             SubcommandConfig {
                 generate_job: Some(false),
                 param: None,
+                label: None,
             },
         );
         let config = OrbConfig {
@@ -2498,6 +2612,7 @@ mod tests {
             SubcommandConfig {
                 generate_job: Some(false),
                 param: None,
+                label: None,
             },
         );
         let config = OrbConfig {
@@ -2524,6 +2639,7 @@ mod tests {
             SubcommandConfig {
                 generate_job: Some(false),
                 param: None,
+                label: None,
             },
         );
         let config = OrbConfig {
@@ -2568,6 +2684,7 @@ mod tests {
             SubcommandConfig {
                 generate_job: None,
                 param: Some(param_overrides),
+                label: None,
             },
         );
         let config = OrbConfig {
