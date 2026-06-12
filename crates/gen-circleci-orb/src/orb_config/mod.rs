@@ -318,6 +318,7 @@ steps:
             SubcommandConfig {
                 generate_job: Some(false),
                 param: None,
+                label: None,
             },
         );
         subcommands.insert(
@@ -325,6 +326,7 @@ steps:
             SubcommandConfig {
                 generate_job: None,
                 param: Some(params),
+                label: None,
             },
         );
 

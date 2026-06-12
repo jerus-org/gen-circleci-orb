@@ -50,6 +50,10 @@ pub struct OrbSection {
 pub struct SubcommandConfig {
     pub generate_job: Option<bool>,
     pub param: Option<IndexMap<String, ParamOverride>>,
+    /// Curated display name for the command's `run` step. When unset, the
+    /// generator falls back to the command's short about (the first sentence
+    /// of its `--help`), then to the bare subcommand name.
+    pub label: Option<String>,
 }
 
 #[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq)]

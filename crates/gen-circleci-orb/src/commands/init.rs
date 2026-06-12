@@ -215,6 +215,7 @@ pub(crate) fn build_bootstrap_config(
         SubcommandConfig {
             generate_job: Some(false),
             param: None,
+            label: None,
         },
     );
     OrbConfig {
