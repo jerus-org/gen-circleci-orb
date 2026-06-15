@@ -29,7 +29,7 @@ serde_yaml = "0.9.34"
 indexmap = { version = "2.14.0", features = ["serde"] }
 
 # Parsing
-regex = "1.11.1"
+regex = "1.12.4"
 
 # Configuration
 toml = "0.8"
