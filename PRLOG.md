@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - deps: update dependency orb-tools to v12.4.0(pr [#113])
 - deps: update rust crate console to 0.16.3(pr [#114])
 - deps: update rust crate dialoguer to 0.12.0(pr [#115])
+- deps: update rust crate toml to v1(pr [#118])
 
 ## [0.0.47] - 2026-06-12
 
@@ -452,6 +453,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#113]: https://github.com/jerus-org/gen-circleci-orb/pull/113
 [#114]: https://github.com/jerus-org/gen-circleci-orb/pull/114
 [#115]: https://github.com/jerus-org/gen-circleci-orb/pull/115
+[#118]: https://github.com/jerus-org/gen-circleci-orb/pull/118
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.47...HEAD
 [0.0.47]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.46...v0.0.47
 [0.0.46]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.45...v0.0.46
