@@ -38,4 +38,4 @@ console = "0.15"
 
 # Testing
 trycmd = "1.2.0"
-tempfile = "3.19.1"
+tempfile = "3.27.0"
