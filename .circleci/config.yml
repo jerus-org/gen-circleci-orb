@@ -8,7 +8,7 @@ parameters:
 orbs:
   toolkit: jerus-org/circleci-toolkit@6.3.0
 
-  orb-tools: circleci/orb-tools@12.3.3
+  orb-tools: circleci/orb-tools@12.4.0
 jobs:
   build-binary:
     docker:
