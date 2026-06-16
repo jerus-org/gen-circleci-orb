@@ -5,3 +5,20 @@ orb_dir = "orb"
 
 [subcommand.help]
 generate_job = false
+
+# The `config` subcommands edit gen-circleci-orb.toml from the CLI; they are
+# developer tools, not CI jobs, so suppress their job generation.
+[subcommand."add-job-group"]
+generate_job = false
+
+[subcommand."set-default"]
+generate_job = false
+
+[subcommand.show]
+generate_job = false
+
+[subcommand.suppress]
+generate_job = false
+
+[subcommand.unsuppress]
+generate_job = false
