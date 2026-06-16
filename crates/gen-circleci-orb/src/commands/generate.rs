@@ -102,6 +102,16 @@ pub struct Generate {
     /// Defaults to <output>/gen-circleci-orb.toml when not specified.
     #[arg(long)]
     pub config: Option<PathBuf>,
+
+    /// Suppress auto-record for this run, even when `[record].enabled = true` in
+    /// gen-circleci-orb.toml. Auto-record commits the regenerated orb source back
+    /// to the current branch (GPG-signed) and pushes it, so the published orb
+    /// always reflects the CLI. Whether to record, and the names of the env vars
+    /// holding the signing material, are config-driven (the `[record]` section).
+    /// Use this flag for local, test, and dry runs where no signing material is
+    /// available.
+    #[arg(long)]
+    pub no_record: bool,
 }
 
 /// Convert any git remote URL to a plain HTTPS URL, stripping the `.git` suffix.
@@ -356,8 +366,160 @@ impl Generate {
             "Done: {} created, {} updated, {} unchanged",
             report.created, report.updated, report.unchanged
         );
+
+        // Auto-record is config-driven: only when `[record].enabled = true` and
+        // not suppressed by --no-record / --dry-run. The branch policy is
+        // centralized here so the orb "just works" — we only record on a regular
+        // PR branch, never on `main` or a forked-PR build (see
+        // should_record_on_branch).
+        if !self.no_record && !self.dry_run {
+            if let Some(record) = orb_config.record.as_ref().filter(|r| r.enabled) {
+                if should_record_on_branch(|k| std::env::var(k).ok()) {
+                    record_orb(&orb_root, record)?;
+                } else {
+                    println!(
+                        "Skipping auto-record: not on a recordable PR branch \
+                         (main, forked PR, or no CIRCLE_BRANCH)."
+                    );
+                }
+            }
+        }
         Ok(())
     }
+}
+
+/// Whether the current CI branch is one we should record (commit + push) to.
+/// We only record on a regular PR branch:
+/// - never on `main` — a push there would need branch-protection bypass we
+///   deliberately do not use (the write token has only `contents:write`);
+/// - never on a forked-PR build — no write access to the fork, and CircleCI
+///   withholds context secrets from fork builds anyway;
+/// - never when `CIRCLE_BRANCH` is unset — i.e. local runs, which must not push.
+///
+/// The injectable getter keeps this unit-testable.
+fn should_record_on_branch(get: impl Fn(&str) -> Option<String>) -> bool {
+    let branch = get("CIRCLE_BRANCH").unwrap_or_default();
+    if branch.is_empty() || branch == "main" {
+        return false;
+    }
+    // CIRCLE_PR_REPONAME is set only on builds originating from a fork.
+    if get("CIRCLE_PR_REPONAME")
+        .map(|s| !s.is_empty())
+        .unwrap_or(false)
+    {
+        return false;
+    }
+    true
+}
+
+/// Bot identity + GPG material for recording (committing) the regenerated orb.
+#[derive(Debug)]
+struct RecordEnv {
+    gpg_key_b64: String,
+    gpg_trust: String,
+    user_name: String,
+    user_email: String,
+    sign_key: String,
+    write_token: String,
+}
+
+/// Read the signing material from the environment variables **named** by the
+/// `[record]` config, via `get`. The names are the consumer's choice — this
+/// function never hardcodes a `BOT_*` convention. Returns an error naming the
+/// first missing variable (a real CI misconfiguration when recording is
+/// enabled). The injectable getter keeps this unit-testable.
+fn read_record_env(
+    record: &crate::orb_config::RecordConfig,
+    get: impl Fn(&str) -> Option<String>,
+) -> Result<RecordEnv> {
+    let req = |name: &str| {
+        get(name).ok_or_else(|| {
+            anyhow::anyhow!(
+                "env var `{name}` (named in [record]) is not set, but [record].enabled = true"
+            )
+        })
+    };
+    Ok(RecordEnv {
+        gpg_key_b64: req(&record.gpg_key_env)?,
+        gpg_trust: req(&record.gpg_trust_env)?,
+        user_name: req(&record.user_name_env)?,
+        user_email: req(&record.user_email_env)?,
+        sign_key: req(&record.signing_key_env)?,
+        write_token: req(&record.write_token_env)?,
+    })
+}
+
+/// Build the pcu config for a PR-branch push. The push uses the GitHub token
+/// (`write_token`, named by `[record].write_token_env`) as a PAT with
+/// `contents:write` — no GitHub App / branch-protection bypass is needed because
+/// the target is the PR branch, not a protected branch. Branch/repo are taken
+/// from the standard `CIRCLE_*` vars via the `PCU_` prefix source.
+fn build_pcu_config(write_token: &str) -> Result<config::Config> {
+    let builder = config::Config::builder()
+        .set_default("prlog", "PRLOG.md")?
+        .set_default("branch", "CIRCLE_BRANCH")?
+        .set_default("default_branch", "main")?
+        .set_default("username", "CIRCLE_PROJECT_USERNAME")?
+        .set_default("reponame", "CIRCLE_PROJECT_REPONAME")?
+        .set_override("command", "push")?
+        .add_source(config::Environment::with_prefix("PCU"))
+        .set_override("pat", write_token)?;
+    Ok(builder.build()?)
+}
+
+/// Commit the regenerated orb source under `orb_root` back to the current (PR)
+/// branch (GPG-signed) and push, so the change is reviewable in the PR. No-op if
+/// nothing changed. The commit identity and signing key are passed to pcu
+/// explicitly (via SignConfig), so this does not depend on git-config visibility
+/// in CI.
+fn record_orb(orb_root: &std::path::Path, record: &crate::orb_config::RecordConfig) -> Result<()> {
+    let env = read_record_env(record, |k| std::env::var(k).ok())?;
+    pcu::import_gpg_key(&env.gpg_key_b64, &env.gpg_trust)
+        .map_err(|e| anyhow::anyhow!("GPG import failed: {e}"))?;
+
+    let pcu_config = build_pcu_config(&env.write_token)?;
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let client = rt
+        .block_on(pcu::Client::new_with(&pcu_config))
+        .map_err(|e| anyhow::anyhow!("Failed to create pcu client: {e}"))?;
+
+    use pcu::GitOps;
+    client
+        .stage_paths(&[orb_root])
+        .map_err(|e| anyhow::anyhow!("Failed to stage orb source: {e}"))?;
+
+    // Skip an empty commit when the regenerated orb is identical to HEAD.
+    let repo = git2::Repository::discover(".")
+        .map_err(|e| anyhow::anyhow!("Not inside a git repository: {e}"))?;
+    let mut index = repo.index()?;
+    let new_tree = repo.find_tree(index.write_tree()?)?;
+    let head_tree = repo
+        .head()
+        .ok()
+        .and_then(|h| h.peel_to_commit().ok())
+        .map(|c| c.tree())
+        .transpose()?;
+    let diff = repo.diff_tree_to_tree(head_tree.as_ref(), Some(&new_tree), None)?;
+    if diff.deltas().count() == 0 {
+        println!("Orb source unchanged — nothing to record.");
+        return Ok(());
+    }
+
+    let message = "chore: regenerate orb [skip ci]";
+    let sign_config = pcu::SignConfig::new(pcu::Sign::Gpg)
+        .with_identity(&env.user_name, &env.user_email)
+        .with_signing_key(&env.sign_key);
+    client
+        .commit_staged(sign_config, message, "", None)
+        .map_err(|e| anyhow::anyhow!("Failed to sign and commit regenerated orb: {e}"))?;
+    println!("Recorded regenerated orb: {message}");
+    client
+        .push_commit("", None, false, &env.user_name)
+        .map_err(|e| anyhow::anyhow!("Failed to push regenerated orb: {e}"))?;
+    println!("Pushed regenerated orb to remote.");
+    Ok(())
 }
 
 #[cfg(test)]
@@ -365,6 +527,97 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+
+    // ── read_record_env ─────────────────────────────────────────────────────
+
+    /// A [record] config whose env-var names are deliberately *not* the BOT_*
+    /// convention, proving the names are read from config and not hardcoded.
+    fn custom_record_config() -> crate::orb_config::RecordConfig {
+        crate::orb_config::RecordConfig {
+            enabled: true,
+            gpg_key_env: "MY_GPG_KEY".to_string(),
+            gpg_trust_env: "MY_GPG_TRUST".to_string(),
+            user_name_env: "MY_NAME".to_string(),
+            user_email_env: "MY_EMAIL".to_string(),
+            signing_key_env: "MY_SIGN_KEY".to_string(),
+            write_token_env: "MY_WRITE_TOKEN".to_string(),
+            contexts: vec!["my-signing-context".to_string()],
+        }
+    }
+
+    fn full_custom_env(k: &str) -> Option<String> {
+        match k {
+            "MY_GPG_KEY" => Some("key".to_string()),
+            "MY_GPG_TRUST" => Some("trust".to_string()),
+            "MY_NAME" => Some("Bot Name".to_string()),
+            "MY_EMAIL" => Some("bot@example.com".to_string()),
+            "MY_SIGN_KEY" => Some("DEADBEEF".to_string()),
+            "MY_WRITE_TOKEN" => Some("ghp_token".to_string()),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn read_record_env_reads_vars_named_in_config() {
+        let env =
+            read_record_env(&custom_record_config(), full_custom_env).expect("all vars present");
+        assert_eq!(env.user_name, "Bot Name");
+        assert_eq!(env.user_email, "bot@example.com");
+        assert_eq!(env.sign_key, "DEADBEEF");
+        assert_eq!(env.gpg_key_b64, "key");
+        assert_eq!(env.gpg_trust, "trust");
+        assert_eq!(env.write_token, "ghp_token");
+    }
+
+    // ── should_record_on_branch ─────────────────────────────────────────────
+
+    #[test]
+    fn record_on_regular_pr_branch() {
+        let env = |k: &str| match k {
+            "CIRCLE_BRANCH" => Some("feat/x".to_string()),
+            _ => None,
+        };
+        assert!(should_record_on_branch(env));
+    }
+
+    #[test]
+    fn no_record_on_main() {
+        let env = |k: &str| match k {
+            "CIRCLE_BRANCH" => Some("main".to_string()),
+            _ => None,
+        };
+        assert!(!should_record_on_branch(env));
+    }
+
+    #[test]
+    fn no_record_on_forked_pr() {
+        let env = |k: &str| match k {
+            "CIRCLE_BRANCH" => Some("pull/42".to_string()),
+            "CIRCLE_PR_REPONAME" => Some("contributor-fork".to_string()),
+            _ => None,
+        };
+        assert!(!should_record_on_branch(env));
+    }
+
+    #[test]
+    fn no_record_when_branch_unset_locally() {
+        assert!(!should_record_on_branch(|_| None));
+    }
+
+    #[test]
+    fn read_record_env_errors_on_missing_var() {
+        let missing_name = |k: &str| {
+            if k == "MY_NAME" {
+                None
+            } else {
+                full_custom_env(k)
+            }
+        };
+        let err = read_record_env(&custom_record_config(), missing_name)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("MY_NAME"), "unexpected: {err}");
+    }
 
     // ── normalize_git_remote_url ────────────────────────────────────────────
 

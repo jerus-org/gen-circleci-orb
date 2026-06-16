@@ -2,7 +2,7 @@ mod types;
 
 pub use types::{
     CiSection, ExtraJob, JobGroup, JobGroupParam, JobGroupStep, OrbConfig, OrbSection,
-    ParamOverride, SubcommandConfig,
+    ParamOverride, RecordConfig, SubcommandConfig,
 };
 
 use anyhow::Result;
@@ -353,6 +353,7 @@ steps:
                 ..Default::default()
             }]),
             extra_job: None,
+            record: None,
         };
 
         save_config(&path, &original).unwrap();

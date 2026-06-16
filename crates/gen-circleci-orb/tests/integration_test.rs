@@ -18,6 +18,9 @@ fn generate_gen_orb_mcp_orb() {
             "jerus-org",
             "--output",
             out.path().to_str().unwrap(),
+            // No signing material in the test environment; auto-record is
+            // config-driven and off here, but pass --no-record to be explicit.
+            "--no-record",
         ])
         .status()
         .expect("gen-circleci-orb binary not found");
@@ -114,6 +117,7 @@ fn generate_is_idempotent() {
         "jerus-org",
         "--output",
         out.path().to_str().unwrap(),
+        "--no-record",
     ];
 
     let first = Command::new(binary).args(args).output().unwrap();

@@ -1,0 +1,9 @@
+# Suppressed advisories for `cargo audit`. Single source of truth for
+# cargo-audit ignores (cargo-deny ignores live in deny.toml).
+[advisories]
+ignore = [
+    # RUSTSEC-2023-0071: Marvin Attack timing side-channel in rsa. Transitive
+    # via pcu -> sigstore; no fixed upstream release available. Matches the
+    # suppressions in pcu and gen-orb-mcp.
+    "RUSTSEC-2023-0071",
+]

@@ -34,6 +34,10 @@ pub struct PatchOpts {
     /// CircleCI context providing push authority for MCP server build + publish + save steps.
     /// Only used when `mcp` is true.
     pub mcp_context: Vec<String>,
+    /// CircleCI context(s) the regenerate-orb job attaches when auto-record is
+    /// enabled, supplying the signing material + write token. Empty when
+    /// auto-record is disabled (no context attached).
+    pub record_contexts: Vec<String>,
 }
 
 pub struct PatchReport {
@@ -289,6 +293,15 @@ fn pack_validate_steps(opts: &PatchOpts) -> Vec<String> {
     }
     steps.push(format!("          orb_dir: {orb_dir}"));
     steps.push("          attach_workspace: true".to_string());
+    // Auto-record context(s): supply signing material + write token. The binary
+    // gates recording to PR branches (no-ops on main/forks), so no branch filter
+    // is needed here. Omitted entirely when auto-record is disabled.
+    if !opts.record_contexts.is_empty() {
+        steps.push(format!(
+            "          context: [{}]",
+            opts.record_contexts.join(", ")
+        ));
+    }
     steps.push("          requires: [build-binary]".to_string());
 
     // orb-tools/pack (source_dir + workspace persistence; validates on pack)
@@ -479,6 +492,7 @@ mod tests {
             mcp: false,
             mcp_earliest_version: "1.0.0".to_string(),
             mcp_context: vec!["pcu-app".to_string()],
+            record_contexts: vec![],
         }
     }
 
@@ -494,6 +508,37 @@ mod tests {
             namespaces: vec!["my-org".to_string(), "other-org".to_string()],
             ..make_opts()
         }
+    }
+
+    // ── auto-record context wiring on regenerate-orb ──────────────────────────
+
+    #[test]
+    fn regenerate_orb_gets_record_context_when_enabled() {
+        let opts = PatchOpts {
+            record_contexts: vec!["release".to_string()],
+            ..make_opts()
+        };
+        let steps = pack_validate_steps(&opts).join("\n");
+        assert!(
+            steps.contains("name: regenerate-orb"),
+            "regenerate-orb job must be present"
+        );
+        assert!(
+            steps.contains("context: [release]"),
+            "regenerate-orb must attach the record context:\n{steps}"
+        );
+    }
+
+    #[test]
+    fn regenerate_orb_has_no_context_when_record_disabled() {
+        let opts = make_opts(); // record_contexts empty
+        let steps = pack_validate_steps(&opts).join("\n");
+        // The validation workflow has no other context-bearing job, so any
+        // `context:` line would be the record one leaking in.
+        assert!(
+            !steps.contains("context:"),
+            "no context must be attached when auto-record is disabled:\n{steps}"
+        );
     }
 
     // ── patch_release: now a no-op ────────────────────────────────────────────

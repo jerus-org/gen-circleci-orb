@@ -9,6 +9,48 @@ pub struct OrbConfig {
     pub subcommand: Option<IndexMap<String, SubcommandConfig>>,
     pub job_group: Option<Vec<JobGroup>>,
     pub extra_job: Option<Vec<ExtraJob>>,
+    pub record: Option<RecordConfig>,
+}
+
+/// Auto-record configuration: after `generate`, commit the regenerated orb
+/// source back (GPG-signed) and push it **to the PR branch** so the change is
+/// reviewable, keeping the published orb in sync with the CLI without the dev
+/// maintaining the CLI locally. The fields name the **environment variables**
+/// that hold the signing material and write token at runtime — the names are
+/// the consumer's choice (no defaults), so the tool never dictates an env-var
+/// convention. Only the names are stored here (committed); the secret values
+/// live in the CI context(s).
+///
+/// Write authority is a GitHub token with `contents:write` on the PR branch
+/// (no branch-protection bypass / GitHub App needed, since the push targets the
+/// PR branch, not a protected branch). Naming the write token separately
+/// supports a least-privilege model: the general CI token can be read-only, and
+/// only the record step is given the write token via its context(s).
+///
+/// (Future extension point: an app-id/private-key pair could be supported as an
+/// alternative to `write_token_env` for installations that prefer GitHub App
+/// auth; not implemented yet.)
+#[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq)]
+pub struct RecordConfig {
+    /// Whether auto-record is enabled.
+    pub enabled: bool,
+    /// Name of the env var holding the base64-encoded GPG private key.
+    pub gpg_key_env: String,
+    /// Name of the env var holding the GPG ownertrust export.
+    pub gpg_trust_env: String,
+    /// Name of the env var holding the committer name.
+    pub user_name_env: String,
+    /// Name of the env var holding the committer email.
+    pub user_email_env: String,
+    /// Name of the env var holding the GPG signing key id.
+    pub signing_key_env: String,
+    /// Name of the env var holding a GitHub token with `contents:write` used to
+    /// push the regenerated orb to the PR branch.
+    pub write_token_env: String,
+    /// CircleCI context(s) that supply the values for the env vars named above.
+    /// The record CI job attaches these so the signing material and write token
+    /// are available at runtime.
+    pub contexts: Vec<String>,
 }
 
 /// CI pipeline values gathered at `init` time, stored so future re-runs

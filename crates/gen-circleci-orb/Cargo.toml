@@ -24,6 +24,10 @@ regex.workspace = true
 toml.workspace = true
 dialoguer.workspace = true
 console.workspace = true
+pcu.workspace = true
+config.workspace = true
+git2.workspace = true
+tokio.workspace = true
 
 [features]
 integration = []

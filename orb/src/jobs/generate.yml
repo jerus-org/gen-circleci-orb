@@ -57,6 +57,10 @@ parameters:
     type: string
     description: Path to gen-circleci-orb.toml config file. Defaults to <output>/gen-circleci-orb.toml when not specified
     default: ''
+  no_record:
+    type: boolean
+    description: Suppress auto-record for this run, even when `[record].enabled = true` in gen-circleci-orb.toml. Auto-record commits the regenerated orb source back to the current branch (GPG-signed) and pushes it, so the published orb always reflects the CLI. Whether to record, and the names of the env vars holding the signing material, are config-driven (the `[record]` section). Use this flag for local, test, and dry runs where no signing material is available
+    default: false
   attach_workspace:
     type: boolean
     description: Attach a workspace before running the command (use when the binary was built in a prior job).
@@ -91,3 +95,4 @@ steps:
     apt_packages: << parameters.apt_packages >>
     dry_run: << parameters.dry_run >>
     config: << parameters.config >>
+    no_record: << parameters.no_record >>
