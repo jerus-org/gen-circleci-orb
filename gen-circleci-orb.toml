@@ -2,6 +2,8 @@
 binary = "gen-circleci-orb"
 namespaces = ["jerus-org"]
 orb_dir = "orb"
+# gnupg is required at runtime by `generate --record` (GPG-signed commit-back).
+apt_packages = ["gnupg"]
 
 [subcommand.help]
 generate_job = false

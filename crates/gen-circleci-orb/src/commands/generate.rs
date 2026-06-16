@@ -102,6 +102,13 @@ pub struct Generate {
     /// Defaults to <output>/gen-circleci-orb.toml when not specified.
     #[arg(long)]
     pub config: Option<PathBuf>,
+
+    /// After generating, commit the regenerated orb source back to the current
+    /// branch (GPG-signed) and push, so the published orb always reflects the
+    /// CLI. No-op when the orb source is unchanged. Reads BOT_GPG_KEY, BOT_TRUST,
+    /// BOT_USER_NAME, BOT_USER_EMAIL, BOT_SIGN_KEY and the PCU_/CIRCLE_ vars.
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+    pub record: bool,
 }
 
 /// Convert any git remote URL to a plain HTTPS URL, stripping the `.git` suffix.
@@ -356,8 +363,109 @@ impl Generate {
             "Done: {} created, {} updated, {} unchanged",
             report.created, report.updated, report.unchanged
         );
+
+        if self.record && !self.dry_run {
+            record_orb(&orb_root)?;
+        }
         Ok(())
     }
+}
+
+/// Bot identity + GPG material for recording (committing) the regenerated orb.
+#[derive(Debug)]
+struct RecordEnv {
+    gpg_key_b64: String,
+    gpg_trust: String,
+    user_name: String,
+    user_email: String,
+    sign_key: String,
+}
+
+/// Read the `BOT_*` environment via `get`. Returns an error naming the first
+/// missing variable. The injectable getter keeps this unit-testable.
+fn read_record_env(get: impl Fn(&str) -> Option<String>) -> Result<RecordEnv> {
+    let req = |k: &str| {
+        get(k).ok_or_else(|| anyhow::anyhow!("{k} env var not set (required with --record)"))
+    };
+    Ok(RecordEnv {
+        gpg_key_b64: req("BOT_GPG_KEY")?,
+        gpg_trust: req("BOT_TRUST")?,
+        user_name: req("BOT_USER_NAME")?,
+        user_email: req("BOT_USER_EMAIL")?,
+        sign_key: req("BOT_SIGN_KEY")?,
+    })
+}
+
+/// Build the pcu config. PCU_APP_ID / PCU_PRIVATE_KEY (via the pcu-app context)
+/// are picked up by the PCU_ prefix source for GitHub App auth; GITHUB_TOKEN is
+/// a PAT fallback.
+fn build_pcu_config() -> Result<config::Config> {
+    let mut builder = config::Config::builder()
+        .set_default("prlog", "PRLOG.md")?
+        .set_default("branch", "CIRCLE_BRANCH")?
+        .set_default("default_branch", "main")?
+        .set_default("username", "CIRCLE_PROJECT_USERNAME")?
+        .set_default("reponame", "CIRCLE_PROJECT_REPONAME")?
+        .set_override("command", "push")?
+        .add_source(config::Environment::with_prefix("PCU"));
+    if let Ok(token) = std::env::var("GITHUB_TOKEN") {
+        builder = builder.set_default("pat", token)?;
+    }
+    Ok(builder.build()?)
+}
+
+/// Commit the regenerated orb source under `orb_root` back to the current
+/// branch (GPG-signed) and push. No-op if nothing changed. The commit identity
+/// and signing key are passed to pcu explicitly (via SignConfig), so this does
+/// not depend on git-config visibility in CI.
+fn record_orb(orb_root: &std::path::Path) -> Result<()> {
+    let env = read_record_env(|k| std::env::var(k).ok())?;
+    pcu::import_gpg_key(&env.gpg_key_b64, &env.gpg_trust)
+        .map_err(|e| anyhow::anyhow!("GPG import failed: {e}"))?;
+
+    let pcu_config = build_pcu_config()?;
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let client = rt
+        .block_on(pcu::Client::new_with(&pcu_config))
+        .map_err(|e| anyhow::anyhow!("Failed to create pcu client: {e}"))?;
+
+    use pcu::GitOps;
+    client
+        .stage_paths(&[orb_root])
+        .map_err(|e| anyhow::anyhow!("Failed to stage orb source: {e}"))?;
+
+    // Skip an empty commit when the regenerated orb is identical to HEAD.
+    let repo = git2::Repository::discover(".")
+        .map_err(|e| anyhow::anyhow!("Not inside a git repository: {e}"))?;
+    let mut index = repo.index()?;
+    let new_tree = repo.find_tree(index.write_tree()?)?;
+    let head_tree = repo
+        .head()
+        .ok()
+        .and_then(|h| h.peel_to_commit().ok())
+        .map(|c| c.tree())
+        .transpose()?;
+    let diff = repo.diff_tree_to_tree(head_tree.as_ref(), Some(&new_tree), None)?;
+    if diff.deltas().count() == 0 {
+        println!("Orb source unchanged — nothing to record.");
+        return Ok(());
+    }
+
+    let message = "chore: regenerate orb [skip ci]";
+    let sign_config = pcu::SignConfig::new(pcu::Sign::Gpg)
+        .with_identity(&env.user_name, &env.user_email)
+        .with_signing_key(&env.sign_key);
+    client
+        .commit_staged(sign_config, message, "", None)
+        .map_err(|e| anyhow::anyhow!("Failed to sign and commit regenerated orb: {e}"))?;
+    println!("Recorded regenerated orb: {message}");
+    client
+        .push_commit("", None, false, &env.user_name)
+        .map_err(|e| anyhow::anyhow!("Failed to push regenerated orb: {e}"))?;
+    println!("Pushed regenerated orb to remote.");
+    Ok(())
 }
 
 #[cfg(test)]
@@ -365,6 +473,42 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+
+    // ── read_record_env ─────────────────────────────────────────────────────
+
+    fn full_bot_env(k: &str) -> Option<String> {
+        match k {
+            "BOT_GPG_KEY" => Some("key".to_string()),
+            "BOT_TRUST" => Some("trust".to_string()),
+            "BOT_USER_NAME" => Some("Bot Name".to_string()),
+            "BOT_USER_EMAIL" => Some("bot@example.com".to_string()),
+            "BOT_SIGN_KEY" => Some("DEADBEEF".to_string()),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn read_record_env_reads_all_bot_vars() {
+        let env = read_record_env(full_bot_env).expect("all vars present");
+        assert_eq!(env.user_name, "Bot Name");
+        assert_eq!(env.user_email, "bot@example.com");
+        assert_eq!(env.sign_key, "DEADBEEF");
+        assert_eq!(env.gpg_key_b64, "key");
+        assert_eq!(env.gpg_trust, "trust");
+    }
+
+    #[test]
+    fn read_record_env_errors_on_missing_var() {
+        let missing_name = |k: &str| {
+            if k == "BOT_USER_NAME" {
+                None
+            } else {
+                full_bot_env(k)
+            }
+        };
+        let err = read_record_env(missing_name).unwrap_err().to_string();
+        assert!(err.contains("BOT_USER_NAME"), "unexpected: {err}");
+    }
 
     // ── normalize_git_remote_url ────────────────────────────────────────────
 

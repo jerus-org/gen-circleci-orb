@@ -503,6 +503,8 @@ impl Init {
             apt_packages: vec![],
             dry_run: self.dry_run,
             config: None,
+            // init is a local bootstrap, not a CI run — never auto-record/push.
+            record: false,
         };
         gen.run()?;
 
