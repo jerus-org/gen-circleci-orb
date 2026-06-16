@@ -248,6 +248,31 @@ fn render_command(sub: &SubCommand, config: Option<&OrbConfig>) -> String {
 
 /// Build orb parameters for a command, renaming any restricted names with a
 /// subcommand prefix so they remain usable (e.g. `name` → `generate_name`).
+/// Compute the orb parameter default for a CLI parameter.
+///
+/// Enum params must default to one of their values — `circleci orb validate`
+/// rejects an empty default for an enum — so an enum with no CLI default falls
+/// back to its first value. Other non-required params with no default get an
+/// empty string (the CircleCI convention for "optional/unset").
+fn orb_param_default(p: &crate::help_parser::types::Parameter) -> Option<serde_yaml::Value> {
+    match &p.param_type {
+        ParamType::Boolean => {
+            let val = p.default.as_ref().map(|d| d == "true").unwrap_or(false);
+            Some(serde_yaml::Value::Bool(val))
+        }
+        ParamType::Enum(vals) => {
+            Some(serde_yaml::Value::String(p.default.clone().unwrap_or_else(
+                || vals.first().cloned().unwrap_or_default(),
+            )))
+        }
+        _ if !p.required && p.default.is_none() => Some(serde_yaml::Value::String(String::new())),
+        _ => p
+            .default
+            .as_ref()
+            .map(|d| serde_yaml::Value::String(d.clone())),
+    }
+}
+
 fn build_command_orb_parameters(sub: &SubCommand) -> IndexMap<String, OrbParameter> {
     let mut params = IndexMap::new();
     for p in &sub.parameters {
@@ -258,19 +283,7 @@ fn build_command_orb_parameters(sub: &SubCommand) -> IndexMap<String, OrbParamet
             ParamType::Integer => ("integer".to_string(), None),
             ParamType::Enum(vals) => ("enum".to_string(), Some(vals.clone())),
         };
-        let default = match &p.param_type {
-            ParamType::Boolean => {
-                let val = p.default.as_ref().map(|d| d == "true").unwrap_or(false);
-                Some(serde_yaml::Value::Bool(val))
-            }
-            _ if !p.required && p.default.is_none() => {
-                Some(serde_yaml::Value::String(String::new()))
-            }
-            _ => p
-                .default
-                .as_ref()
-                .map(|d| serde_yaml::Value::String(d.clone())),
-        };
+        let default = orb_param_default(p);
         params.insert(
             orb_name,
             OrbParameter {
@@ -550,24 +563,7 @@ fn build_orb_parameters(sub: &SubCommand, skip: &[&str]) -> IndexMap<String, Orb
             ParamType::Integer => ("integer".to_string(), None),
             ParamType::Enum(vals) => ("enum".to_string(), Some(vals.clone())),
         };
-        let default = match &p.param_type {
-            ParamType::Boolean => {
-                // Clap booleans default to false but never emit [default: false] in help
-                // text. Always supply default: false so orb consumers can omit the param.
-                let val = p.default.as_ref().map(|d| d == "true").unwrap_or(false);
-                Some(serde_yaml::Value::Bool(val))
-            }
-            _ if !p.required && p.default.is_none() => {
-                // Optional CLI flag with no default: use empty string so consumers can
-                // omit the param. The run step uses a mustache conditional, so "" means
-                // the flag is not forwarded to the binary.
-                Some(serde_yaml::Value::String(String::new()))
-            }
-            _ => p
-                .default
-                .as_ref()
-                .map(|d| serde_yaml::Value::String(d.clone())),
-        };
+        let default = orb_param_default(p);
         params.insert(
             p.long_name.clone(),
             OrbParameter {
@@ -720,17 +716,7 @@ fn cli_param_to_orb_param(p: &crate::help_parser::types::Parameter) -> OrbParame
         ParamType::Integer => ("integer".to_string(), None),
         ParamType::Enum(vals) => ("enum".to_string(), Some(vals.clone())),
     };
-    let default = match &p.param_type {
-        ParamType::Boolean => {
-            let val = p.default.as_ref().map(|d| d == "true").unwrap_or(false);
-            Some(serde_yaml::Value::Bool(val))
-        }
-        _ if !p.required && p.default.is_none() => Some(serde_yaml::Value::String(String::new())),
-        _ => p
-            .default
-            .as_ref()
-            .map(|d| serde_yaml::Value::String(d.clone())),
-    };
+    let default = orb_param_default(p);
     OrbParameter {
         param_type: type_str,
         description: p.description.clone(),
@@ -1098,6 +1084,50 @@ fn render_job_group(
 mod tests {
     use super::*;
     use crate::help_parser::types::{ParamType, Parameter, SubCommand};
+
+    #[test]
+    fn enum_param_without_default_uses_first_value() {
+        // An enum param with no CLI default must default to a valid enum value
+        // (the first), never "" — `circleci orb validate` rejects an empty
+        // default for an enum parameter.
+        let p = Parameter {
+            long_name: "install_method".to_string(),
+            short: None,
+            param_type: ParamType::Enum(vec![
+                "binstall".to_string(),
+                "apt".to_string(),
+                "local".to_string(),
+            ]),
+            default: None,
+            required: false,
+            description: "How the binary is installed".to_string(),
+        };
+        let orb = cli_param_to_orb_param(&p);
+        assert_eq!(
+            orb.default,
+            Some(serde_yaml::Value::String("binstall".to_string()))
+        );
+    }
+
+    #[test]
+    fn job_and_command_builders_enum_default_is_first_value() {
+        // Guards all param builders (the job builder was the one originally
+        // missed, producing an invalid empty enum default in jobs/generate.yml).
+        let sub = make_leaf(
+            "demo",
+            vec![Parameter {
+                long_name: "method".to_string(),
+                short: None,
+                param_type: ParamType::Enum(vec!["binstall".to_string(), "apt".to_string()]),
+                default: None,
+                required: false,
+                description: "install method".to_string(),
+            }],
+        );
+        let want = Some(serde_yaml::Value::String("binstall".to_string()));
+        assert_eq!(build_orb_parameters(&sub, &[])["method"].default, want);
+        assert_eq!(build_command_orb_parameters(&sub)["method"].default, want);
+    }
 
     fn make_leaf(name: &str, params: Vec<Parameter>) -> SubCommand {
         SubCommand {
