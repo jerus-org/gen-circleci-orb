@@ -83,17 +83,13 @@ workflows:
           sonarcloud: false
           filters:
             branches:
-              only:
-                - main
-                - /pull\/[0-9]+/
+              only: /pull\/[0-9]+/
       - toolkit/security:
           name: security with sonarcloud
           context: SonarCloud
           filters:
             branches:
-              ignore:
-                - /pull\/[0-9]+/
-                - main
+              ignore: /pull\/[0-9]+/
       - toolkit/code_coverage:
           package: gen-circleci-orb
           filters:

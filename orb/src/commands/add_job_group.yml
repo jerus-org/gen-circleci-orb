@@ -1,6 +1,6 @@
 description: Append a composed job group
 parameters:
-  add-job-group_name:
+  add_job_group_name:
     type: string
     description: Name of the new job group
   steps:
@@ -20,7 +20,7 @@ steps:
     name: Append a composed job group
     command: <<include(scripts/add_job_group.sh)>>
     environment:
-      ADD-JOB-GROUP_NAME: << parameters.add-job-group_name >>
+      ADD_JOB_GROUP_NAME: << parameters.add_job_group_name >>
       STEPS: << parameters.steps >>
       DESCRIPTION: << parameters.description >>
       PARAMS: << parameters.params >>

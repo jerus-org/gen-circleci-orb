@@ -185,7 +185,10 @@ const RESTRICTED_COMMAND_PARAMS: &[&str] = &["name"];
 /// (e.g. `generate` + `name` → `generate_name`).
 fn resolve_command_param_name(subcommand: &str, param: &str) -> String {
     if RESTRICTED_COMMAND_PARAMS.contains(&param) {
-        format!("{subcommand}_{param}")
+        // Snake-case the subcommand: a multi-word subcommand name (e.g.
+        // `add-job-group`) must not leak hyphens into the orb param key or its
+        // derived env var — orb param keys must be snake_case (RC010).
+        format!("{}_{param}", subcommand.replace('-', "_"))
     } else {
         param.to_string()
     }
@@ -1084,6 +1087,26 @@ fn render_job_group(
 mod tests {
     use super::*;
     use crate::help_parser::types::{ParamType, Parameter, SubCommand};
+
+    #[test]
+    fn command_param_name_snake_cases_multiword_subcommand() {
+        // A restricted param under a hyphenated subcommand must be fully
+        // snake_cased so the orb param key passes RC010 (no hyphens).
+        assert_eq!(
+            resolve_command_param_name("add-job-group", "name"),
+            "add_job_group_name"
+        );
+        // Single-word subcommand unchanged.
+        assert_eq!(
+            resolve_command_param_name("generate", "name"),
+            "generate_name"
+        );
+        // Non-restricted param passes through untouched.
+        assert_eq!(
+            resolve_command_param_name("add-job-group", "steps"),
+            "steps"
+        );
+    }
 
     #[test]
     fn enum_param_without_default_uses_first_value() {
