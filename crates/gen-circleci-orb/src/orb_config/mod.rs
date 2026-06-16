@@ -341,6 +341,7 @@ steps:
                 home_url: None,
                 source_url: None,
                 git_push_subcommands: None,
+                custom_files: None,
             }),
             ci: None,
             orbs: None,

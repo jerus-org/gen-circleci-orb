@@ -338,6 +338,7 @@ pub(crate) fn build_bootstrap_config(
             } else {
                 Some(git_push_subcommands.to_vec())
             },
+            custom_files: None,
         }),
         ci: None, // populated by run() after gathering extras
         orbs: None,

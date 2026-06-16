@@ -4,6 +4,26 @@ namespaces = ["jerus-org"]
 orb_dir = "orb"
 # gnupg is required at runtime by `generate --record` (GPG-signed commit-back).
 apt_packages = ["gnupg"]
+# Hand-authored orb infrastructure (build/release commands, jobs and scripts)
+# that `generate` does not produce. Registered here so the prune step preserves
+# them — the orb tree is otherwise fully owned by (CLI subcommands ∪ config).
+custom_files = [
+    "src/commands/build_container.yml",
+    "src/commands/build_rust_binary.yml",
+    "src/commands/set_https_remote.yml",
+    "src/jobs/build_container.yml",
+    "src/jobs/build_mcp_server.yml",
+    "src/jobs/build_rust_binary.yml",
+    "src/scripts/build-container.sh",
+    "src/scripts/build-mcp-server-generate.sh",
+    "src/scripts/build-mcp-server-prime.sh",
+    "src/scripts/build-mcp-server-publish.sh",
+    "src/scripts/build-mcp-server-save.sh",
+    "src/scripts/build-mcp-server-setup.sh",
+    "src/scripts/build-rust-binary.sh",
+    "src/scripts/persist-binary.sh",
+    "src/scripts/set_https_remote.sh",
+]
 
 [subcommand.help]
 generate_job = false
