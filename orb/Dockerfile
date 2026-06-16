@@ -20,7 +20,7 @@ RUN apt-get update \
 
 FROM debian:13-slim
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates git \
+    && apt-get install -y --no-install-recommends ca-certificates git gnupg \
     && rm -rf /var/lib/apt/lists/* \
     && useradd -ms /bin/bash circleci
 COPY --from=builder /usr/local/cargo/bin/gen-circleci-orb /usr/local/bin/gen-circleci-orb
