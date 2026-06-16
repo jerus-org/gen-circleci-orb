@@ -1,1 +1,1 @@
-echo "export PATH=\"${WORKSPACE_ROOT}:\$PATH\"" >> "$BASH_ENV"
+export PATH="${WORKSPACE_ROOT}:${PATH}"

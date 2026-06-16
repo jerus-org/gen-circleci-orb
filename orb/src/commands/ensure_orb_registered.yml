@@ -9,7 +9,7 @@ parameters:
     default: false
 steps:
 - run:
-    name: ensure-orb-registered
+    name: Ensure a CircleCI orb is registered, creating it if it does not exist
     command: <<include(scripts/ensure_orb_registered.sh)>>
     environment:
       ORB_NAME: << parameters.orb_name >>

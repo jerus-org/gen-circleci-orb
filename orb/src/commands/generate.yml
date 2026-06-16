@@ -2,37 +2,40 @@ description: Generate orb source files from a CLI binary's --help output
 parameters:
   binary:
     type: string
-    description: Name of the binary to introspect (must be on PATH)
+    description: Name of the binary to introspect (must be on PATH). Falls back to `binary` in the [orb] section of gen-circleci-orb.toml
+    default: ''
   orb_namespace:
     type: string
-    description: CircleCI orb namespace(s) to publish the orb under (repeatable)
+    description: CircleCI orb namespace(s) to publish the orb under (repeatable). Falls back to `namespaces` in the [orb] section of gen-circleci-orb.toml
+    default: ''
   output:
     type: string
     description: Project root directory (orb source is written to <output>/<orb-dir>/)
     default: .
   install_method:
     type: enum
-    description: How the binary is installed in the generated Docker image
+    description: How the binary is installed in the generated Docker image. Falls back to `install_method` in the [orb] section of gen-circleci-orb.toml, then "binstall"
     default: binstall
     enum:
     - binstall
     - apt
+    - local
   base_image:
     type: string
-    description: Base Docker image for the generated executor
-    default: debian:12-slim
+    description: Base Docker image for the generated executor. Falls back to `base_image` in the [orb] section of gen-circleci-orb.toml, then "debian:13-slim"
+    default: ''
   home_url:
     type: string
-    description: Home URL for the orb registry display section
+    description: Home URL for the orb registry display section. Falls back to `home_url` in the [orb] section of gen-circleci-orb.toml
     default: ''
   source_url:
     type: string
-    description: Source URL for the orb registry display section
+    description: Source URL for the orb registry display section. Falls back to `source_url` in the [orb] section of gen-circleci-orb.toml
     default: ''
   orb_dir:
     type: string
-    description: 'Subdirectory within --output where orb source is written (default: orb)'
-    default: orb
+    description: Subdirectory within --output where orb source is written. Falls back to `orb_dir` in the [orb] section of gen-circleci-orb.toml, then "orb"
+    default: ''
   git_push_subcommand:
     type: string
     description: Subcommand name(s) whose generated jobs should include a set_https_remote step (repeatable). Use for subcommands that push to git, e.g. --git-push-subcommand save
@@ -49,9 +52,13 @@ parameters:
     type: boolean
     description: Show planned output without writing any files
     default: false
+  config:
+    type: string
+    description: Path to gen-circleci-orb.toml config file. Defaults to <output>/gen-circleci-orb.toml when not specified
+    default: ''
 steps:
 - run:
-    name: generate
+    name: Generate orb source files from a CLI binary's --help output
     command: <<include(scripts/generate.sh)>>
     environment:
       BINARY: << parameters.binary >>
@@ -66,3 +73,4 @@ steps:
       CIRCLECI_CLI_VERSION: << parameters.circleci_cli_version >>
       APT_PACKAGES: << parameters.apt_packages >>
       DRY_RUN: << parameters.dry_run >>
+      CONFIG: << parameters.config >>

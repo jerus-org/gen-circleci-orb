@@ -8,4 +8,4 @@ usage:
     use-my-orb:
       jobs:
         - gen-circleci-orb/ensure_orb_registered:
-            orb_name: my-value
+            orb_name: your-orb-name
