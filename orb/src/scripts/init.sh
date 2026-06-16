@@ -21,5 +21,13 @@ set -- "$@" --docker-namespace "${DOCKER_NAMESPACE}"
 [[ -n "${GIT_PUSH_SUBCOMMANDS:-}" ]] && set -- "$@" --git-push-subcommands "${GIT_PUSH_SUBCOMMANDS}"
 [[ -n "${HOME_URL:-}" ]] && set -- "$@" --home-url "${HOME_URL}"
 [[ -n "${SOURCE_URL:-}" ]] && set -- "$@" --source-url "${SOURCE_URL}"
+[[ "${RECORD:-false}" = "true" ]] && set -- "$@" --record
+[[ -n "${RECORD_GPG_KEY_ENV:-}" ]] && set -- "$@" --record-gpg-key-env "${RECORD_GPG_KEY_ENV}"
+[[ -n "${RECORD_GPG_TRUST_ENV:-}" ]] && set -- "$@" --record-gpg-trust-env "${RECORD_GPG_TRUST_ENV}"
+[[ -n "${RECORD_USER_NAME_ENV:-}" ]] && set -- "$@" --record-user-name-env "${RECORD_USER_NAME_ENV}"
+[[ -n "${RECORD_USER_EMAIL_ENV:-}" ]] && set -- "$@" --record-user-email-env "${RECORD_USER_EMAIL_ENV}"
+[[ -n "${RECORD_SIGNING_KEY_ENV:-}" ]] && set -- "$@" --record-signing-key-env "${RECORD_SIGNING_KEY_ENV}"
+[[ -n "${RECORD_WRITE_TOKEN_ENV:-}" ]] && set -- "$@" --record-write-token-env "${RECORD_WRITE_TOKEN_ENV}"
+[[ -n "${RECORD_CONTEXT:-}" ]] && set -- "$@" --record-context "${RECORD_CONTEXT}"
 [[ "${DRY_RUN:-false}" = "true" ]] && set -- "$@" --dry-run
 "$@"

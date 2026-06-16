@@ -24,3 +24,22 @@ generate_job = false
 
 [subcommand.unsuppress]
 generate_job = false
+
+# Auto-record: after `generate` regenerates the orb, the CI job commits the orb
+# source back (GPG-signed) and pushes it to the PR branch so the change is
+# reviewable, keeping the published orb in sync with the CLI. The values below
+# are the *names* of the env vars holding the signing material and write token
+# at runtime; the secret values themselves are never committed. The write token
+# needs only contents:write on the PR branch (no GitHub App / bypass).
+[record]
+enabled = true
+gpg_key_env = "BOT_GPG_KEY"
+gpg_trust_env = "BOT_TRUST"
+user_name_env = "BOT_USER_NAME"
+user_email_env = "BOT_USER_EMAIL"
+signing_key_env = "BOT_SIGN_KEY"
+write_token_env = "GITHUB_TOKEN"
+# Context(s) the record CI job attaches to obtain the values above:
+# `release` supplies the BOT_* signing material; `bot-check` supplies the
+# GITHUB_TOKEN (contents:write) used to push to the PR branch.
+contexts = ["release", "bot-check"]

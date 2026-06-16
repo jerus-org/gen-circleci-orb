@@ -6,7 +6,7 @@ use crate::{
     ci_patcher,
     commands::generate::Generate,
     help_parser::types::CliDefinition,
-    orb_config::{CiSection, OrbConfig, OrbSection, SubcommandConfig},
+    orb_config::{CiSection, OrbConfig, OrbSection, RecordConfig, SubcommandConfig},
 };
 
 pub const DEFAULT_DOCKER_ORB_VERSION: &str = "3.0.1";
@@ -25,10 +25,64 @@ pub(crate) struct GatheredExtras {
     pub orb_context: String,
     pub mcp_context: Vec<String>,
     pub mcp_earliest_version: String,
+    pub record: Option<RecordConfig>,
 }
 
 fn is_non_interactive(dry_run: bool) -> bool {
     dry_run || std::env::var("CI").is_ok() || !console::Term::stderr().is_term()
+}
+
+/// Assemble the `[record]` config from explicit env-var names. Returns `Ok(None)`
+/// when auto-record is not enabled. When enabled, every name must be present and
+/// non-empty — there are no defaults, so the tool never imposes an env-var
+/// convention on the consumer. Errors naming the first missing flag otherwise.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_record_config(
+    enabled: bool,
+    gpg_key_env: Option<&str>,
+    gpg_trust_env: Option<&str>,
+    user_name_env: Option<&str>,
+    user_email_env: Option<&str>,
+    signing_key_env: Option<&str>,
+    write_token_env: Option<&str>,
+    contexts: &[String],
+) -> Result<Option<RecordConfig>> {
+    if !enabled {
+        return Ok(None);
+    }
+    let req = |v: Option<&str>, flag: &str| -> Result<String> {
+        v.map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "auto-record is enabled but {flag} was not provided \
+                     (no default — supply the env-var name)"
+                )
+            })
+    };
+    let contexts: Vec<String> = contexts
+        .iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if contexts.is_empty() {
+        anyhow::bail!(
+            "auto-record is enabled but no --record-context was provided \
+             (the record job needs the CircleCI context(s) that supply the signing \
+             material and push token)"
+        );
+    }
+    Ok(Some(RecordConfig {
+        enabled: true,
+        gpg_key_env: req(gpg_key_env, "--record-gpg-key-env")?,
+        gpg_trust_env: req(gpg_trust_env, "--record-gpg-trust-env")?,
+        user_name_env: req(user_name_env, "--record-user-name-env")?,
+        user_email_env: req(user_email_env, "--record-user-email-env")?,
+        signing_key_env: req(signing_key_env, "--record-signing-key-env")?,
+        write_token_env: req(write_token_env, "--record-write-token-env")?,
+        contexts,
+    }))
 }
 
 /// Detect leaf subcommands that have a required `orb_path` parameter.
@@ -196,6 +250,45 @@ pub struct Init {
     #[arg(long)]
     pub source_url: Option<String>,
 
+    /// Enable auto-record: after `generate`, the regenerate-orb CI job commits the
+    /// regenerated orb source back (GPG-signed) and pushes it, so the published orb
+    /// always reflects the CLI. When set, the five `--record-*-env` flags name the
+    /// environment variables that hold the signing material at runtime (no defaults —
+    /// they must be supplied). Prompted interactively if not set.
+    #[arg(long)]
+    pub record: bool,
+
+    /// Name of the env var holding the base64-encoded GPG private key (auto-record).
+    #[arg(long)]
+    pub record_gpg_key_env: Option<String>,
+
+    /// Name of the env var holding the GPG ownertrust export (auto-record).
+    #[arg(long)]
+    pub record_gpg_trust_env: Option<String>,
+
+    /// Name of the env var holding the committer name (auto-record).
+    #[arg(long)]
+    pub record_user_name_env: Option<String>,
+
+    /// Name of the env var holding the committer email (auto-record).
+    #[arg(long)]
+    pub record_user_email_env: Option<String>,
+
+    /// Name of the env var holding the GPG signing key id (auto-record).
+    #[arg(long)]
+    pub record_signing_key_env: Option<String>,
+
+    /// Name of the env var holding a GitHub token with contents:write, used to
+    /// push the regenerated orb to the PR branch (auto-record).
+    #[arg(long)]
+    pub record_write_token_env: Option<String>,
+
+    /// CircleCI context(s) that supply the auto-record env-var values
+    /// (signing material + write token), repeatable or comma-separated.
+    /// The record CI job attaches these.
+    #[arg(long = "record-context", value_delimiter = ',')]
+    pub record_contexts: Vec<String>,
+
     /// Show planned changes without modifying any files.
     #[arg(long)]
     pub dry_run: bool,
@@ -251,10 +344,119 @@ pub(crate) fn build_bootstrap_config(
         subcommand: Some(subcommands),
         job_group: None,
         extra_job: None,
+        record: None, // populated by run() after gathering extras
     }
 }
 
 impl Init {
+    /// Gather the `[record]` config. Name resolution: CLI flag > existing config.
+    /// Non-interactive mode assembles from those sources (erroring if enabled but a
+    /// name is missing); interactive mode confirms the need then prompts for each
+    /// env-var name (no defaults beyond the user's own prior config).
+    fn gather_record(&self, existing: &OrbConfig) -> Result<Option<RecordConfig>> {
+        let ex = existing.record.as_ref();
+        let resolve = |cli: Option<&String>, prev: Option<&str>| -> Option<String> {
+            cli.filter(|s| !s.is_empty())
+                .cloned()
+                .or_else(|| prev.map(str::to_string))
+        };
+        let gpg_key = resolve(
+            self.record_gpg_key_env.as_ref(),
+            ex.map(|r| r.gpg_key_env.as_str()),
+        );
+        let gpg_trust = resolve(
+            self.record_gpg_trust_env.as_ref(),
+            ex.map(|r| r.gpg_trust_env.as_str()),
+        );
+        let user_name = resolve(
+            self.record_user_name_env.as_ref(),
+            ex.map(|r| r.user_name_env.as_str()),
+        );
+        let user_email = resolve(
+            self.record_user_email_env.as_ref(),
+            ex.map(|r| r.user_email_env.as_str()),
+        );
+        let sign_key = resolve(
+            self.record_signing_key_env.as_ref(),
+            ex.map(|r| r.signing_key_env.as_str()),
+        );
+        let write_token = resolve(
+            self.record_write_token_env.as_ref(),
+            ex.map(|r| r.write_token_env.as_str()),
+        );
+        let contexts: Vec<String> = if !self.record_contexts.is_empty() {
+            self.record_contexts.clone()
+        } else {
+            ex.map(|r| r.contexts.clone()).unwrap_or_default()
+        };
+
+        if is_non_interactive(self.dry_run) {
+            let enabled = self.record || ex.map(|r| r.enabled).unwrap_or(false);
+            return build_record_config(
+                enabled,
+                gpg_key.as_deref(),
+                gpg_trust.as_deref(),
+                user_name.as_deref(),
+                user_email.as_deref(),
+                sign_key.as_deref(),
+                write_token.as_deref(),
+                &contexts,
+            );
+        }
+
+        let enabled = if self.record {
+            true
+        } else {
+            dialoguer::Confirm::new()
+                .with_prompt("Enable auto-record (CI signs + pushes the regenerated orb)?")
+                .default(ex.map(|r| r.enabled).unwrap_or(false))
+                .interact()?
+        };
+        if !enabled {
+            return Ok(None);
+        }
+
+        use dialoguer::Input;
+        let prompt_name = |label: &str, current: Option<String>| -> Result<String> {
+            let mut input = Input::<String>::new().with_prompt(label);
+            if let Some(c) = current.filter(|s| !s.is_empty()) {
+                input = input.default(c);
+            }
+            Ok(input.interact_text()?)
+        };
+        let gpg_key = prompt_name("Env var name — base64 GPG private key", gpg_key)?;
+        let gpg_trust = prompt_name("Env var name — GPG ownertrust export", gpg_trust)?;
+        let user_name = prompt_name("Env var name — committer name", user_name)?;
+        let user_email = prompt_name("Env var name — committer email", user_email)?;
+        let sign_key = prompt_name("Env var name — GPG signing key id", sign_key)?;
+        let write_token = prompt_name("Env var name — GitHub token (contents:write)", write_token)?;
+        let contexts_default = if contexts.is_empty() {
+            None
+        } else {
+            Some(contexts.join(","))
+        };
+        let contexts_raw = prompt_name(
+            "CircleCI context(s) supplying these values + push token, comma-separated",
+            contexts_default,
+        )?;
+        let contexts: Vec<String> = contexts_raw
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect();
+        build_record_config(
+            true,
+            Some(&gpg_key),
+            Some(&gpg_trust),
+            Some(&user_name),
+            Some(&user_email),
+            Some(&sign_key),
+            Some(&write_token),
+            &contexts,
+        )
+    }
+
     pub(crate) fn gather_extras(
         &self,
         detected: &[String],
@@ -263,6 +465,7 @@ impl Init {
         // Resolution order: CLI flag > existing config > auto-detected / hardcoded default.
         let existing_ci = existing.ci.as_ref();
         let existing_orb = existing.orb.as_ref();
+        let record = self.gather_record(existing)?;
 
         let effective_push = if !self.git_push_subcommands.is_empty() {
             self.git_push_subcommands.clone()
@@ -307,6 +510,7 @@ impl Init {
                     .clone()
                     .or_else(|| existing_ci.and_then(|ci| ci.mcp_earliest_version.clone()))
                     .unwrap_or_else(|| DEFAULT_MCP_EARLIEST_VERSION.to_string()),
+                record,
             });
         }
 
@@ -462,6 +666,7 @@ impl Init {
             orb_context,
             mcp_context,
             mcp_earliest_version,
+            record,
         })
     }
 
@@ -504,7 +709,7 @@ impl Init {
             dry_run: self.dry_run,
             config: None,
             // init is a local bootstrap, not a CI run — never auto-record/push.
-            record: false,
+            no_record: true,
         };
         gen.run()?;
 
@@ -528,6 +733,11 @@ impl Init {
             mcp: self.mcp,
             mcp_earliest_version: extras.mcp_earliest_version.clone(),
             mcp_context: extras.mcp_context.clone(),
+            record_contexts: extras
+                .record
+                .as_ref()
+                .map(|r| r.contexts.clone())
+                .unwrap_or_default(),
         };
 
         let summary = ci_patcher::apply_patches(&self.ci_dir, &opts, self.dry_run)?;
@@ -559,6 +769,7 @@ impl Init {
             mcp_context: Some(extras.mcp_context.clone()),
             mcp_earliest_version: Some(extras.mcp_earliest_version.clone()),
         });
+        bootstrap.record = extras.record.clone();
         if self.dry_run {
             let content = toml::to_string_pretty(&bootstrap)?;
             println!("(dry-run) Would write {}", config_path.display());
@@ -664,6 +875,14 @@ mod tests {
             git_push_subcommands: vec!["save".to_string()],
             home_url: None,
             source_url: None,
+            record: false,
+            record_gpg_key_env: None,
+            record_gpg_trust_env: None,
+            record_user_name_env: None,
+            record_user_email_env: None,
+            record_signing_key_env: None,
+            record_write_token_env: None,
+            record_contexts: vec![],
         };
         assert_eq!(
             init.git_push_subcommands,
@@ -971,7 +1190,99 @@ mod tests {
             git_push_subcommands: vec![],
             home_url: None,
             source_url: None,
+            record: false,
+            record_gpg_key_env: None,
+            record_gpg_trust_env: None,
+            record_user_name_env: None,
+            record_user_email_env: None,
+            record_signing_key_env: None,
+            record_write_token_env: None,
+            record_contexts: vec![],
         }
+    }
+
+    // ── build_record_config ─────────────────────────────────────────────────
+
+    #[test]
+    fn build_record_config_disabled_returns_none() {
+        let rec = build_record_config(false, None, None, None, None, None, None, &[])
+            .expect("disabled is ok");
+        assert!(rec.is_none(), "disabled must yield no [record] section");
+    }
+
+    #[test]
+    fn build_record_config_collects_names_and_contexts() {
+        let rec = build_record_config(
+            true,
+            Some("G_KEY"),
+            Some("G_TRUST"),
+            Some("G_NAME"),
+            Some("G_EMAIL"),
+            Some("G_SIGN"),
+            Some("G_TOKEN"),
+            &["release".to_string()],
+        )
+        .expect("all values present")
+        .expect("enabled yields Some");
+        assert!(rec.enabled);
+        assert_eq!(rec.gpg_key_env, "G_KEY");
+        assert_eq!(rec.signing_key_env, "G_SIGN");
+        assert_eq!(rec.write_token_env, "G_TOKEN");
+        assert_eq!(rec.contexts, vec!["release"]);
+    }
+
+    #[test]
+    fn build_record_config_errors_when_enabled_without_name() {
+        let err = build_record_config(
+            true,
+            None, // missing gpg key env name
+            Some("G_TRUST"),
+            Some("G_NAME"),
+            Some("G_EMAIL"),
+            Some("G_SIGN"),
+            Some("G_TOKEN"),
+            &["release".to_string()],
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("--record-gpg-key-env"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn build_record_config_errors_when_enabled_without_write_token() {
+        let err = build_record_config(
+            true,
+            Some("G_KEY"),
+            Some("G_TRUST"),
+            Some("G_NAME"),
+            Some("G_EMAIL"),
+            Some("G_SIGN"),
+            None, // missing write token env name
+            &["release".to_string()],
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("--record-write-token-env"),
+            "unexpected: {err}"
+        );
+    }
+
+    #[test]
+    fn build_record_config_errors_when_enabled_without_context() {
+        let err = build_record_config(
+            true,
+            Some("G_KEY"),
+            Some("G_TRUST"),
+            Some("G_NAME"),
+            Some("G_EMAIL"),
+            Some("G_SIGN"),
+            Some("G_TOKEN"),
+            &[], // no context supplied
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("--record-context"), "unexpected: {err}");
     }
 
     #[test]

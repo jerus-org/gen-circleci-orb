@@ -1,0 +1,19 @@
+description: Set or update a parameter default override for a subcommand
+parameters:
+  subcommand:
+    type: string
+    description: Subcommand name
+  param:
+    type: string
+    description: Parameter name
+  default:
+    type: string
+    description: New default value
+steps:
+- run:
+    name: Set or update a parameter default override for a subcommand
+    command: <<include(scripts/set_default.sh)>>
+    environment:
+      SUBCOMMAND: << parameters.subcommand >>
+      PARAM: << parameters.param >>
+      DEFAULT: << parameters.default >>

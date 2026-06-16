@@ -1,0 +1,26 @@
+description: Append a composed job group
+parameters:
+  add-job-group_name:
+    type: string
+    description: Name of the new job group
+  steps:
+    type: string
+    description: Comma-separated list of subcommand step names
+    default: ''
+  description:
+    type: string
+    description: Optional description for the job group
+    default: ''
+  params:
+    type: string
+    description: Comma-separated explicit parameter list (omit for auto-detected shared params)
+    default: ''
+steps:
+- run:
+    name: Append a composed job group
+    command: <<include(scripts/add_job_group.sh)>>
+    environment:
+      ADD-JOB-GROUP_NAME: << parameters.add-job-group_name >>
+      STEPS: << parameters.steps >>
+      DESCRIPTION: << parameters.description >>
+      PARAMS: << parameters.params >>

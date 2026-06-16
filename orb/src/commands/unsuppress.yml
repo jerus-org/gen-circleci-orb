@@ -1,0 +1,5 @@
+description: Re-enable job generation for a previously suppressed subcommand
+steps:
+- run:
+    name: Re-enable job generation for a previously suppressed subcommand
+    command: <<include(scripts/unsuppress.sh)>>

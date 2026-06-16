@@ -82,6 +82,38 @@ parameters:
     type: string
     description: Source URL for the orb (shown in the CircleCI registry)
     default: ''
+  record:
+    type: boolean
+    description: 'Enable auto-record: after `generate`, the regenerate-orb CI job commits the regenerated orb source back (GPG-signed) and pushes it, so the published orb always reflects the CLI. When set, the five `--record-*-env` flags name the environment variables that hold the signing material at runtime (no defaults — they must be supplied). Prompted interactively if not set'
+    default: false
+  record_gpg_key_env:
+    type: string
+    description: Name of the env var holding the base64-encoded GPG private key (auto-record)
+    default: ''
+  record_gpg_trust_env:
+    type: string
+    description: Name of the env var holding the GPG ownertrust export (auto-record)
+    default: ''
+  record_user_name_env:
+    type: string
+    description: Name of the env var holding the committer name (auto-record)
+    default: ''
+  record_user_email_env:
+    type: string
+    description: Name of the env var holding the committer email (auto-record)
+    default: ''
+  record_signing_key_env:
+    type: string
+    description: Name of the env var holding the GPG signing key id (auto-record)
+    default: ''
+  record_write_token_env:
+    type: string
+    description: Name of the env var holding a GitHub token with contents:write, used to push the regenerated orb to the PR branch (auto-record)
+    default: ''
+  record_context:
+    type: string
+    description: CircleCI context(s) that supply the auto-record env-var values (signing material + write token), repeatable or comma-separated. The record CI job attaches these
+    default: ''
   dry_run:
     type: boolean
     description: Show planned changes without modifying any files
@@ -113,4 +145,12 @@ steps:
       GIT_PUSH_SUBCOMMANDS: << parameters.git_push_subcommands >>
       HOME_URL: << parameters.home_url >>
       SOURCE_URL: << parameters.source_url >>
+      RECORD: << parameters.record >>
+      RECORD_GPG_KEY_ENV: << parameters.record_gpg_key_env >>
+      RECORD_GPG_TRUST_ENV: << parameters.record_gpg_trust_env >>
+      RECORD_USER_NAME_ENV: << parameters.record_user_name_env >>
+      RECORD_USER_EMAIL_ENV: << parameters.record_user_email_env >>
+      RECORD_SIGNING_KEY_ENV: << parameters.record_signing_key_env >>
+      RECORD_WRITE_TOKEN_ENV: << parameters.record_write_token_env >>
+      RECORD_CONTEXT: << parameters.record_context >>
       DRY_RUN: << parameters.dry_run >>

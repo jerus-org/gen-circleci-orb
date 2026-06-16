@@ -12,5 +12,5 @@ set -- gen-circleci-orb generate
 [[ -n "${APT_PACKAGES:-}" ]] && set -- "$@" --apt-packages "${APT_PACKAGES}"
 [[ "${DRY_RUN:-false}" = "true" ]] && set -- "$@" --dry-run
 [[ -n "${CONFIG:-}" ]] && set -- "$@" --config "${CONFIG}"
-[[ -n "${RECORD:-}" ]] && set -- "$@" --record "${RECORD}"
+[[ "${NO_RECORD:-false}" = "true" ]] && set -- "$@" --no-record
 "$@"

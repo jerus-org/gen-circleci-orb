@@ -29,7 +29,14 @@ jobs:
       - attach_workspace:
           at: /tmp/bin
       - run:
+          name: Install gnupg (required by auto-record GPG signing)
+          command: apt-get update && apt-get install -y gnupg
+      - run:
           name: Regenerate orb source
+          # Auto-record ([record] in gen-circleci-orb.toml) is gated inside the
+          # binary: it records (signed commit + push to the PR branch) only on a
+          # regular PR branch, and no-ops on main / forked PRs. The `release`
+          # context (attached in the workflow) supplies BOT_* + GITHUB_TOKEN.
           command: |
             export PATH="/tmp/bin:$PATH"
             gen-circleci-orb generate \
@@ -99,6 +106,10 @@ workflows:
       - build-binary:
           requires: [toolkit/common_tests]
       - regenerate-orb:
+          # `release` provides BOT_* signing material; `bot-check` provides
+          # GITHUB_TOKEN (contents:write). Auto-record fires only on PR branches;
+          # no-ops on main/forks (binary-gated).
+          context: [release, bot-check]
           requires: [build-binary]
       - orb-tools/pack:
           name: pack-orb
