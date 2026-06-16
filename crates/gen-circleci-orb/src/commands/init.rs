@@ -210,14 +210,26 @@ pub(crate) fn build_bootstrap_config(
     git_push_subcommands: &[String],
 ) -> OrbConfig {
     let mut subcommands = IndexMap::new();
-    subcommands.insert(
-        "help".to_string(),
-        SubcommandConfig {
-            generate_job: Some(false),
-            param: None,
-            label: None,
-        },
-    );
+    // Suppress job generation for the built-in `help` command and for the
+    // `config` subcommands — the latter edit gen-circleci-orb.toml from the CLI
+    // and are developer tools, not CI jobs. (No-op for binaries lacking them.)
+    for name in [
+        "help",
+        "add-job-group",
+        "set-default",
+        "show",
+        "suppress",
+        "unsuppress",
+    ] {
+        subcommands.insert(
+            name.to_string(),
+            SubcommandConfig {
+                generate_job: Some(false),
+                param: None,
+                label: None,
+            },
+        );
+    }
     OrbConfig {
         orb: Some(OrbSection {
             binary: Some(binary.to_string()),

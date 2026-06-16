@@ -49,28 +49,40 @@ parameters:
     description: Docker Hub (or registry) namespace for the built container image
   docker_context:
     type: string
-    description: CircleCI context name holding Docker Hub credentials
-    default: docker-credentials
+    description: CircleCI context name holding Docker Hub credentials (DOCKER_LOGIN, DOCKER_PASSWORD). Prompted interactively if not supplied
+    default: ''
   orb_context:
     type: string
-    description: CircleCI context name holding orb publishing credentials
-    default: orb-publishing
+    description: CircleCI context name holding orb publishing credentials (CIRCLECI_CLI_TOKEN). Prompted interactively if not supplied
+    default: ''
   gen_circleci_orb_version:
     type: string
     description: Version of the jerus-org/gen-circleci-orb orb to pin in generated CI. Defaults to the version of this binary (orb and crate are released together)
-    default: 0.0.31
+    default: 0.0.47
   mcp:
     type: boolean
     description: Wire in gen-orb-mcp MCP server generation + publish after orb publish
     default: false
   mcp_earliest_version:
     type: string
-    description: Earliest orb version to include when priming prior-version snapshots. Passed to gen-circleci-orb/build_mcp_server as `earliest_version`. Only used when --mcp is enabled
-    default: 0.0.1
+    description: Earliest orb version to include when priming prior-version snapshots. Passed to gen-circleci-orb/build_mcp_server as `earliest_version`. Only used when --mcp is enabled. Prompted interactively if not supplied
+    default: ''
   mcp_context:
     type: string
-    description: CircleCI context providing push authority for MCP server build + publish + save steps. Only used when --mcp is enabled
-    default: pcu-app
+    description: 'CircleCI context name(s) for MCP server build + publish + save steps (repeatable or comma-separated). Needs: GITHUB_TOKEN (GitHub App token, contents:write + bypass branch protection), BOT_GPG_KEY, BOT_TRUST, BOT_USER_NAME, BOT_USER_EMAIL, BOT_SIGN_KEY. Only used when --mcp is enabled. Prompted interactively if not supplied'
+    default: ''
+  git_push_subcommands:
+    type: string
+    description: Subcommand names whose generated jobs should include a `set_https_remote` step (repeatable). Use for subcommands that push to git (e.g. `save`)
+    default: ''
+  home_url:
+    type: string
+    description: Home URL for the orb (shown in the CircleCI registry)
+    default: ''
+  source_url:
+    type: string
+    description: Source URL for the orb (shown in the CircleCI registry)
+    default: ''
   dry_run:
     type: boolean
     description: Show planned changes without modifying any files
@@ -115,4 +127,7 @@ steps:
     mcp: << parameters.mcp >>
     mcp_earliest_version: << parameters.mcp_earliest_version >>
     mcp_context: << parameters.mcp_context >>
+    git_push_subcommands: << parameters.git_push_subcommands >>
+    home_url: << parameters.home_url >>
+    source_url: << parameters.source_url >>
     dry_run: << parameters.dry_run >>

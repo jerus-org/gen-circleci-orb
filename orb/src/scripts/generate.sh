@@ -1,6 +1,6 @@
 set -- gen-circleci-orb generate
-set -- "$@" --binary "${BINARY}"
-set -- "$@" --orb-namespace "${ORB_NAMESPACE}"
+[[ -n "${BINARY:-}" ]] && set -- "$@" --binary "${BINARY}"
+[[ -n "${ORB_NAMESPACE:-}" ]] && set -- "$@" --orb-namespace "${ORB_NAMESPACE}"
 [[ -n "${OUTPUT:-}" ]] && set -- "$@" --output "${OUTPUT}"
 [[ -n "${INSTALL_METHOD:-}" ]] && set -- "$@" --install-method "${INSTALL_METHOD}"
 [[ -n "${BASE_IMAGE:-}" ]] && set -- "$@" --base-image "${BASE_IMAGE}"
@@ -11,4 +11,5 @@ set -- "$@" --orb-namespace "${ORB_NAMESPACE}"
 [[ -n "${CIRCLECI_CLI_VERSION:-}" ]] && set -- "$@" --circleci-cli-version "${CIRCLECI_CLI_VERSION}"
 [[ -n "${APT_PACKAGES:-}" ]] && set -- "$@" --apt-packages "${APT_PACKAGES}"
 [[ "${DRY_RUN:-false}" = "true" ]] && set -- "$@" --dry-run
+[[ -n "${CONFIG:-}" ]] && set -- "$@" --config "${CONFIG}"
 "$@"

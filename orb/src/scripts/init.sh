@@ -18,5 +18,8 @@ set -- "$@" --docker-namespace "${DOCKER_NAMESPACE}"
 [[ "${MCP:-false}" = "true" ]] && set -- "$@" --mcp
 [[ -n "${MCP_EARLIEST_VERSION:-}" ]] && set -- "$@" --mcp-earliest-version "${MCP_EARLIEST_VERSION}"
 [[ -n "${MCP_CONTEXT:-}" ]] && set -- "$@" --mcp-context "${MCP_CONTEXT}"
+[[ -n "${GIT_PUSH_SUBCOMMANDS:-}" ]] && set -- "$@" --git-push-subcommands "${GIT_PUSH_SUBCOMMANDS}"
+[[ -n "${HOME_URL:-}" ]] && set -- "$@" --home-url "${HOME_URL}"
+[[ -n "${SOURCE_URL:-}" ]] && set -- "$@" --source-url "${SOURCE_URL}"
 [[ "${DRY_RUN:-false}" = "true" ]] && set -- "$@" --dry-run
 "$@"
