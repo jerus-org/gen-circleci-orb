@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - deps: update rust crate dialoguer to 0.12.0(pr [#115])
 - deps: update rust crate toml to v1(pr [#118])
 - deps: update dependency docker to v4(pr [#117])
+- prune orphaned orb files (#120)(pr [#122])
 
 ## [0.0.47] - 2026-06-12
 
@@ -466,6 +467,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#117]: https://github.com/jerus-org/gen-circleci-orb/pull/117
 [#119]: https://github.com/jerus-org/gen-circleci-orb/pull/119
 [#121]: https://github.com/jerus-org/gen-circleci-orb/pull/121
+[#122]: https://github.com/jerus-org/gen-circleci-orb/pull/122
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.47...HEAD
 [0.0.47]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.46...v0.0.47
 [0.0.46]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.45...v0.0.46
