@@ -360,11 +360,16 @@ impl Generate {
 
         tracing::info!("Generated {} file(s)", files.len());
 
-        let report = output_writer::write_tree(&orb_root, &files, self.dry_run)?;
+        let custom_files = orb_config
+            .orb
+            .as_ref()
+            .and_then(|o| o.custom_files.clone())
+            .unwrap_or_default();
+        let report = output_writer::write_tree(&orb_root, &files, &custom_files, self.dry_run)?;
 
         println!(
-            "Done: {} created, {} updated, {} unchanged",
-            report.created, report.updated, report.unchanged
+            "Done: {} created, {} updated, {} unchanged, {} removed",
+            report.created, report.updated, report.unchanged, report.removed
         );
 
         // Auto-record is config-driven: only when `[record].enabled = true` and

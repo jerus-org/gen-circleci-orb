@@ -86,6 +86,14 @@ pub struct OrbSection {
     /// Subcommand names whose generated jobs include a set_https_remote step.
     /// Persisted here so `generate` can reproduce the same output without re-supplying the flag.
     pub git_push_subcommands: Option<Vec<String>>,
+    /// Hand-authored orb files the generator does **not** produce but that must be
+    /// kept — paths relative to the orb root (e.g. `src/commands/build_container.yml`,
+    /// `src/jobs/build_container.yml`, `src/scripts/build-container.sh`). These
+    /// "authorise" custom commands/jobs/scripts so the prune step preserves them
+    /// instead of deleting them as orphans. The orb tree is otherwise treated as
+    /// fully owned by (CLI subcommands ∪ config): anything in the generated dirs
+    /// that is neither generated nor listed here is pruned.
+    pub custom_files: Option<Vec<String>>,
 }
 
 #[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq)]
