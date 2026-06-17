@@ -11,7 +11,7 @@ parameters:
     description: "Override workspace v* version (empty = nextsv auto-detect)"
 
 orbs:
-  toolkit: jerus-org/circleci-toolkit@6.3.0
+  toolkit: jerus-org/circleci-toolkit@6.4.0
   orb-tools: circleci/orb-tools@12.4.0
   docker: circleci/docker@4.0.0
   # renovate: datasource=circleci-orb depName=jerus-org/gen-circleci-orb
