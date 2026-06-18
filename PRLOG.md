@@ -32,6 +32,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - deps: pin dependencies(pr [#124])
 - deps: update dependency toolkit to v6.4.1(pr [#128])
 - deps: update rust crate pcu to 0.6.24(pr [#127])
+- sonar UTF-8 encoding + bump toolkit to 6.4.0(pr [#123])
+- deps: update rust crate config to 0.15.24(pr [#125])
+- deps: update rust crate pcu to 0.6.23(pr [#126])
 
 ## [0.0.47] - 2026-06-12
 
@@ -474,6 +477,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#124]: https://github.com/jerus-org/gen-circleci-orb/pull/124
 [#128]: https://github.com/jerus-org/gen-circleci-orb/pull/128
 [#127]: https://github.com/jerus-org/gen-circleci-orb/pull/127
+[#123]: https://github.com/jerus-org/gen-circleci-orb/pull/123
+[#125]: https://github.com/jerus-org/gen-circleci-orb/pull/125
+[#126]: https://github.com/jerus-org/gen-circleci-orb/pull/126
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.47...HEAD
 [0.0.47]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.46...v0.0.47
 [0.0.46]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.45...v0.0.46
