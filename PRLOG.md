@@ -31,6 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - prune orphaned orb files (#120)(pr [#122])
 - deps: pin dependencies(pr [#124])
 - deps: update dependency toolkit to v6.4.1(pr [#128])
+- deps: update rust crate pcu to 0.6.24(pr [#127])
 
 ## [0.0.47] - 2026-06-12
 
@@ -472,6 +473,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#122]: https://github.com/jerus-org/gen-circleci-orb/pull/122
 [#124]: https://github.com/jerus-org/gen-circleci-orb/pull/124
 [#128]: https://github.com/jerus-org/gen-circleci-orb/pull/128
+[#127]: https://github.com/jerus-org/gen-circleci-orb/pull/127
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.47...HEAD
 [0.0.47]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.46...v0.0.47
 [0.0.46]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.45...v0.0.46
