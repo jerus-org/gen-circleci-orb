@@ -37,7 +37,7 @@ dialoguer = "0.12.0"
 console = "0.16.3"
 
 # Signed commit + GitHub App push for `generate --record`
-pcu = "0.6.23"
+pcu = "0.6.24"
 config = { version = "0.15.24", default-features = false }
 git2 = "0.21.0"
 tokio = { version = "1.52.3", features = ["full"] }
