@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - chore-regenerate orb to released CLI baseline(pr [#119])
+- docs-backfill missing PRLOG entries(pr [#129])
 
 ### Fixed
 
@@ -480,6 +481,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#123]: https://github.com/jerus-org/gen-circleci-orb/pull/123
 [#125]: https://github.com/jerus-org/gen-circleci-orb/pull/125
 [#126]: https://github.com/jerus-org/gen-circleci-orb/pull/126
+[#129]: https://github.com/jerus-org/gen-circleci-orb/pull/129
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.47...HEAD
 [0.0.47]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.46...v0.0.47
 [0.0.46]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.45...v0.0.46
