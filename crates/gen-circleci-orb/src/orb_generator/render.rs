@@ -85,10 +85,12 @@ pub fn generate(
     }
 
     // add-workspace-to-path.sh — always generated; referenced by every job's
-    // attach_workspace conditional step via <<include(scripts/add-workspace-to-path.sh)>>
+    // attach_workspace conditional step via <<include(scripts/add-workspace-to-path.sh)>>.
+    // Must append to $BASH_ENV: a bare `export` only affects its own step, so the
+    // attached workspace binary would not be on PATH for the subsequent step.
     files.insert(
         PathBuf::from("src/scripts/add-workspace-to-path.sh"),
-        "export PATH=\"${WORKSPACE_ROOT}:${PATH}\"\n".to_string(),
+        "echo \"export PATH=\\\"${WORKSPACE_ROOT}:\\$PATH\\\"\" >> \"$BASH_ENV\"\n".to_string(),
     );
 
     // set_https_remote command + script (generated whenever any push subcommand is named)
@@ -2385,6 +2387,15 @@ mod tests {
         assert!(
             script.contains("WORKSPACE_ROOT"),
             "add-workspace-to-path.sh must use the WORKSPACE_ROOT env var:\n{script}"
+        );
+        // The export MUST be appended to $BASH_ENV. A bare `export PATH=...` only
+        // affects its own step's shell, so the workspace binary would not be on
+        // PATH for the subsequent generate step (regressed in 0.0.48 — the orb
+        // failed to find the attached binary with "No such file or directory").
+        assert!(
+            script.contains("$BASH_ENV"),
+            "add-workspace-to-path.sh must append the export to $BASH_ENV so PATH \
+             persists to later steps:\n{script}"
         );
     }
 
