@@ -76,6 +76,10 @@ pub struct OrbSection {
     pub namespaces: Option<Vec<String>>,
     pub orb_dir: Option<String>,
     pub base_image: Option<String>,
+    /// Image for the Rust `builder` stage (Binstall method) that `cargo install`s
+    /// the binary. Set a pinned `rust:…@sha256:…` here so the digest survives
+    /// regeneration (Renovate tracks it in this file). Defaults to `rust:1-slim-trixie`.
+    pub builder_image: Option<String>,
     pub install_method: Option<String>,
     /// Extra apt packages installed in the generated Docker image's runtime stage.
     /// Use for tools that need build dependencies at runtime (e.g. a tool that

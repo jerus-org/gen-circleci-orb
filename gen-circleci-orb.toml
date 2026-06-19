@@ -4,6 +4,10 @@ namespaces = ["jerus-org"]
 orb_dir = "orb"
 # gnupg is required at runtime by `generate --record` (GPG-signed commit-back).
 apt_packages = ["gnupg"]
+# Pinned Rust builder image for the Dockerfile `builder` stage. Kept here (not
+# left to the generator's unpinned default) so the @sha256 digest survives
+# regeneration; Renovate updates this digest via a customManager (renovate.json).
+builder_image = "rust:1-slim-trixie@sha256:3b05f7c617a200c41c3506097f0d15fc193a1c93bfd8f141007b47cac8f95d3c"
 # Hand-authored orb infrastructure (build/release commands, jobs and scripts)
 # that `generate` does not produce. Registered here so the prune step preserves
 # them — the orb tree is otherwise fully owned by (CLI subcommands ∪ config).

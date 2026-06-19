@@ -6,6 +6,12 @@ use crate::{help_parser, orb_config, orb_generator, output_writer};
 
 pub const DEFAULT_BASE_IMAGE: &str = "debian:13-slim";
 
+/// Default image for the Rust `builder` stage (Binstall method) that
+/// `cargo install`s the binary. Config-driven (`[orb].builder_image`) so a
+/// pinned `…@sha256:…` digest can be kept in gen-circleci-orb.toml and tracked
+/// by Renovate instead of being stripped on every regeneration.
+pub const DEFAULT_BUILDER_IMAGE: &str = "rust:1-slim-trixie";
+
 /// Base image used when the MCP feature is enabled. `build_mcp_server` compiles
 /// the MCP server at runtime via `gen-orb-mcp generate --format binary`, so the
 /// executor needs a Rust toolchain (cargo) present in the runtime stage.
@@ -278,6 +284,18 @@ pub(crate) fn resolve_base_image(
         })
 }
 
+/// The Rust `builder` stage image: `[orb].builder_image` in config, else
+/// `DEFAULT_BUILDER_IMAGE`. Config-only (no CLI flag) — it's a pinned-digest
+/// concern kept in gen-circleci-orb.toml, not something overridden per-run.
+pub(crate) fn resolve_builder_image(config: &crate::orb_config::OrbConfig) -> String {
+    config
+        .orb
+        .as_ref()
+        .and_then(|o| o.builder_image.clone())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| DEFAULT_BUILDER_IMAGE.to_string())
+}
+
 /// CLI flags take precedence over `[orb].apt_packages`. When the MCP feature is
 /// enabled, the build dependencies it requires (`MCP_APT_PACKAGES`) are unioned
 /// in regardless, since `build_mcp_server` cannot run without them.
@@ -345,6 +363,7 @@ impl Generate {
             namespaces,
             install_method: resolve_install_method(self.install_method.as_ref(), &orb_config),
             base_image: resolve_base_image(self.base_image.as_deref(), &orb_config),
+            builder_image: resolve_builder_image(&orb_config),
             home_url,
             source_url,
             binary_name: cli_def.binary_name.clone(),
@@ -873,6 +892,31 @@ mod tests {
         use crate::orb_config::OrbConfig;
         let result = resolve_install_method(None, &OrbConfig::default());
         assert!(matches!(result, InstallMethod::Binstall));
+    }
+
+    // ── resolve_builder_image ──────────────────────────────────────────────
+
+    #[test]
+    fn resolve_builder_image_defaults_to_rust_trixie() {
+        use crate::orb_config::OrbConfig;
+        assert_eq!(
+            resolve_builder_image(&OrbConfig::default()),
+            DEFAULT_BUILDER_IMAGE
+        );
+    }
+
+    #[test]
+    fn resolve_builder_image_uses_config_pinned_digest() {
+        use crate::orb_config::{OrbConfig, OrbSection};
+        let pinned = "rust:1-slim-trixie@sha256:abc123";
+        let config = OrbConfig {
+            orb: Some(OrbSection {
+                builder_image: Some(pinned.to_string()),
+                ..OrbSection::default()
+            }),
+            ..OrbConfig::default()
+        };
+        assert_eq!(resolve_builder_image(&config), pinned);
     }
 
     // ── resolve_base_image ─────────────────────────────────────────────────
