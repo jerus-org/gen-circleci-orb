@@ -5,5 +5,18 @@
   ],
   "extends": [
     "github>jerusdp/renovate-config:default.json"
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Track the pinned Rust builder image digest in gen-circleci-orb.toml ([orb].builder_image)",
+      "managerFilePatterns": [
+        "/^gen-circleci-orb\\.toml$/"
+      ],
+      "matchStrings": [
+        "builder_image\\s*=\\s*\"(?<depName>[^:\"]+):(?<currentValue>[^@\"]+)@(?<currentDigest>sha256:[a-f0-9]+)\""
+      ],
+      "datasourceTemplate": "docker"
+    }
   ]
 }

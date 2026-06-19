@@ -336,6 +336,7 @@ steps:
                 namespaces: Some(vec!["jerus-org".to_string()]),
                 orb_dir: Some("orb".to_string()),
                 base_image: None,
+                builder_image: None,
                 install_method: None,
                 apt_packages: None,
                 home_url: None,

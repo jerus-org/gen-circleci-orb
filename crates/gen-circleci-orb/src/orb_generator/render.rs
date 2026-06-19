@@ -10,6 +10,11 @@ pub struct GenerateOpts {
     pub namespaces: Vec<String>,
     pub install_method: InstallMethod,
     pub base_image: String,
+    /// Image for the Rust `builder` stage that `cargo install`s the binary
+    /// (Binstall method). Config-driven so a pinned `…@sha256:…` digest can be
+    /// kept in gen-circleci-orb.toml and tracked by Renovate, rather than being
+    /// stripped on every regeneration.
+    pub builder_image: String,
     pub home_url: Option<String>,
     pub source_url: Option<String>,
     /// Binary name included in generated run-step commands.
@@ -58,6 +63,7 @@ pub fn generate(
             &cli.binary_name,
             &opts.install_method,
             &opts.base_image,
+            &opts.builder_image,
             opts.circleci_cli_version.as_deref(),
             &opts.apt_packages,
         ),
@@ -420,6 +426,7 @@ fn render_dockerfile(
     binary: &str,
     method: &InstallMethod,
     base_image: &str,
+    builder_image: &str,
     circleci_cli_version: Option<&str>,
     apt_packages: &[String],
 ) -> String {
@@ -427,7 +434,7 @@ fn render_dockerfile(
         InstallMethod::Binstall => {
             let runtime_pkgs = sorted_package_list(apt_packages);
             let mut out = String::new();
-            out.push_str("FROM rust:1-slim-trixie AS builder\n");
+            out.push_str(&format!("FROM {builder_image} AS builder\n"));
             out.push_str("RUN apt-get update \\\n");
             out.push_str(
                 "    && apt-get install -y --no-install-recommends ca-certificates libssl-dev pkg-config \\\n",
@@ -1177,6 +1184,7 @@ mod tests {
             namespaces: vec!["my-org".to_string()],
             install_method: InstallMethod::Binstall,
             base_image: "debian:13-slim".to_string(),
+            builder_image: "rust:1-slim-trixie".to_string(),
             home_url: None,
             source_url: None,
             binary_name: "mytool".to_string(),
@@ -2233,6 +2241,7 @@ mod tests {
             "mytool",
             &InstallMethod::Binstall,
             "debian:13-slim",
+            "rust:1-slim-trixie",
             None,
             &[],
         );
@@ -2240,6 +2249,25 @@ mod tests {
         assert!(
             dockerfile.contains("ca-certificates libssl-dev pkg-config"),
             "builder packages must be sorted: ca-certificates libssl-dev pkg-config\n{dockerfile}"
+        );
+    }
+
+    #[test]
+    fn dockerfile_builder_stage_uses_configured_builder_image() {
+        // A pinned `…@sha256:…` builder image from config must be emitted verbatim
+        // on the builder FROM, so the digest survives regeneration (option 1 — the
+        // generator no longer hardcodes `rust:1-slim-trixie`).
+        let dockerfile = render_dockerfile(
+            "mytool",
+            &InstallMethod::Binstall,
+            "debian:13-slim",
+            "rust:1-slim-trixie@sha256:deadbeef",
+            None,
+            &[],
+        );
+        assert!(
+            dockerfile.contains("FROM rust:1-slim-trixie@sha256:deadbeef AS builder"),
+            "builder stage must use the configured builder_image (incl. digest):\n{dockerfile}"
         );
     }
 
@@ -2254,8 +2282,14 @@ mod tests {
 
     #[test]
     fn dockerfile_local_uses_copy_not_cargo_install() {
-        let dockerfile =
-            render_dockerfile("mytool", &InstallMethod::Local, "debian:13-slim", None, &[]);
+        let dockerfile = render_dockerfile(
+            "mytool",
+            &InstallMethod::Local,
+            "debian:13-slim",
+            "rust:1-slim-trixie",
+            None,
+            &[],
+        );
         assert!(
             dockerfile.contains("COPY mytool /usr/local/bin/mytool"),
             "local method must COPY binary from build context:\n{dockerfile}"
@@ -2268,8 +2302,14 @@ mod tests {
 
     #[test]
     fn dockerfile_local_has_no_rust_builder_stage() {
-        let dockerfile =
-            render_dockerfile("mytool", &InstallMethod::Local, "debian:13-slim", None, &[]);
+        let dockerfile = render_dockerfile(
+            "mytool",
+            &InstallMethod::Local,
+            "debian:13-slim",
+            "rust:1-slim-trixie",
+            None,
+            &[],
+        );
         assert!(
             !dockerfile.contains("FROM rust"),
             "local method must not have a Rust builder stage:\n{dockerfile}"
@@ -2282,8 +2322,14 @@ mod tests {
 
     #[test]
     fn dockerfile_local_runtime_has_ca_certs_and_git() {
-        let dockerfile =
-            render_dockerfile("mytool", &InstallMethod::Local, "debian:13-slim", None, &[]);
+        let dockerfile = render_dockerfile(
+            "mytool",
+            &InstallMethod::Local,
+            "debian:13-slim",
+            "rust:1-slim-trixie",
+            None,
+            &[],
+        );
         assert!(
             dockerfile.contains("ca-certificates"),
             "local runtime must install ca-certificates:\n{dockerfile}"
@@ -2296,8 +2342,14 @@ mod tests {
 
     #[test]
     fn dockerfile_local_has_circleci_user_and_workdir() {
-        let dockerfile =
-            render_dockerfile("mytool", &InstallMethod::Local, "debian:13-slim", None, &[]);
+        let dockerfile = render_dockerfile(
+            "mytool",
+            &InstallMethod::Local,
+            "debian:13-slim",
+            "rust:1-slim-trixie",
+            None,
+            &[],
+        );
         assert!(
             dockerfile.contains("useradd") && dockerfile.contains("circleci"),
             "local method must create circleci user:\n{dockerfile}"
@@ -2314,8 +2366,14 @@ mod tests {
 
     #[test]
     fn dockerfile_local_does_not_run_as_root() {
-        let dockerfile =
-            render_dockerfile("mytool", &InstallMethod::Local, "debian:13-slim", None, &[]);
+        let dockerfile = render_dockerfile(
+            "mytool",
+            &InstallMethod::Local,
+            "debian:13-slim",
+            "rust:1-slim-trixie",
+            None,
+            &[],
+        );
         let copy_pos = dockerfile.find("COPY mytool").expect("COPY not found");
         let user_pos = dockerfile.find("USER circleci").expect("USER not found");
         assert!(
@@ -2330,6 +2388,7 @@ mod tests {
             "mytool",
             &InstallMethod::Local,
             "debian:13-slim",
+            "rust:1-slim-trixie",
             Some("0.1.36202"),
             &[],
         );
