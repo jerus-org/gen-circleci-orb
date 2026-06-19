@@ -491,6 +491,28 @@ fn build_pcu_config(write_token: &str) -> Result<config::Config> {
     Ok(builder.build()?)
 }
 
+/// Normalize `orb_root` into a pathspec libgit2's `add_all` will match.
+///
+/// `Generate::output` defaults to `"."`, so `orb_root` is built as `./orb`. A
+/// leading `.` (`Component::CurDir`) makes the libgit2 pathspec match **no**
+/// repo entries (entry paths are stored repo-root-relative as `orb/...`, never
+/// `./orb/...`), so `stage_paths` would silently stage nothing — the orb source
+/// is never recorded even though regeneration changed files on disk (the
+/// gen-orb-mcp #207 regression: `0 created, 11 updated` yet "nothing to
+/// record"). Dropping the `.` components yields `orb`, which matches.
+pub(crate) fn normalize_orb_pathspec(orb_root: &std::path::Path) -> std::path::PathBuf {
+    use std::path::Component;
+    let normalized: std::path::PathBuf = orb_root
+        .components()
+        .filter(|c| !matches!(c, Component::CurDir))
+        .collect();
+    if normalized.as_os_str().is_empty() {
+        std::path::PathBuf::from(".")
+    } else {
+        normalized
+    }
+}
+
 /// Commit the regenerated orb source under `orb_root` back to the current (PR)
 /// branch (GPG-signed) and push, so the change is reviewable in the PR. No-op if
 /// nothing changed. The commit identity and signing key are passed to pcu
@@ -509,9 +531,12 @@ fn record_orb(orb_root: &std::path::Path, record: &crate::orb_config::RecordConf
         .block_on(pcu::Client::new_with(&pcu_config))
         .map_err(|e| anyhow::anyhow!("Failed to create pcu client: {e}"))?;
 
+    // Stage a repo-relative pathspec (no leading `./`) so libgit2 actually
+    // matches the regenerated files — see normalize_orb_pathspec.
+    let stage_path = normalize_orb_pathspec(orb_root);
     use pcu::GitOps;
     client
-        .stage_paths(&[orb_root])
+        .stage_paths(&[stage_path.as_path()])
         .map_err(|e| anyhow::anyhow!("Failed to stage orb source: {e}"))?;
 
     // Skip an empty commit when the regenerated orb is identical to HEAD.
@@ -551,6 +576,99 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+
+    /// Build a git repo with `orb/src/foo.yml` committed, then return the repo.
+    fn repo_with_committed_orb(dir: &TempDir) -> git2::Repository {
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        fs::create_dir_all(dir.path().join("orb/src")).unwrap();
+        fs::write(dir.path().join("orb/src/foo.yml"), "old\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index
+            .add_all(["orb"].iter(), git2::IndexAddOption::DEFAULT, None)
+            .unwrap();
+        index.write().unwrap();
+        let tree_oid = index.write_tree().unwrap();
+        {
+            let tree = repo.find_tree(tree_oid).unwrap();
+            let sig = git2::Signature::now("t", "t@t").unwrap();
+            repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
+                .unwrap();
+        }
+        repo
+    }
+
+    /// Mirror `record_orb`'s stage→write_tree→diff change-detection for a given
+    /// `orb_root` path form. Returns the delta count.
+    fn detect_deltas_after_staging(repo: &git2::Repository, orb_root: &std::path::Path) -> usize {
+        let mut index = repo.index().unwrap();
+        index
+            .add_all([orb_root].iter(), git2::IndexAddOption::DEFAULT, None)
+            .unwrap();
+        index.write().unwrap();
+        let new_tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let head_tree = repo
+            .head()
+            .unwrap()
+            .peel_to_commit()
+            .unwrap()
+            .tree()
+            .unwrap();
+        let diff = repo
+            .diff_tree_to_tree(Some(&head_tree), Some(&new_tree), None)
+            .unwrap();
+        diff.deltas().count()
+    }
+
+    /// A modification under `orb/` must be detected by `record_orb`'s
+    /// stage+diff logic. With `--output "."` the resolved orb_root is `./orb`;
+    /// `normalize_orb_pathspec` must turn it into a pathspec libgit2 `add_all`
+    /// matches so auto-record does not falsely report "Orb source unchanged —
+    /// nothing to record" (the gen-orb-mcp #207 regression: `0 created,
+    /// 11 updated` yet "nothing to record").
+    #[test]
+    fn record_detects_orb_modification_with_dot_slash_output() {
+        let dir = TempDir::new().unwrap();
+        let repo = repo_with_committed_orb(&dir);
+        // Regeneration changes a tracked orb file on disk.
+        fs::write(dir.path().join("orb/src/foo.yml"), "new\n").unwrap();
+
+        // orb_root as built by `Generate`: output (default ".") joined with "orb".
+        let orb_root = std::path::PathBuf::from(".").join("orb");
+        assert_eq!(orb_root, std::path::Path::new("./orb"));
+
+        // The raw `./orb` pathspec stages nothing (proves the root cause)...
+        assert_eq!(
+            detect_deltas_after_staging(&repo, &orb_root),
+            0,
+            "expected the unnormalized ./orb pathspec to stage nothing"
+        );
+        // ...while the normalized pathspec stages the change and is detected.
+        let deltas = detect_deltas_after_staging(&repo, &normalize_orb_pathspec(&orb_root));
+        assert!(
+            deltas > 0,
+            "modification under orb/ not detected after normalizing orb_root — \
+             auto-record would falsely skip"
+        );
+    }
+
+    #[test]
+    fn normalize_orb_pathspec_strips_cur_dir_components() {
+        use std::path::{Path, PathBuf};
+        assert_eq!(
+            normalize_orb_pathspec(Path::new("./orb")),
+            PathBuf::from("orb")
+        );
+        assert_eq!(
+            normalize_orb_pathspec(Path::new("orb")),
+            PathBuf::from("orb")
+        );
+        assert_eq!(
+            normalize_orb_pathspec(Path::new("./a/./b")),
+            PathBuf::from("a/b")
+        );
+        // A bare "." must not normalize to empty (which add_all would reject).
+        assert_eq!(normalize_orb_pathspec(Path::new(".")), PathBuf::from("."));
+    }
 
     // ── read_record_env ─────────────────────────────────────────────────────
 
