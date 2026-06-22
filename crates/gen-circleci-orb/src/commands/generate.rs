@@ -687,6 +687,7 @@ mod tests {
             user_name_env: "MY_NAME".to_string(),
             user_email_env: "MY_EMAIL".to_string(),
             signing_key_env: "MY_SIGN_KEY".to_string(),
+            push_ssh_fingerprint: String::new(),
             contexts: vec!["my-signing-context".to_string()],
         }
     }

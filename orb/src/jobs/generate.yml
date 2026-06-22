@@ -73,6 +73,10 @@ parameters:
     type: boolean
     description: Persist the regenerated orb dir to the workspace so downstream jobs (pack, review, the end-of-workflow push job) operate on it without an immediate push. Default false.
     default: false
+  ssh_fingerprint:
+    type: string
+    description: SSH key fingerprint (a public-key hash, not a secret) used to push the regenerated orb with write authority. When set, the key is loaded and the read-only checkout key is dropped from the agent. Empty (default) falls back to the ambient environment credentials.
+    default: ''
 steps:
 - checkout
 - when:
@@ -85,6 +89,15 @@ steps:
         command: <<include(scripts/add-workspace-to-path.sh)>>
         environment:
           WORKSPACE_ROOT: << parameters.workspace_root >>
+- when:
+    condition: << parameters.ssh_fingerprint >>
+    steps:
+    - add_ssh_keys:
+        fingerprints:
+        - << parameters.ssh_fingerprint >>
+    - run:
+        name: Drop read-only checkout key from agent
+        command: ssh-add -d ~/.ssh/id_rsa.pub || true
 - generate:
     binary: << parameters.binary >>
     orb_namespace: << parameters.orb_namespace >>

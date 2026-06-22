@@ -367,6 +367,7 @@ fn render_job(sub: &SubCommand, opts: &GenerateOpts, config: Option<&OrbConfig>)
             "persist_orb_workspace".to_string(),
             build_persist_orb_param(),
         );
+        parameters.insert("ssh_fingerprint".to_string(), build_ssh_fingerprint_param());
     }
 
     let invoke_step = build_invoke_step(sub, RESERVED_JOB_PARAMS);
@@ -376,6 +377,12 @@ fn render_job(sub: &SubCommand, opts: &GenerateOpts, config: Option<&OrbConfig>)
     ];
     if opts.git_push_subcommands.contains(&sub.name) {
         steps.push(serde_yaml::Value::String("set_https_remote".to_string()));
+    }
+    // Load the configured SSH write key (and drop the read-only checkout key)
+    // before invoking, so the end-of-workflow push authenticates with write
+    // authority. No-op when ssh_fingerprint is empty (ambient credentials used).
+    if is_orb_producing {
+        steps.push(build_ssh_setup_step());
     }
     steps.push(invoke_step);
     if is_orb_producing {
@@ -749,6 +756,75 @@ fn build_persist_orb_param() -> OrbParameter {
         default: Some(serde_yaml::Value::Bool(false)),
         enum_values: None,
     }
+}
+
+/// Optional string job parameter naming the SSH key fingerprint used to push the
+/// regenerated orb with write authority. Empty (the default) means no key is
+/// loaded and the push falls back to the ambient environment credentials.
+///
+/// This is a fingerprint *value* (a hash of the public key — not a secret), not
+/// an env-var name: CircleCI resolves `add_ssh_keys` fingerprints at config-compile
+/// time and cannot interpolate environment variables there.
+fn build_ssh_fingerprint_param() -> OrbParameter {
+    OrbParameter {
+        param_type: "string".to_string(),
+        description: "SSH key fingerprint (a public-key hash, not a secret) used to push the \
+                      regenerated orb with write authority. When set, the key is loaded and \
+                      the read-only checkout key is dropped from the agent. Empty (default) \
+                      falls back to the ambient environment credentials."
+            .to_string(),
+        default: Some(serde_yaml::Value::String(String::new())),
+        enum_values: None,
+    }
+}
+
+/// Conditional step: when `ssh_fingerprint` is non-empty, `add_ssh_keys` for it
+/// and remove the read-only checkout key (`~/.ssh/id_rsa.pub`) from the agent so
+/// the subsequent push authenticates with the write key. Mirrors the toolkit
+/// push pattern. No-op when the fingerprint is empty.
+fn build_ssh_setup_step() -> serde_yaml::Value {
+    let mut fingerprints = serde_yaml::Mapping::new();
+    fingerprints.insert(
+        serde_yaml::Value::String("fingerprints".to_string()),
+        serde_yaml::Value::Sequence(vec![serde_yaml::Value::String(
+            "<< parameters.ssh_fingerprint >>".to_string(),
+        )]),
+    );
+    let mut add_keys_step = serde_yaml::Mapping::new();
+    add_keys_step.insert(
+        serde_yaml::Value::String("add_ssh_keys".to_string()),
+        serde_yaml::Value::Mapping(fingerprints),
+    );
+    let mut trim_run = serde_yaml::Mapping::new();
+    trim_run.insert(
+        serde_yaml::Value::String("name".to_string()),
+        serde_yaml::Value::String("Drop read-only checkout key from agent".to_string()),
+    );
+    trim_run.insert(
+        serde_yaml::Value::String("command".to_string()),
+        serde_yaml::Value::String("ssh-add -d ~/.ssh/id_rsa.pub || true".to_string()),
+    );
+    let mut trim_step = serde_yaml::Mapping::new();
+    trim_step.insert(
+        serde_yaml::Value::String("run".to_string()),
+        serde_yaml::Value::Mapping(trim_run),
+    );
+    let inner_steps = serde_yaml::Value::Sequence(vec![
+        serde_yaml::Value::Mapping(add_keys_step),
+        serde_yaml::Value::Mapping(trim_step),
+    ]);
+    let mut when_inner = serde_yaml::Mapping::new();
+    when_inner.insert(
+        serde_yaml::Value::String("condition".to_string()),
+        serde_yaml::Value::String("<< parameters.ssh_fingerprint >>".to_string()),
+    );
+    when_inner.insert(serde_yaml::Value::String("steps".to_string()), inner_steps);
+    let mut when_map = serde_yaml::Mapping::new();
+    when_map.insert(
+        serde_yaml::Value::String("when".to_string()),
+        serde_yaml::Value::Mapping(when_inner),
+    );
+    serde_yaml::Value::Mapping(when_map)
 }
 
 /// Conditional step: when `persist_orb_workspace` is true, persist the orb dir
@@ -2154,9 +2230,46 @@ mod tests {
     }
 
     #[test]
+    fn orb_producing_job_has_optional_ssh_fingerprint_setup() {
+        // An orb-producing job must expose an optional `ssh_fingerprint` param
+        // (default empty) and, gated on it, load that SSH write key + drop the
+        // read-only checkout key — so the end-of-workflow push can authenticate
+        // with write authority. Absent a fingerprint the step is a no-op and the
+        // push falls back to the ambient environment credentials.
+        let params = vec![Parameter {
+            long_name: "orb_dir".to_string(),
+            short: None,
+            param_type: ParamType::String,
+            default: Some("orb".to_string()),
+            required: false,
+            description: "Orb output directory.".to_string(),
+        }];
+        let sub = make_leaf("generate", params);
+        let cli = make_cli("mytool", vec![sub]);
+        let files = generate(&cli, &default_opts(), None);
+        let job = &files[&PathBuf::from("src/jobs/generate.yml")];
+        assert!(
+            job.contains("ssh_fingerprint:"),
+            "orb-producing job must expose ssh_fingerprint:\n{job}"
+        );
+        assert!(
+            job.contains("add_ssh_keys:"),
+            "must conditionally add the configured SSH key:\n{job}"
+        );
+        assert!(
+            job.contains("<< parameters.ssh_fingerprint >>"),
+            "the SSH setup must be gated on / use the ssh_fingerprint param:\n{job}"
+        );
+        assert!(
+            job.contains("ssh-add -d"),
+            "must trim the read-only checkout key from the agent:\n{job}"
+        );
+    }
+
+    #[test]
     fn non_orb_job_has_no_persist_orb_workspace() {
         // A command without an `orb_dir` param is not orb-producing and must not
-        // gain the persist toggle/step.
+        // gain the persist toggle/step (nor the ssh_fingerprint setup).
         let params = vec![Parameter {
             long_name: "output".to_string(),
             short: Some('o'),
@@ -2172,6 +2285,10 @@ mod tests {
         assert!(
             !job.contains("persist_orb_workspace"),
             "non-orb job must not gain persist_orb_workspace:\n{job}"
+        );
+        assert!(
+            !job.contains("ssh_fingerprint"),
+            "non-orb job must not gain ssh_fingerprint:\n{job}"
         );
     }
 

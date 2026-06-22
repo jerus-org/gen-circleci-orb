@@ -35,9 +35,14 @@ pub struct PatchOpts {
     /// Only used when `mcp` is true.
     pub mcp_context: Vec<String>,
     /// CircleCI context(s) the regenerate-orb job attaches when auto-record is
-    /// enabled, supplying the signing material + write token. Empty when
-    /// auto-record is disabled (no context attached).
+    /// enabled, supplying the signing material. Empty when auto-record is
+    /// disabled (no context attached, and no end push job wired).
     pub record_contexts: Vec<String>,
+    /// SSH key fingerprint (a public-key hash, not a secret) for the end-of-workflow
+    /// push job. When non-empty, the push job loads this write key (and drops the
+    /// read-only checkout key). Empty falls back to the ambient environment
+    /// credentials (the push then fails on a read-only key, with guidance).
+    pub record_push_ssh_fingerprint: String,
 }
 
 pub struct PatchReport {
@@ -332,6 +337,34 @@ fn pack_validate_steps(opts: &PatchOpts) -> Vec<String> {
     steps.push("                at: .".to_string());
     steps.push("          requires: [pack-orb]".to_string());
 
+    // End-of-workflow push job (only when auto-record is enabled). Runs generate
+    // WITH record (regenerate + signed commit + push) gated on the orb validations
+    // (pack/review) → the PR branch only receives a validated orb. When a write-key
+    // fingerprint is configured it is loaded (and the read-only checkout key dropped)
+    // so the push has write authority; otherwise the push uses the ambient
+    // credentials and fails with guidance (a read-only checkout key can't push).
+    if !opts.record_contexts.is_empty() {
+        steps.push("      - gen-circleci-orb/generate:".to_string());
+        steps.push("          name: push-orb".to_string());
+        steps.push(format!("          binary: {binary}"));
+        for ns in &opts.namespaces {
+            steps.push(format!("          orb_namespace: {ns}"));
+        }
+        steps.push(format!("          orb_dir: {orb_dir}"));
+        steps.push("          attach_workspace: true".to_string());
+        if !opts.record_push_ssh_fingerprint.is_empty() {
+            steps.push(format!(
+                "          ssh_fingerprint: \"{}\"",
+                opts.record_push_ssh_fingerprint
+            ));
+        }
+        steps.push(format!(
+            "          context: [{}]",
+            opts.record_contexts.join(", ")
+        ));
+        steps.push("          requires: [pack-orb, review-orb]".to_string());
+    }
+
     steps
 }
 
@@ -509,6 +542,7 @@ mod tests {
             mcp_earliest_version: "1.0.0".to_string(),
             mcp_context: vec!["pcu-app".to_string()],
             record_contexts: vec![],
+            record_push_ssh_fingerprint: String::new(),
         }
     }
 
@@ -570,6 +604,55 @@ mod tests {
             steps.matches("- attach_workspace:").count(),
             2,
             "pack-orb and review-orb must both attach the workspace:\n{steps}"
+        );
+    }
+
+    #[test]
+    fn end_push_job_wired_after_validation_when_record_enabled() {
+        let opts = PatchOpts {
+            record_contexts: vec!["release".to_string()],
+            record_push_ssh_fingerprint: "SHA256:test".to_string(),
+            ..make_opts()
+        };
+        let steps = pack_validate_steps(&opts).join("\n");
+        assert!(
+            steps.contains("name: push-orb"),
+            "end push job must be present when record is enabled:\n{steps}"
+        );
+        assert!(
+            steps.contains("ssh_fingerprint: \"SHA256:test\""),
+            "push job must pass the configured write-key fingerprint:\n{steps}"
+        );
+        assert!(
+            steps.contains("requires: [pack-orb, review-orb]"),
+            "the push must be gated on the orb validations (atomic):\n{steps}"
+        );
+        // push-orb must record (commit + push) — it must NOT carry no_record.
+        let push = &steps[steps.find("name: push-orb").unwrap()..];
+        assert!(
+            !push.contains("no_record"),
+            "push-orb must record (no no_record):\n{push}"
+        );
+    }
+
+    #[test]
+    fn end_push_job_omits_fingerprint_when_unset_and_absent_without_record() {
+        // Fingerprint is optional: present push job, no ssh_fingerprint line.
+        let with_record = PatchOpts {
+            record_contexts: vec!["release".to_string()],
+            ..make_opts()
+        };
+        let s1 = pack_validate_steps(&with_record).join("\n");
+        assert!(s1.contains("name: push-orb"), "push job present:\n{s1}");
+        assert!(
+            !s1.contains("ssh_fingerprint:"),
+            "no ssh_fingerprint line when unset (ambient fallback):\n{s1}"
+        );
+        // No record configured → no end push job at all.
+        let s2 = pack_validate_steps(&make_opts()).join("\n");
+        assert!(
+            !s2.contains("name: push-orb"),
+            "no end push job when record is disabled:\n{s2}"
         );
     }
 

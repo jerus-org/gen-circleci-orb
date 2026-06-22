@@ -107,6 +107,10 @@ parameters:
     type: string
     description: Name of the env var holding the GPG signing key id (auto-record)
     default: ''
+  record_push_ssh_fingerprint:
+    type: string
+    description: 'SSH key fingerprint (a public-key hash, not a secret) for the end-of-workflow push job (auto-record). Optional: when set, the push job loads this write key and drops the read-only checkout key; empty falls back to ambient credentials. A value, not an env-var name — add_ssh_keys resolves fingerprints at config-compile time and cannot read env vars'
+    default: ''
   record_context:
     type: string
     description: CircleCI context(s) that supply the auto-record env-var values (GPG signing material), repeatable or comma-separated. The record CI job attaches these
@@ -127,6 +131,10 @@ parameters:
     type: boolean
     description: Persist the regenerated orb dir to the workspace so downstream jobs (pack, review, the end-of-workflow push job) operate on it without an immediate push. Default false.
     default: false
+  ssh_fingerprint:
+    type: string
+    description: SSH key fingerprint (a public-key hash, not a secret) used to push the regenerated orb with write authority. When set, the key is loaded and the read-only checkout key is dropped from the agent. Empty (default) falls back to the ambient environment credentials.
+    default: ''
 steps:
 - checkout
 - when:
@@ -139,6 +147,15 @@ steps:
         command: <<include(scripts/add-workspace-to-path.sh)>>
         environment:
           WORKSPACE_ROOT: << parameters.workspace_root >>
+- when:
+    condition: << parameters.ssh_fingerprint >>
+    steps:
+    - add_ssh_keys:
+        fingerprints:
+        - << parameters.ssh_fingerprint >>
+    - run:
+        name: Drop read-only checkout key from agent
+        command: ssh-add -d ~/.ssh/id_rsa.pub || true
 - init:
     binary: << parameters.binary >>
     public_orb_namespace: << parameters.public_orb_namespace >>
@@ -168,6 +185,7 @@ steps:
     record_user_name_env: << parameters.record_user_name_env >>
     record_user_email_env: << parameters.record_user_email_env >>
     record_signing_key_env: << parameters.record_signing_key_env >>
+    record_push_ssh_fingerprint: << parameters.record_push_ssh_fingerprint >>
     record_context: << parameters.record_context >>
     dry_run: << parameters.dry_run >>
 - when:

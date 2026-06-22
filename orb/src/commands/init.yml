@@ -106,6 +106,10 @@ parameters:
     type: string
     description: Name of the env var holding the GPG signing key id (auto-record)
     default: ''
+  record_push_ssh_fingerprint:
+    type: string
+    description: 'SSH key fingerprint (a public-key hash, not a secret) for the end-of-workflow push job (auto-record). Optional: when set, the push job loads this write key and drops the read-only checkout key; empty falls back to ambient credentials. A value, not an env-var name — add_ssh_keys resolves fingerprints at config-compile time and cannot read env vars'
+    default: ''
   record_context:
     type: string
     description: CircleCI context(s) that supply the auto-record env-var values (GPG signing material), repeatable or comma-separated. The record CI job attaches these
@@ -147,5 +151,6 @@ steps:
       RECORD_USER_NAME_ENV: << parameters.record_user_name_env >>
       RECORD_USER_EMAIL_ENV: << parameters.record_user_email_env >>
       RECORD_SIGNING_KEY_ENV: << parameters.record_signing_key_env >>
+      RECORD_PUSH_SSH_FINGERPRINT: << parameters.record_push_ssh_fingerprint >>
       RECORD_CONTEXT: << parameters.record_context >>
       DRY_RUN: << parameters.dry_run >>

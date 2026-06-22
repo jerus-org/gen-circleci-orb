@@ -41,6 +41,15 @@ pub struct RecordConfig {
     pub user_email_env: String,
     /// Name of the env var holding the GPG signing key id.
     pub signing_key_env: String,
+    /// SSH key fingerprint (a public-key hash, **not** a secret) for the
+    /// end-of-workflow push job. When set, the push job loads this write key and
+    /// drops the read-only checkout key, giving the push write authority. Empty
+    /// falls back to the ambient environment credentials (the push then fails on
+    /// a read-only key, with guidance). Stored as a value, not an env-var name,
+    /// because CircleCI's `add_ssh_keys` resolves fingerprints at config-compile
+    /// time and cannot read environment variables.
+    #[serde(default)]
+    pub push_ssh_fingerprint: String,
     /// CircleCI context(s) that supply the values for the env vars named above.
     /// The record CI job attaches these so the signing material is available at
     /// runtime.
