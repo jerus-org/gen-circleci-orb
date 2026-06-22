@@ -357,6 +357,18 @@ fn render_job(sub: &SubCommand, opts: &GenerateOpts, config: Option<&OrbConfig>)
     parameters.insert("attach_workspace".to_string(), attach_param);
     parameters.insert("workspace_root".to_string(), root_param);
 
+    // Orb-producing jobs (those with an `orb_dir` param) can persist the
+    // regenerated orb to the workspace so it flows to downstream pack/review/push
+    // jobs without an immediate push (Model B). Default off; activated by the
+    // consumer workflow on the regenerate-orb step.
+    let is_orb_producing = parameters.contains_key("orb_dir");
+    if is_orb_producing {
+        parameters.insert(
+            "persist_orb_workspace".to_string(),
+            build_persist_orb_param(),
+        );
+    }
+
     let invoke_step = build_invoke_step(sub, RESERVED_JOB_PARAMS);
     let mut steps = vec![
         serde_yaml::Value::String("checkout".to_string()),
@@ -366,6 +378,9 @@ fn render_job(sub: &SubCommand, opts: &GenerateOpts, config: Option<&OrbConfig>)
         steps.push(serde_yaml::Value::String("set_https_remote".to_string()));
     }
     steps.push(invoke_step);
+    if is_orb_producing {
+        steps.push(build_persist_orb_step());
+    }
     let job = OrbJob {
         description: format!("Run {} command in a dedicated job.", sub.name),
         executor: "default".to_string(),
@@ -711,6 +726,56 @@ fn build_attach_workspace_step() -> serde_yaml::Value {
     when_inner.insert(
         serde_yaml::Value::String("condition".to_string()),
         serde_yaml::Value::String("<< parameters.attach_workspace >>".to_string()),
+    );
+    when_inner.insert(serde_yaml::Value::String("steps".to_string()), inner_steps);
+    let mut when_map = serde_yaml::Mapping::new();
+    when_map.insert(
+        serde_yaml::Value::String("when".to_string()),
+        serde_yaml::Value::Mapping(when_inner),
+    );
+    serde_yaml::Value::Mapping(when_map)
+}
+
+/// Boolean job parameter that toggles persisting the regenerated orb dir to the
+/// workspace (Model B). Off by default; the consumer workflow sets it on the
+/// regenerate-orb step so pack/review/push downstream jobs receive the orb.
+fn build_persist_orb_param() -> OrbParameter {
+    OrbParameter {
+        param_type: "boolean".to_string(),
+        description: "Persist the regenerated orb dir to the workspace so downstream \
+                      jobs (pack, review, the end-of-workflow push job) operate on it \
+                      without an immediate push. Default false."
+            .to_string(),
+        default: Some(serde_yaml::Value::Bool(false)),
+        enum_values: None,
+    }
+}
+
+/// Conditional step: when `persist_orb_workspace` is true, persist the orb dir
+/// (named by the `orb_dir` parameter) to the workspace, rooted at the repo so the
+/// path stays `<< parameters.orb_dir >>` for downstream `attach_workspace` jobs.
+fn build_persist_orb_step() -> serde_yaml::Value {
+    let mut persist_map = serde_yaml::Mapping::new();
+    persist_map.insert(
+        serde_yaml::Value::String("root".to_string()),
+        serde_yaml::Value::String(".".to_string()),
+    );
+    persist_map.insert(
+        serde_yaml::Value::String("paths".to_string()),
+        serde_yaml::Value::Sequence(vec![serde_yaml::Value::String(
+            "<< parameters.orb_dir >>".to_string(),
+        )]),
+    );
+    let mut persist_step = serde_yaml::Mapping::new();
+    persist_step.insert(
+        serde_yaml::Value::String("persist_to_workspace".to_string()),
+        serde_yaml::Value::Mapping(persist_map),
+    );
+    let inner_steps = serde_yaml::Value::Sequence(vec![serde_yaml::Value::Mapping(persist_step)]);
+    let mut when_inner = serde_yaml::Mapping::new();
+    when_inner.insert(
+        serde_yaml::Value::String("condition".to_string()),
+        serde_yaml::Value::String("<< parameters.persist_orb_workspace >>".to_string()),
     );
     when_inner.insert(serde_yaml::Value::String("steps".to_string()), inner_steps);
     let mut when_map = serde_yaml::Mapping::new();
@@ -2052,6 +2117,61 @@ mod tests {
         assert!(
             job.contains("output:"),
             "job must still contain non-reserved parameter 'output':\n{job}"
+        );
+    }
+
+    #[test]
+    fn orb_producing_job_gains_persist_orb_workspace() {
+        // A job for an orb-producing command (one with an `orb_dir` param) must
+        // gain a `persist_orb_workspace` toggle (default false) and a conditional
+        // `persist_to_workspace` step for that dir, so the regenerated orb can
+        // flow to downstream pack/review/push jobs via the workspace (Model B)
+        // instead of relying on an immediate push.
+        let params = vec![Parameter {
+            long_name: "orb_dir".to_string(),
+            short: None,
+            param_type: ParamType::String,
+            default: Some("orb".to_string()),
+            required: false,
+            description: "Orb output directory.".to_string(),
+        }];
+        let sub = make_leaf("generate", params);
+        let cli = make_cli("mytool", vec![sub]);
+        let files = generate(&cli, &default_opts(), None);
+        let job = &files[&PathBuf::from("src/jobs/generate.yml")];
+        assert!(
+            job.contains("persist_orb_workspace:"),
+            "orb-producing job must expose persist_orb_workspace:\n{job}"
+        );
+        assert!(
+            job.contains("persist_to_workspace:"),
+            "must include a persist_to_workspace step:\n{job}"
+        );
+        assert!(
+            job.contains("<< parameters.orb_dir >>"),
+            "the persist step must reference the orb_dir parameter:\n{job}"
+        );
+    }
+
+    #[test]
+    fn non_orb_job_has_no_persist_orb_workspace() {
+        // A command without an `orb_dir` param is not orb-producing and must not
+        // gain the persist toggle/step.
+        let params = vec![Parameter {
+            long_name: "output".to_string(),
+            short: Some('o'),
+            param_type: ParamType::String,
+            default: Some(String::new()),
+            required: false,
+            description: "Output.".to_string(),
+        }];
+        let sub = make_leaf("show", params);
+        let cli = make_cli("mytool", vec![sub]);
+        let files = generate(&cli, &default_opts(), None);
+        let job = &files[&PathBuf::from("src/jobs/show.yml")];
+        assert!(
+            !job.contains("persist_orb_workspace"),
+            "non-orb job must not gain persist_orb_workspace:\n{job}"
         );
     }
 

@@ -33,13 +33,10 @@ jobs:
           command: apt-get update && apt-get install -y gnupg
       - run:
           name: Regenerate orb source
-          # INTERIM (--no-record): auto-record's binary-side push is being
-          # removed in the push redesign — the binary will persist changed files
-          # and a single end-of-workflow push job will commit + push them. Until
-          # that lands, --no-record stops the binary attempting the push (which
-          # the CI's read-only checkout key correctly rejects). The job still
-          # regenerates the orb and pack/review validate it. Revisit when the
-          # redesign wires in the user-supplied push job.
+          # Model B: the binary regenerates the orb but does NOT push
+          # (--no-record). The orb dir is persisted to the workspace below so
+          # pack/review validate the *regenerated* orb, and a single
+          # end-of-workflow push job commits + pushes it once, after validation.
           command: |
             export PATH="/tmp/bin:$PATH"
             gen-circleci-orb generate \
@@ -48,6 +45,10 @@ jobs:
               --orb-dir orb \
               --circleci-cli-version 0.1.36202 \
               --no-record
+      - persist_to_workspace:
+          root: .
+          paths:
+            - orb
 
 
 workflows:
@@ -106,16 +107,25 @@ workflows:
       - build-binary:
           requires: [toolkit/common_tests]
       - regenerate-orb:
-          # `release` provides BOT_* signing material; `bot-check` provides
-          # GITHUB_TOKEN (contents:write). Auto-record fires only on PR branches;
-          # no-ops on main/forks (binary-gated).
+          # `release` provides BOT_* signing material. The binary does not push
+          # (--no-record); it persists the regenerated orb to the workspace.
           context: [release, bot-check]
           requires: [build-binary]
+      # pack/review consume the regenerated orb from the workspace (checkout:false
+      # + attach_workspace), so they validate exactly what was just generated.
       - orb-tools/pack:
           name: pack-orb
+          checkout: false
           source_dir: orb/src
+          pre-steps:
+            - attach_workspace:
+                at: .
           requires: [regenerate-orb]
       - orb-tools/review:
           name: review-orb
+          checkout: false
           source_dir: orb/src
+          pre-steps:
+            - attach_workspace:
+                at: .
           requires: [pack-orb]

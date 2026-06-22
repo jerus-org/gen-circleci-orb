@@ -293,9 +293,15 @@ fn pack_validate_steps(opts: &PatchOpts) -> Vec<String> {
     }
     steps.push(format!("          orb_dir: {orb_dir}"));
     steps.push("          attach_workspace: true".to_string());
-    // Auto-record context(s): supply signing material + write token. The binary
-    // gates recording to PR branches (no-ops on main/forks), so no branch filter
-    // is needed here. Omitted entirely when auto-record is disabled.
+    // Model B: the binary does NOT push here. It regenerates the orb
+    // (no_record) and persists it to the workspace, so pack/review validate the
+    // *regenerated* orb and the end-of-workflow push job commits + pushes it
+    // once, after validation. Without no_record the binary would attempt an
+    // ambient push that the read-only checkout key rejects (breaking CI).
+    steps.push("          no_record: true".to_string());
+    steps.push("          persist_orb_workspace: true".to_string());
+    // Record context(s) remain attached for now; relocating signing to the
+    // end-of-workflow push job is handled separately. Harmless under no_record.
     if !opts.record_contexts.is_empty() {
         steps.push(format!(
             "          context: [{}]",
@@ -304,16 +310,26 @@ fn pack_validate_steps(opts: &PatchOpts) -> Vec<String> {
     }
     steps.push("          requires: [build-binary]".to_string());
 
-    // orb-tools/pack (source_dir + workspace persistence; validates on pack)
+    // orb-tools/pack — checkout:false + attach the regenerated orb from the
+    // workspace (persisted by regenerate-orb), so the packed/validated orb is
+    // exactly what was just generated, not the (possibly stale) committed copy.
     steps.push("      - orb-tools/pack:".to_string());
     steps.push("          name: pack-orb".to_string());
+    steps.push("          checkout: false".to_string());
     steps.push(format!("          source_dir: {orb_dir}/src"));
+    steps.push("          pre-steps:".to_string());
+    steps.push("            - attach_workspace:".to_string());
+    steps.push("                at: .".to_string());
     steps.push("          requires: [regenerate-orb]".to_string());
 
-    // orb-tools/review (best-practice review of packed orb)
+    // orb-tools/review (best-practice review of the regenerated, packed orb)
     steps.push("      - orb-tools/review:".to_string());
     steps.push("          name: review-orb".to_string());
+    steps.push("          checkout: false".to_string());
     steps.push(format!("          source_dir: {orb_dir}/src"));
+    steps.push("          pre-steps:".to_string());
+    steps.push("            - attach_workspace:".to_string());
+    steps.push("                at: .".to_string());
     steps.push("          requires: [pack-orb]".to_string());
 
     steps
@@ -526,6 +542,34 @@ mod tests {
         assert!(
             steps.contains("context: [release]"),
             "regenerate-orb must attach the record context:\n{steps}"
+        );
+    }
+
+    #[test]
+    fn model_b_regenerate_persists_and_pack_review_attach() {
+        // Model B: regenerate-orb must not push (no_record) but must persist the
+        // regenerated orb to the workspace; pack/review must consume it from the
+        // workspace (checkout:false + attach_workspace) so they validate the
+        // regenerated orb rather than the committed (possibly stale) copy.
+        let steps = pack_validate_steps(&make_opts()).join("\n");
+        assert!(
+            steps.contains("no_record: true"),
+            "regenerate-orb must run with no_record (defer the push):\n{steps}"
+        );
+        assert!(
+            steps.contains("persist_orb_workspace: true"),
+            "regenerate-orb must persist the orb dir to the workspace:\n{steps}"
+        );
+        // Both pack and review must attach the workspace with checkout disabled.
+        assert_eq!(
+            steps.matches("checkout: false").count(),
+            2,
+            "pack-orb and review-orb must both set checkout: false:\n{steps}"
+        );
+        assert_eq!(
+            steps.matches("- attach_workspace:").count(),
+            2,
+            "pack-orb and review-orb must both attach the workspace:\n{steps}"
         );
     }
 
