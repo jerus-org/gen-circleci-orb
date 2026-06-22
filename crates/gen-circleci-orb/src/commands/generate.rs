@@ -444,7 +444,6 @@ struct RecordEnv {
     user_name: String,
     user_email: String,
     sign_key: String,
-    write_token: String,
 }
 
 /// Read the signing material from the environment variables **named** by the
@@ -469,26 +468,34 @@ fn read_record_env(
         user_name: req(&record.user_name_env)?,
         user_email: req(&record.user_email_env)?,
         sign_key: req(&record.signing_key_env)?,
-        write_token: req(&record.write_token_env)?,
     })
 }
 
-/// Build the pcu config for a PR-branch push. The push uses the GitHub token
-/// (`write_token`, named by `[record].write_token_env`) as a PAT with
-/// `contents:write` — no GitHub App / branch-protection bypass is needed because
-/// the target is the PR branch, not a protected branch. Branch/repo are taken
-/// from the standard `CIRCLE_*` vars via the `PCU_` prefix source.
-fn build_pcu_config(write_token: &str) -> Result<config::Config> {
-    let builder = config::Config::builder()
-        .set_default("prlog", "PRLOG.md")?
-        .set_default("branch", "CIRCLE_BRANCH")?
-        .set_default("default_branch", "main")?
-        .set_default("username", "CIRCLE_PROJECT_USERNAME")?
-        .set_default("reponame", "CIRCLE_PROJECT_REPONAME")?
-        .set_override("command", "push")?
-        .add_source(config::Environment::with_prefix("PCU"))
-        .set_override("pat", write_token)?;
-    Ok(builder.build()?)
+/// Build the educational message shown when the ambient push is rejected.
+///
+/// The ambient client (`pcu::Client::new_local()`) pushes with whatever auth
+/// `checkout` left in the environment. In a standard CircleCI + GitHub checkout
+/// that is the **read-only** deploy key, so the push is rejected ("the key you
+/// are authenticating with has been marked as read only"). This is expected, not
+/// a tool bug — surface it clearly and point at the recommended setup (a single
+/// user-supplied end-of-workflow push job that commits + pushes the regenerated
+/// orb with real write authority). `err` is appended for diagnosis.
+pub(crate) fn ambient_push_failure_message(err: &impl std::fmt::Display) -> String {
+    format!(
+        "Could not push the regenerated orb using the ambient CI credentials.\n\
+         \n\
+         This is expected in a standard CircleCI + GitHub checkout: `checkout` \
+         provisions a READ-ONLY deploy key, and auto-record pushes with whatever \
+         authorization the environment already holds (it carries no token of its \
+         own). A read-only key cannot push.\n\
+         \n\
+         Recommended setup: do not rely on this ambient push. Configure a single \
+         end-of-workflow push job (with real write authority) that commits and \
+         pushes the regenerated orb — the producing job persists the changed \
+         files and the push happens once, after validation succeeds.\n\
+         \n\
+         Underlying error: {err}"
+    )
 }
 
 /// Normalize `orb_root` into a pathspec libgit2's `add_all` will match.
@@ -523,12 +530,10 @@ fn record_orb(orb_root: &std::path::Path, record: &crate::orb_config::RecordConf
     pcu::import_gpg_key(&env.gpg_key_b64, &env.gpg_trust)
         .map_err(|e| anyhow::anyhow!("GPG import failed: {e}"))?;
 
-    let pcu_config = build_pcu_config(&env.write_token)?;
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
-    let client = rt
-        .block_on(pcu::Client::new_with(&pcu_config))
+    // Ambient client: carries no GitHub credentials of its own. Local git ops
+    // (stage, signed commit) work without auth; the push uses whatever
+    // authorization `checkout` left in the environment (see record's docs).
+    let client = pcu::Client::new_local()
         .map_err(|e| anyhow::anyhow!("Failed to create pcu client: {e}"))?;
 
     // Stage a repo-relative pathspec (no leading `./`) so libgit2 actually
@@ -566,7 +571,7 @@ fn record_orb(orb_root: &std::path::Path, record: &crate::orb_config::RecordConf
     println!("Recorded regenerated orb: {message}");
     client
         .push_commit("", None, false, &env.user_name)
-        .map_err(|e| anyhow::anyhow!("Failed to push regenerated orb: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("{}", ambient_push_failure_message(&e)))?;
     println!("Pushed regenerated orb to remote.");
     Ok(())
 }
@@ -682,7 +687,6 @@ mod tests {
             user_name_env: "MY_NAME".to_string(),
             user_email_env: "MY_EMAIL".to_string(),
             signing_key_env: "MY_SIGN_KEY".to_string(),
-            write_token_env: "MY_WRITE_TOKEN".to_string(),
             contexts: vec!["my-signing-context".to_string()],
         }
     }
@@ -694,7 +698,6 @@ mod tests {
             "MY_NAME" => Some("Bot Name".to_string()),
             "MY_EMAIL" => Some("bot@example.com".to_string()),
             "MY_SIGN_KEY" => Some("DEADBEEF".to_string()),
-            "MY_WRITE_TOKEN" => Some("ghp_token".to_string()),
             _ => None,
         }
     }
@@ -708,7 +711,25 @@ mod tests {
         assert_eq!(env.sign_key, "DEADBEEF");
         assert_eq!(env.gpg_key_b64, "key");
         assert_eq!(env.gpg_trust, "trust");
-        assert_eq!(env.write_token, "ghp_token");
+    }
+
+    // ── ambient_push_failure_message ────────────────────────────────────────
+
+    /// The push-failure guidance must name the read-only-key cause and point at
+    /// the recommended end-of-workflow push job, and append the underlying error
+    /// for diagnosis — so a CI operator understands it's expected, not a bug.
+    #[test]
+    fn ambient_push_failure_message_explains_and_includes_error() {
+        let msg = ambient_push_failure_message(&"marked as read only");
+        assert!(msg.contains("read-only") || msg.to_lowercase().contains("read only"));
+        assert!(
+            msg.to_lowercase().contains("end-of-workflow push job"),
+            "should point at the recommended setup"
+        );
+        assert!(
+            msg.contains("marked as read only"),
+            "should append the underlying error for diagnosis"
+        );
     }
 
     // ── should_record_on_branch ─────────────────────────────────────────────
