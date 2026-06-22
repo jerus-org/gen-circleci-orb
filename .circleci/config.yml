@@ -50,6 +50,38 @@ jobs:
           paths:
             - orb
 
+  # End-of-workflow push job (Model B): regenerates + records (signed commit +
+  # push) the orb, gated on the orb validations so the branch only receives a
+  # validated orb. Loads the org write key (add_ssh_keys) and drops the
+  # read-only checkout key so the ambient push has write authority; the
+  # regenerate-orb commit message carries the ci-skip marker, so this push does
+  # not re-trigger the pipeline (idempotent — a no-op once the orb is in sync).
+  push-orb:
+    docker:
+      - image: rust:latest@sha256:4fd8406017c992f7b8ab55a2f99a1d56aeb1d7ecd255850dfa04239a88601f73
+    steps:
+      - checkout
+      - attach_workspace:
+          at: /tmp/bin
+      - run:
+          name: Install gnupg + openssh-client (GPG signing + SSH agent)
+          command: apt-get update && apt-get install -y gnupg openssh-client
+      - add_ssh_keys:
+          fingerprints:
+            - "SHA256:OkxsH8Z6Iim6WDJBaII9eTT9aaO1f3eDc6IpsgYYPVg"
+      - run:
+          name: Drop read-only checkout key from agent
+          command: ssh-add -d ~/.ssh/id_rsa.pub || true
+      - run:
+          name: Record regenerated orb (signed commit + push)
+          command: |
+            export PATH="/tmp/bin:$PATH"
+            gen-circleci-orb generate \
+              --binary gen-circleci-orb \
+              --orb-namespace jerus-org \
+              --orb-dir orb \
+              --circleci-cli-version 0.1.36202
+
 
 workflows:
   validation:
@@ -129,3 +161,8 @@ workflows:
             - attach_workspace:
                 at: .
           requires: [pack-orb]
+      # `release` supplies the BOT_* GPG signing material; the write key comes
+      # from add_ssh_keys (project SSH settings). Gated on the orb validations.
+      - push-orb:
+          context: [release]
+          requires: [pack-orb, review-orb]
