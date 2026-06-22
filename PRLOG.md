@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - ambient-auth record, drop write_token_env(pr [#135])
+- Model B workspace carrying for auto-record(pr [#136])
 
 ### Fixed
 
@@ -510,6 +511,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#133]: https://github.com/jerus-org/gen-circleci-orb/pull/133
 [#134]: https://github.com/jerus-org/gen-circleci-orb/pull/134
 [#135]: https://github.com/jerus-org/gen-circleci-orb/pull/135
+[#136]: https://github.com/jerus-org/gen-circleci-orb/pull/136
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.49...HEAD
 [0.0.49]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.48...v0.0.49
 [0.0.48]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.47...v0.0.48
