@@ -24,9 +24,20 @@ pub const MCP_DEFAULT_BASE_IMAGE: &str = "rust:1-slim-trixie";
 /// `set_https_remote`.)
 pub const MCP_APT_PACKAGES: &[&str] = &["gnupg", "libssl-dev", "pkg-config"];
 
+/// Apt packages the executor image needs for auto-record's commit-back push:
+/// `gnupg` to GPG-sign the regenerated-orb commit, and `openssh-client` so the
+/// push job's `add_ssh_keys` write key can be loaded and the read-only checkout
+/// key trimmed from the agent. Injected when `[record].enabled`.
+pub const RECORD_APT_PACKAGES: &[&str] = &["gnupg", "openssh-client"];
+
 /// Whether the MCP feature is enabled in `[ci].mcp`.
 pub(crate) fn mcp_enabled(config: &crate::orb_config::OrbConfig) -> bool {
     config.ci.as_ref().and_then(|c| c.mcp).unwrap_or(false)
+}
+
+/// Whether auto-record is enabled in `[record].enabled`.
+pub(crate) fn record_enabled(config: &crate::orb_config::OrbConfig) -> bool {
+    config.record.as_ref().map(|r| r.enabled).unwrap_or(false)
 }
 
 #[derive(Debug, Clone, ValueEnum)]
@@ -314,6 +325,16 @@ pub(crate) fn resolve_apt_packages(
     };
     if mcp_enabled(config) {
         for pkg in MCP_APT_PACKAGES {
+            if !pkgs.iter().any(|p| p == pkg) {
+                pkgs.push((*pkg).to_string());
+            }
+        }
+    }
+    // Auto-record's push job signs (gnupg) and pushes over SSH with a write key
+    // (openssh-client for add_ssh_keys + the read-only-key trim), so the executor
+    // image must carry these whenever recording is enabled.
+    if record_enabled(config) {
+        for pkg in RECORD_APT_PACKAGES {
             if !pkgs.iter().any(|p| p == pkg) {
                 pkgs.push((*pkg).to_string());
             }
@@ -1200,6 +1221,35 @@ mod tests {
                 "mcp must inject {pkg}; got {result:?}"
             );
         }
+    }
+
+    #[test]
+    fn resolve_apt_packages_injects_record_deps_when_enabled() {
+        // With auto-record enabled, the executor image must carry gnupg (signing)
+        // and openssh-client (add_ssh_keys + read-only-key trim) so the push works.
+        let config = crate::orb_config::OrbConfig {
+            record: Some(crate::orb_config::RecordConfig {
+                enabled: true,
+                ..Default::default()
+            }),
+            ..crate::orb_config::OrbConfig::default()
+        };
+        let result = resolve_apt_packages(&[], &config);
+        for pkg in RECORD_APT_PACKAGES {
+            assert!(
+                result.iter().any(|p| p == pkg),
+                "record must inject {pkg}; got {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_apt_packages_no_record_deps_when_disabled() {
+        let result = resolve_apt_packages(&[], &crate::orb_config::OrbConfig::default());
+        assert!(
+            !result.iter().any(|p| p == "openssh-client"),
+            "no record deps when record is disabled; got {result:?}"
+        );
     }
 
     #[test]
