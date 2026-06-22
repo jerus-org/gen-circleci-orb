@@ -44,7 +44,6 @@ pub(crate) fn build_record_config(
     user_name_env: Option<&str>,
     user_email_env: Option<&str>,
     signing_key_env: Option<&str>,
-    write_token_env: Option<&str>,
     contexts: &[String],
 ) -> Result<Option<RecordConfig>> {
     if !enabled {
@@ -69,8 +68,8 @@ pub(crate) fn build_record_config(
     if contexts.is_empty() {
         anyhow::bail!(
             "auto-record is enabled but no --record-context was provided \
-             (the record job needs the CircleCI context(s) that supply the signing \
-             material and push token)"
+             (the record job needs the CircleCI context(s) that supply the GPG \
+             signing material)"
         );
     }
     Ok(Some(RecordConfig {
@@ -80,7 +79,6 @@ pub(crate) fn build_record_config(
         user_name_env: req(user_name_env, "--record-user-name-env")?,
         user_email_env: req(user_email_env, "--record-user-email-env")?,
         signing_key_env: req(signing_key_env, "--record-signing-key-env")?,
-        write_token_env: req(write_token_env, "--record-write-token-env")?,
         contexts,
     }))
 }
@@ -252,9 +250,9 @@ pub struct Init {
 
     /// Enable auto-record: after `generate`, the regenerate-orb CI job commits the
     /// regenerated orb source back (GPG-signed) and pushes it, so the published orb
-    /// always reflects the CLI. When set, the five `--record-*-env` flags name the
-    /// environment variables that hold the signing material at runtime (no defaults —
-    /// they must be supplied). Prompted interactively if not set.
+    /// always reflects the CLI. When set, the `--record-*-env` flags name the
+    /// environment variables that hold the GPG signing material at runtime (no
+    /// defaults — they must be supplied). Prompted interactively if not set.
     #[arg(long)]
     pub record: bool,
 
@@ -278,13 +276,8 @@ pub struct Init {
     #[arg(long)]
     pub record_signing_key_env: Option<String>,
 
-    /// Name of the env var holding a GitHub token with contents:write, used to
-    /// push the regenerated orb to the PR branch (auto-record).
-    #[arg(long)]
-    pub record_write_token_env: Option<String>,
-
     /// CircleCI context(s) that supply the auto-record env-var values
-    /// (signing material + write token), repeatable or comma-separated.
+    /// (GPG signing material), repeatable or comma-separated.
     /// The record CI job attaches these.
     #[arg(long = "record-context", value_delimiter = ',')]
     pub record_contexts: Vec<String>,
@@ -382,10 +375,6 @@ impl Init {
             self.record_signing_key_env.as_ref(),
             ex.map(|r| r.signing_key_env.as_str()),
         );
-        let write_token = resolve(
-            self.record_write_token_env.as_ref(),
-            ex.map(|r| r.write_token_env.as_str()),
-        );
         let contexts: Vec<String> = if !self.record_contexts.is_empty() {
             self.record_contexts.clone()
         } else {
@@ -401,7 +390,6 @@ impl Init {
                 user_name.as_deref(),
                 user_email.as_deref(),
                 sign_key.as_deref(),
-                write_token.as_deref(),
                 &contexts,
             );
         }
@@ -431,14 +419,13 @@ impl Init {
         let user_name = prompt_name("Env var name — committer name", user_name)?;
         let user_email = prompt_name("Env var name — committer email", user_email)?;
         let sign_key = prompt_name("Env var name — GPG signing key id", sign_key)?;
-        let write_token = prompt_name("Env var name — GitHub token (contents:write)", write_token)?;
         let contexts_default = if contexts.is_empty() {
             None
         } else {
             Some(contexts.join(","))
         };
         let contexts_raw = prompt_name(
-            "CircleCI context(s) supplying these values + push token, comma-separated",
+            "CircleCI context(s) supplying the GPG signing material, comma-separated",
             contexts_default,
         )?;
         let contexts: Vec<String> = contexts_raw
@@ -454,7 +441,6 @@ impl Init {
             Some(&user_name),
             Some(&user_email),
             Some(&sign_key),
-            Some(&write_token),
             &contexts,
         )
     }
@@ -883,7 +869,6 @@ mod tests {
             record_user_name_env: None,
             record_user_email_env: None,
             record_signing_key_env: None,
-            record_write_token_env: None,
             record_contexts: vec![],
         };
         assert_eq!(
@@ -1198,7 +1183,6 @@ mod tests {
             record_user_name_env: None,
             record_user_email_env: None,
             record_signing_key_env: None,
-            record_write_token_env: None,
             record_contexts: vec![],
         }
     }
@@ -1207,8 +1191,8 @@ mod tests {
 
     #[test]
     fn build_record_config_disabled_returns_none() {
-        let rec = build_record_config(false, None, None, None, None, None, None, &[])
-            .expect("disabled is ok");
+        let rec =
+            build_record_config(false, None, None, None, None, None, &[]).expect("disabled is ok");
         assert!(rec.is_none(), "disabled must yield no [record] section");
     }
 
@@ -1221,7 +1205,6 @@ mod tests {
             Some("G_NAME"),
             Some("G_EMAIL"),
             Some("G_SIGN"),
-            Some("G_TOKEN"),
             &["release".to_string()],
         )
         .expect("all values present")
@@ -1229,7 +1212,6 @@ mod tests {
         assert!(rec.enabled);
         assert_eq!(rec.gpg_key_env, "G_KEY");
         assert_eq!(rec.signing_key_env, "G_SIGN");
-        assert_eq!(rec.write_token_env, "G_TOKEN");
         assert_eq!(rec.contexts, vec!["release"]);
     }
 
@@ -1242,32 +1224,11 @@ mod tests {
             Some("G_NAME"),
             Some("G_EMAIL"),
             Some("G_SIGN"),
-            Some("G_TOKEN"),
             &["release".to_string()],
         )
         .unwrap_err()
         .to_string();
         assert!(err.contains("--record-gpg-key-env"), "unexpected: {err}");
-    }
-
-    #[test]
-    fn build_record_config_errors_when_enabled_without_write_token() {
-        let err = build_record_config(
-            true,
-            Some("G_KEY"),
-            Some("G_TRUST"),
-            Some("G_NAME"),
-            Some("G_EMAIL"),
-            Some("G_SIGN"),
-            None, // missing write token env name
-            &["release".to_string()],
-        )
-        .unwrap_err()
-        .to_string();
-        assert!(
-            err.contains("--record-write-token-env"),
-            "unexpected: {err}"
-        );
     }
 
     #[test]
@@ -1279,7 +1240,6 @@ mod tests {
             Some("G_NAME"),
             Some("G_EMAIL"),
             Some("G_SIGN"),
-            Some("G_TOKEN"),
             &[], // no context supplied
         )
         .unwrap_err()

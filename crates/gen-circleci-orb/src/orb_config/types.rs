@@ -16,20 +16,17 @@ pub struct OrbConfig {
 /// source back (GPG-signed) and push it **to the PR branch** so the change is
 /// reviewable, keeping the published orb in sync with the CLI without the dev
 /// maintaining the CLI locally. The fields name the **environment variables**
-/// that hold the signing material and write token at runtime — the names are
-/// the consumer's choice (no defaults), so the tool never dictates an env-var
-/// convention. Only the names are stored here (committed); the secret values
-/// live in the CI context(s).
+/// that hold the GPG signing material at runtime — the names are the consumer's
+/// choice (no defaults), so the tool never dictates an env-var convention. Only
+/// the names are stored here (committed); the secret values live in the CI
+/// context(s).
 ///
-/// Write authority is a GitHub token with `contents:write` on the PR branch
-/// (no branch-protection bypass / GitHub App needed, since the push targets the
-/// PR branch, not a protected branch). Naming the write token separately
-/// supports a least-privilege model: the general CI token can be read-only, and
-/// only the record step is given the write token via its context(s).
-///
-/// (Future extension point: an app-id/private-key pair could be supported as an
-/// alternative to `write_token_env` for installations that prefer GitHub App
-/// auth; not implemented yet.)
+/// The push uses **ambient authorization** — pcu's `Client::new_local()` carries
+/// no credentials of its own and relies on whatever auth `checkout` left in the
+/// environment. In a standard CircleCI + GitHub checkout that is the read-only
+/// deploy key, so the push fails (by design, with guidance): the recommended
+/// setup is a single user-supplied end-of-workflow push job. The tool therefore
+/// holds no write token — only the GPG signing names needed to sign the commit.
 #[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq)]
 pub struct RecordConfig {
     /// Whether auto-record is enabled.
@@ -44,12 +41,9 @@ pub struct RecordConfig {
     pub user_email_env: String,
     /// Name of the env var holding the GPG signing key id.
     pub signing_key_env: String,
-    /// Name of the env var holding a GitHub token with `contents:write` used to
-    /// push the regenerated orb to the PR branch.
-    pub write_token_env: String,
     /// CircleCI context(s) that supply the values for the env vars named above.
-    /// The record CI job attaches these so the signing material and write token
-    /// are available at runtime.
+    /// The record CI job attaches these so the signing material is available at
+    /// runtime.
     pub contexts: Vec<String>,
 }
 

@@ -62,8 +62,8 @@ gpg_trust_env = "BOT_TRUST"
 user_name_env = "BOT_USER_NAME"
 user_email_env = "BOT_USER_EMAIL"
 signing_key_env = "BOT_SIGN_KEY"
-write_token_env = "GITHUB_TOKEN"
 # Context(s) the record CI job attaches to obtain the values above:
-# `release` supplies the BOT_* signing material; `bot-check` supplies the
-# GITHUB_TOKEN (contents:write) used to push to the PR branch.
-contexts = ["release", "bot-check"]
+# `release` supplies the BOT_* GPG signing material. The push uses ambient
+# authorization (no token); the recommended path is a user-supplied end-of-
+# workflow push job rather than the binary's ambient push.
+contexts = ["release"]
