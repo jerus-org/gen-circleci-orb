@@ -21,34 +21,69 @@ jobs:
       - persist_to_workspace:
           root: target/release
           paths: [gen-circleci-orb]
-  regenerate-orb:
+  # One parameterized job for both the validation regenerate (record:false →
+  # --no-record + persist the orb to the workspace) and the end-of-workflow push
+  # (record:true → signed commit + push). Mirrors the orb's own `generate` job:
+  # the SSH write key (add_ssh_keys) + read-only-key trim are gated on a
+  # fingerprint being supplied; gnupg is installed only when recording. Runs the
+  # freshly-built binary from /tmp/bin (so the PR's changes are exercised, not the
+  # published orb's baked-in binary — which is why this isn't the orb job).
+  regenerate:
+    parameters:
+      record:
+        type: boolean
+        default: false
+        description: "When true, sign + commit + push the regenerated orb; when false, persist it for validation."
+      ssh_fingerprint:
+        type: string
+        default: ""
+        description: "SSH write-key fingerprint. When set, load it + drop the read-only checkout key so the push has write authority."
     docker:
       - image: rust:latest@sha256:4fd8406017c992f7b8ab55a2f99a1d56aeb1d7ecd255850dfa04239a88601f73
     steps:
       - checkout
       - attach_workspace:
           at: /tmp/bin
+      - when:
+          condition: << parameters.record >>
+          steps:
+            - run:
+                name: Install gnupg (GPG signing for record)
+                command: apt-get update && apt-get install -y gnupg
+      - when:
+          condition: << parameters.ssh_fingerprint >>
+          steps:
+            - run:
+                name: Install openssh-client (SSH agent for the write key)
+                command: apt-get update && apt-get install -y openssh-client
+            - add_ssh_keys:
+                fingerprints:
+                  - << parameters.ssh_fingerprint >>
+            - run:
+                name: Drop read-only checkout key from agent
+                command: ssh-add -d ~/.ssh/id_rsa.pub || true
       - run:
-          name: Install gnupg (required by auto-record GPG signing)
-          command: apt-get update && apt-get install -y gnupg
-      - run:
-          name: Regenerate orb source
-          # Model B: the binary regenerates the orb but does NOT push
-          # (--no-record). The orb dir is persisted to the workspace below so
-          # pack/review validate the *regenerated* orb, and a single
-          # end-of-workflow push job commits + pushes it once, after validation.
+          name: Generate orb source
           command: |
             export PATH="/tmp/bin:$PATH"
+            no_record_flag="--no-record"
+            if [ "<< parameters.record >>" = "true" ]; then
+              no_record_flag=""
+            fi
             gen-circleci-orb generate \
               --binary gen-circleci-orb \
               --orb-namespace jerus-org \
               --orb-dir orb \
               --circleci-cli-version 0.1.36202 \
-              --no-record
-      - persist_to_workspace:
-          root: .
-          paths:
-            - orb
+              ${no_record_flag}
+      - when:
+          condition:
+            not: << parameters.record >>
+          steps:
+            - persist_to_workspace:
+                root: .
+                paths:
+                  - orb
 
 
 workflows:
@@ -106,10 +141,10 @@ workflows:
             - security with sonarcloud
       - build-binary:
           requires: [toolkit/common_tests]
-      - regenerate-orb:
-          # `release` provides BOT_* signing material. The binary does not push
-          # (--no-record); it persists the regenerated orb to the workspace.
-          context: [release, bot-check]
+      # Validation regenerate: no record (no signing/push), just persist the orb
+      # to the workspace. No context or fingerprint needed.
+      - regenerate:
+          name: regenerate-orb
           requires: [build-binary]
       # pack/review consume the regenerated orb from the workspace (checkout:false
       # + attach_workspace), so they validate exactly what was just generated.
@@ -129,3 +164,12 @@ workflows:
             - attach_workspace:
                 at: .
           requires: [pack-orb]
+      # End-of-workflow push: record:true (sign + commit + push), gated on the orb
+      # validations (atomic). `release` supplies the BOT_* GPG signing material;
+      # the write key is loaded from project SSH settings via the fingerprint.
+      - regenerate:
+          name: push-orb
+          record: true
+          ssh_fingerprint: "SHA256:OkxsH8Z6Iim6WDJBaII9eTT9aaO1f3eDc6IpsgYYPVg"
+          context: [release]
+          requires: [pack-orb, review-orb]

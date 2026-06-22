@@ -44,6 +44,7 @@ pub(crate) fn build_record_config(
     user_name_env: Option<&str>,
     user_email_env: Option<&str>,
     signing_key_env: Option<&str>,
+    push_ssh_fingerprint: Option<&str>,
     contexts: &[String],
 ) -> Result<Option<RecordConfig>> {
     if !enabled {
@@ -79,6 +80,11 @@ pub(crate) fn build_record_config(
         user_name_env: req(user_name_env, "--record-user-name-env")?,
         user_email_env: req(user_email_env, "--record-user-email-env")?,
         signing_key_env: req(signing_key_env, "--record-signing-key-env")?,
+        // Optional: empty means the push falls back to ambient credentials.
+        push_ssh_fingerprint: push_ssh_fingerprint
+            .map(str::trim)
+            .unwrap_or("")
+            .to_string(),
         contexts,
     }))
 }
@@ -276,6 +282,14 @@ pub struct Init {
     #[arg(long)]
     pub record_signing_key_env: Option<String>,
 
+    /// SSH key fingerprint (a public-key hash, not a secret) for the
+    /// end-of-workflow push job (auto-record). Optional: when set, the push job
+    /// loads this write key and drops the read-only checkout key; empty falls back
+    /// to ambient credentials. A value, not an env-var name — add_ssh_keys resolves
+    /// fingerprints at config-compile time and cannot read env vars.
+    #[arg(long)]
+    pub record_push_ssh_fingerprint: Option<String>,
+
     /// CircleCI context(s) that supply the auto-record env-var values
     /// (GPG signing material), repeatable or comma-separated.
     /// The record CI job attaches these.
@@ -375,6 +389,10 @@ impl Init {
             self.record_signing_key_env.as_ref(),
             ex.map(|r| r.signing_key_env.as_str()),
         );
+        let push_fingerprint = resolve(
+            self.record_push_ssh_fingerprint.as_ref(),
+            ex.map(|r| r.push_ssh_fingerprint.as_str()),
+        );
         let contexts: Vec<String> = if !self.record_contexts.is_empty() {
             self.record_contexts.clone()
         } else {
@@ -390,6 +408,7 @@ impl Init {
                 user_name.as_deref(),
                 user_email.as_deref(),
                 sign_key.as_deref(),
+                push_fingerprint.as_deref(),
                 &contexts,
             );
         }
@@ -419,6 +438,11 @@ impl Init {
         let user_name = prompt_name("Env var name — committer name", user_name)?;
         let user_email = prompt_name("Env var name — committer email", user_email)?;
         let sign_key = prompt_name("Env var name — GPG signing key id", sign_key)?;
+        // Optional: a fingerprint VALUE (public-key hash), or empty for ambient.
+        let push_fingerprint = prompt_name(
+            "SSH key fingerprint for the push job (optional; empty = ambient credentials)",
+            push_fingerprint,
+        )?;
         let contexts_default = if contexts.is_empty() {
             None
         } else {
@@ -441,6 +465,7 @@ impl Init {
             Some(&user_name),
             Some(&user_email),
             Some(&sign_key),
+            Some(&push_fingerprint),
             &contexts,
         )
     }
@@ -726,6 +751,11 @@ impl Init {
                 .as_ref()
                 .map(|r| r.contexts.clone())
                 .unwrap_or_default(),
+            record_push_ssh_fingerprint: extras
+                .record
+                .as_ref()
+                .map(|r| r.push_ssh_fingerprint.clone())
+                .unwrap_or_default(),
         };
 
         let summary = ci_patcher::apply_patches(&self.ci_dir, &opts, self.dry_run)?;
@@ -869,6 +899,7 @@ mod tests {
             record_user_name_env: None,
             record_user_email_env: None,
             record_signing_key_env: None,
+            record_push_ssh_fingerprint: None,
             record_contexts: vec![],
         };
         assert_eq!(
@@ -1183,6 +1214,7 @@ mod tests {
             record_user_name_env: None,
             record_user_email_env: None,
             record_signing_key_env: None,
+            record_push_ssh_fingerprint: None,
             record_contexts: vec![],
         }
     }
@@ -1191,8 +1223,8 @@ mod tests {
 
     #[test]
     fn build_record_config_disabled_returns_none() {
-        let rec =
-            build_record_config(false, None, None, None, None, None, &[]).expect("disabled is ok");
+        let rec = build_record_config(false, None, None, None, None, None, None, &[])
+            .expect("disabled is ok");
         assert!(rec.is_none(), "disabled must yield no [record] section");
     }
 
@@ -1205,6 +1237,7 @@ mod tests {
             Some("G_NAME"),
             Some("G_EMAIL"),
             Some("G_SIGN"),
+            None,
             &["release".to_string()],
         )
         .expect("all values present")
@@ -1224,6 +1257,7 @@ mod tests {
             Some("G_NAME"),
             Some("G_EMAIL"),
             Some("G_SIGN"),
+            None,
             &["release".to_string()],
         )
         .unwrap_err()
@@ -1240,6 +1274,7 @@ mod tests {
             Some("G_NAME"),
             Some("G_EMAIL"),
             Some("G_SIGN"),
+            None,
             &[], // no context supplied
         )
         .unwrap_err()
