@@ -33,17 +33,21 @@ jobs:
           command: apt-get update && apt-get install -y gnupg
       - run:
           name: Regenerate orb source
-          # Auto-record ([record] in gen-circleci-orb.toml) is gated inside the
-          # binary: it records (signed commit + push to the PR branch) only on a
-          # regular PR branch, and no-ops on main / forked PRs. The `release`
-          # context (attached in the workflow) supplies BOT_* + GITHUB_TOKEN.
+          # INTERIM (--no-record): auto-record's binary-side push is being
+          # removed in the push redesign — the binary will persist changed files
+          # and a single end-of-workflow push job will commit + push them. Until
+          # that lands, --no-record stops the binary attempting the push (which
+          # the CI's read-only checkout key correctly rejects). The job still
+          # regenerates the orb and pack/review validate it. Revisit when the
+          # redesign wires in the user-supplied push job.
           command: |
             export PATH="/tmp/bin:$PATH"
             gen-circleci-orb generate \
               --binary gen-circleci-orb \
               --orb-namespace jerus-org \
               --orb-dir orb \
-              --circleci-cli-version 0.1.36202
+              --circleci-cli-version 0.1.36202 \
+              --no-record
 
 
 workflows:
