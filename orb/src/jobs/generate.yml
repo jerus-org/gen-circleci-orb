@@ -69,6 +69,10 @@ parameters:
     type: string
     description: Path at which to attach the workspace; also prepended to PATH (only used when attach_workspace is true).
     default: /tmp/workspace
+  persist_orb_workspace:
+    type: boolean
+    description: Persist the regenerated orb dir to the workspace so downstream jobs (pack, review, the end-of-workflow push job) operate on it without an immediate push. Default false.
+    default: false
 steps:
 - checkout
 - when:
@@ -96,3 +100,10 @@ steps:
     dry_run: << parameters.dry_run >>
     config: << parameters.config >>
     no_record: << parameters.no_record >>
+- when:
+    condition: << parameters.persist_orb_workspace >>
+    steps:
+    - persist_to_workspace:
+        root: .
+        paths:
+        - << parameters.orb_dir >>

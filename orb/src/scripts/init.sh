@@ -27,7 +27,6 @@ set -- "$@" --docker-namespace "${DOCKER_NAMESPACE}"
 [[ -n "${RECORD_USER_NAME_ENV:-}" ]] && set -- "$@" --record-user-name-env "${RECORD_USER_NAME_ENV}"
 [[ -n "${RECORD_USER_EMAIL_ENV:-}" ]] && set -- "$@" --record-user-email-env "${RECORD_USER_EMAIL_ENV}"
 [[ -n "${RECORD_SIGNING_KEY_ENV:-}" ]] && set -- "$@" --record-signing-key-env "${RECORD_SIGNING_KEY_ENV}"
-[[ -n "${RECORD_WRITE_TOKEN_ENV:-}" ]] && set -- "$@" --record-write-token-env "${RECORD_WRITE_TOKEN_ENV}"
 [[ -n "${RECORD_CONTEXT:-}" ]] && set -- "$@" --record-context "${RECORD_CONTEXT}"
 [[ "${DRY_RUN:-false}" = "true" ]] && set -- "$@" --dry-run
 "$@"

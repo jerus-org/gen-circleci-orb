@@ -57,7 +57,7 @@ parameters:
   gen_circleci_orb_version:
     type: string
     description: Version of the jerus-org/gen-circleci-orb orb to pin in generated CI. Defaults to the version of this binary (orb and crate are released together)
-    default: 0.0.47
+    default: 0.0.49
   mcp:
     type: boolean
     description: Wire in gen-orb-mcp MCP server generation + publish after orb publish
@@ -84,7 +84,7 @@ parameters:
     default: ''
   record:
     type: boolean
-    description: 'Enable auto-record: after `generate`, the regenerate-orb CI job commits the regenerated orb source back (GPG-signed) and pushes it, so the published orb always reflects the CLI. When set, the five `--record-*-env` flags name the environment variables that hold the signing material at runtime (no defaults — they must be supplied). Prompted interactively if not set'
+    description: 'Enable auto-record: after `generate`, the regenerate-orb CI job commits the regenerated orb source back (GPG-signed) and pushes it, so the published orb always reflects the CLI. When set, the `--record-*-env` flags name the environment variables that hold the GPG signing material at runtime (no defaults — they must be supplied). Prompted interactively if not set'
     default: false
   record_gpg_key_env:
     type: string
@@ -106,13 +106,9 @@ parameters:
     type: string
     description: Name of the env var holding the GPG signing key id (auto-record)
     default: ''
-  record_write_token_env:
-    type: string
-    description: Name of the env var holding a GitHub token with contents:write, used to push the regenerated orb to the PR branch (auto-record)
-    default: ''
   record_context:
     type: string
-    description: CircleCI context(s) that supply the auto-record env-var values (signing material + write token), repeatable or comma-separated. The record CI job attaches these
+    description: CircleCI context(s) that supply the auto-record env-var values (GPG signing material), repeatable or comma-separated. The record CI job attaches these
     default: ''
   dry_run:
     type: boolean
@@ -151,6 +147,5 @@ steps:
       RECORD_USER_NAME_ENV: << parameters.record_user_name_env >>
       RECORD_USER_EMAIL_ENV: << parameters.record_user_email_env >>
       RECORD_SIGNING_KEY_ENV: << parameters.record_signing_key_env >>
-      RECORD_WRITE_TOKEN_ENV: << parameters.record_write_token_env >>
       RECORD_CONTEXT: << parameters.record_context >>
       DRY_RUN: << parameters.dry_run >>
