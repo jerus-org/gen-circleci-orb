@@ -1720,7 +1720,7 @@ dependencies = [
 
 [[package]]
 name = "gen-circleci-orb"
-version = "0.0.50"
+version = "0.0.51"
 dependencies = [
  "anyhow",
  "clap",
