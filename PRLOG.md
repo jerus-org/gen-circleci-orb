@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- revert-roll back partial 0.0.51 release(pr [#143])
+
 ### Fixed
 
 - forward orb boolean flags via when+BASH_ENV(pr [#142])
@@ -529,6 +533,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#139]: https://github.com/jerus-org/gen-circleci-orb/pull/139
 [#140]: https://github.com/jerus-org/gen-circleci-orb/pull/140
 [#142]: https://github.com/jerus-org/gen-circleci-orb/pull/142
+[#143]: https://github.com/jerus-org/gen-circleci-orb/pull/143
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.50...HEAD
 [0.0.50]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.49...v0.0.50
 [0.0.49]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.48...v0.0.49
