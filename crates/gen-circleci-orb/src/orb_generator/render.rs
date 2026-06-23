@@ -248,13 +248,62 @@ fn resolve_run_step_name(sub: &SubCommand, config: Option<&OrbConfig>) -> String
 
 fn render_command(sub: &SubCommand, config: Option<&OrbConfig>) -> String {
     let parameters = build_command_orb_parameters(sub);
-    let step = build_run_step(sub, &resolve_run_step_name(sub, config));
+    // Boolean flags are set as string env vars via `when` steps (reliable),
+    // ahead of the run step that consumes them via BASH_ENV.
+    let mut steps = build_boolean_flag_env_steps(sub);
+    steps.push(build_run_step(sub, &resolve_run_step_name(sub, config)));
     let cmd = OrbCommand {
         description: sub.description.clone(),
         parameters,
-        steps: vec![step],
+        steps,
     };
     serde_yaml::to_string(&cmd).unwrap()
+}
+
+/// For each boolean parameter, emit a `when: condition: << parameters.X >>` step
+/// that exports `X=true` to `BASH_ENV`. This gives the command's script a real
+/// string env var to test (`[[ "${X:-false}" = "true" ]]`), instead of a YAML
+/// boolean in the `environment:` block — which CircleCI does not reliably expose
+/// to the shell as "true", so the flag would silently never be passed.
+fn build_boolean_flag_env_steps(sub: &SubCommand) -> Vec<serde_yaml::Value> {
+    let mut steps = Vec::new();
+    for p in &sub.parameters {
+        if !matches!(p.param_type, ParamType::Boolean) {
+            continue;
+        }
+        let orb_name = resolve_command_param_name(&sub.name, &p.long_name);
+        let env_var = orb_name.to_uppercase();
+
+        let mut run_map = serde_yaml::Mapping::new();
+        run_map.insert(
+            serde_yaml::Value::String("name".to_string()),
+            serde_yaml::Value::String(format!("Set {env_var} flag")),
+        );
+        run_map.insert(
+            serde_yaml::Value::String("command".to_string()),
+            serde_yaml::Value::String(format!("echo 'export {env_var}=true' >> \"$BASH_ENV\"")),
+        );
+        let mut run_step = serde_yaml::Mapping::new();
+        run_step.insert(
+            serde_yaml::Value::String("run".to_string()),
+            serde_yaml::Value::Mapping(run_map),
+        );
+        let inner_steps = serde_yaml::Value::Sequence(vec![serde_yaml::Value::Mapping(run_step)]);
+
+        let mut when_inner = serde_yaml::Mapping::new();
+        when_inner.insert(
+            serde_yaml::Value::String("condition".to_string()),
+            serde_yaml::Value::String(format!("<< parameters.{orb_name} >>")),
+        );
+        when_inner.insert(serde_yaml::Value::String("steps".to_string()), inner_steps);
+        let mut when_map = serde_yaml::Mapping::new();
+        when_map.insert(
+            serde_yaml::Value::String("when".to_string()),
+            serde_yaml::Value::Mapping(when_inner),
+        );
+        steps.push(serde_yaml::Value::Mapping(when_map));
+    }
+    steps
 }
 
 /// Build orb parameters for a command, renaming any restricted names with a
@@ -628,16 +677,25 @@ fn build_run_step(sub: &SubCommand, run_name: &str) -> serde_yaml::Value {
                 sub.name.replace('-', "_")
             )),
         );
-        if !sub.parameters.is_empty() {
-            let mut env_map = serde_yaml::Mapping::new();
-            for p in &sub.parameters {
-                let orb_name = resolve_command_param_name(&sub.name, &p.long_name);
-                let env_var = orb_name.to_uppercase();
-                env_map.insert(
-                    serde_yaml::Value::String(env_var),
-                    serde_yaml::Value::String(format!("<< parameters.{orb_name} >>")),
-                );
+        // Boolean params are NOT put in the environment block: a boolean
+        // parameter interpolates to a YAML boolean (`true`), which CircleCI does
+        // not reliably expose as the string "true" to the shell — so the script's
+        // `[[ "${X}" = "true" ]]` check would fail and the flag would never be
+        // added. They're set as real string env vars via `when` steps instead
+        // (see build_boolean_flag_env_steps).
+        let mut env_map = serde_yaml::Mapping::new();
+        for p in &sub.parameters {
+            if matches!(p.param_type, ParamType::Boolean) {
+                continue;
             }
+            let orb_name = resolve_command_param_name(&sub.name, &p.long_name);
+            let env_var = orb_name.to_uppercase();
+            env_map.insert(
+                serde_yaml::Value::String(env_var),
+                serde_yaml::Value::String(format!("<< parameters.{orb_name} >>")),
+            );
+        }
+        if !env_map.is_empty() {
             run_map.insert(
                 serde_yaml::Value::String("environment".to_string()),
                 serde_yaml::Value::Mapping(env_map),
@@ -1828,9 +1886,16 @@ mod tests {
             content.contains("ORB_PATH: << parameters.orb_path >>"),
             "environment must map ORB_PATH:\n{content}"
         );
+        // Boolean params are NOT YAML-boolean env values (unreliable at runtime);
+        // they're set as strings via a `when` condition + BASH_ENV instead.
         assert!(
-            content.contains("FORCE: << parameters.force >>"),
-            "environment must map FORCE:\n{content}"
+            !content.contains("FORCE: << parameters.force >>"),
+            "boolean FORCE must not be a YAML-boolean env value:\n{content}"
+        );
+        assert!(
+            content.contains("condition: << parameters.force >>")
+                && content.contains("export FORCE=true"),
+            "boolean FORCE must be gated via when + exported as a string:\n{content}"
         );
     }
 
@@ -2349,6 +2414,46 @@ mod tests {
         assert!(
             cmd.contains("output:"),
             "command must still contain non-restricted parameter 'output':\n{cmd}"
+        );
+    }
+
+    #[test]
+    fn boolean_flag_forwarded_via_when_not_yaml_boolean_env() {
+        // A boolean param must NOT be a YAML-boolean env value (CircleCI doesn't
+        // reliably expose it to the shell as "true", so the flag would never be
+        // passed — the bug that left consumers' no_record:true silently
+        // recording). Instead a `when` condition exports it as a string to
+        // BASH_ENV, which the script reads.
+        let params = vec![Parameter {
+            long_name: "no_record".to_string(),
+            short: None,
+            param_type: ParamType::Boolean,
+            default: Some("false".to_string()),
+            required: false,
+            description: "Suppress auto-record.".to_string(),
+        }];
+        let sub = make_leaf("generate", params);
+        let cli = make_cli("mytool", vec![sub]);
+        let files = generate(&cli, &default_opts(), None);
+        let cmd = &files[&PathBuf::from("src/commands/generate.yml")];
+        assert!(
+            !cmd.contains("NO_RECORD: << parameters.no_record >>"),
+            "boolean must not be a YAML-boolean env value:\n{cmd}"
+        );
+        assert!(
+            cmd.contains("condition: << parameters.no_record >>"),
+            "boolean flag must be gated via a when condition:\n{cmd}"
+        );
+        assert!(
+            cmd.contains("export NO_RECORD=true"),
+            "the when step must export the flag as a string to BASH_ENV:\n{cmd}"
+        );
+        // The script still reads the (now reliably-string) env var + emits the flag.
+        let script = &files[&PathBuf::from("src/scripts/generate.sh")];
+        assert!(
+            script.contains(r#"[[ "${NO_RECORD:-false}" = "true" ]]"#)
+                && script.contains("--no-record"),
+            "script must still test NO_RECORD and emit --no-record:\n{script}"
         );
     }
 

@@ -61,6 +61,18 @@ parameters:
     description: Suppress auto-record for this run, even when `[record].enabled = true` in gen-circleci-orb.toml. Auto-record commits the regenerated orb source back to the current branch (GPG-signed) and pushes it, so the published orb always reflects the CLI. Whether to record, and the names of the env vars holding the signing material, are config-driven (the `[record]` section). Use this flag for local, test, and dry runs where no signing material is available
     default: false
 steps:
+- when:
+    condition: << parameters.dry_run >>
+    steps:
+    - run:
+        name: Set DRY_RUN flag
+        command: echo 'export DRY_RUN=true' >> "$BASH_ENV"
+- when:
+    condition: << parameters.no_record >>
+    steps:
+    - run:
+        name: Set NO_RECORD flag
+        command: echo 'export NO_RECORD=true' >> "$BASH_ENV"
 - run:
     name: Generate orb source files from a CLI binary's --help output
     command: <<include(scripts/generate.sh)>>
@@ -76,6 +88,4 @@ steps:
       GIT_PUSH_SUBCOMMAND: << parameters.git_push_subcommand >>
       CIRCLECI_CLI_VERSION: << parameters.circleci_cli_version >>
       APT_PACKAGES: << parameters.apt_packages >>
-      DRY_RUN: << parameters.dry_run >>
       CONFIG: << parameters.config >>
-      NO_RECORD: << parameters.no_record >>

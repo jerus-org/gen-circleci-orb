@@ -8,9 +8,14 @@ parameters:
     description: Register the orb as private when creating it.  Must be set correctly on first creation — orb visibility cannot be changed after the orb is created.
     default: false
 steps:
+- when:
+    condition: << parameters.private >>
+    steps:
+    - run:
+        name: Set PRIVATE flag
+        command: echo 'export PRIVATE=true' >> "$BASH_ENV"
 - run:
     name: Ensure a CircleCI orb is registered, creating it if it does not exist
     command: <<include(scripts/ensure_orb_registered.sh)>>
     environment:
       ORB_NAME: << parameters.orb_name >>
-      PRIVATE: << parameters.private >>

@@ -57,7 +57,7 @@ parameters:
   gen_circleci_orb_version:
     type: string
     description: Version of the jerus-org/gen-circleci-orb orb to pin in generated CI. Defaults to the version of this binary (orb and crate are released together)
-    default: 0.0.49
+    default: 0.0.50
   mcp:
     type: boolean
     description: Wire in gen-orb-mcp MCP server generation + publish after orb publish
@@ -119,6 +119,24 @@ parameters:
     description: Show planned changes without modifying any files
     default: false
 steps:
+- when:
+    condition: << parameters.mcp >>
+    steps:
+    - run:
+        name: Set MCP flag
+        command: echo 'export MCP=true' >> "$BASH_ENV"
+- when:
+    condition: << parameters.record >>
+    steps:
+    - run:
+        name: Set RECORD flag
+        command: echo 'export RECORD=true' >> "$BASH_ENV"
+- when:
+    condition: << parameters.dry_run >>
+    steps:
+    - run:
+        name: Set DRY_RUN flag
+        command: echo 'export DRY_RUN=true' >> "$BASH_ENV"
 - run:
     name: Wire orb generation into an existing repo's CI configuration
     command: <<include(scripts/init.sh)>>
@@ -139,13 +157,11 @@ steps:
       DOCKER_CONTEXT: << parameters.docker_context >>
       ORB_CONTEXT: << parameters.orb_context >>
       GEN_CIRCLECI_ORB_VERSION: << parameters.gen_circleci_orb_version >>
-      MCP: << parameters.mcp >>
       MCP_EARLIEST_VERSION: << parameters.mcp_earliest_version >>
       MCP_CONTEXT: << parameters.mcp_context >>
       GIT_PUSH_SUBCOMMANDS: << parameters.git_push_subcommands >>
       HOME_URL: << parameters.home_url >>
       SOURCE_URL: << parameters.source_url >>
-      RECORD: << parameters.record >>
       RECORD_GPG_KEY_ENV: << parameters.record_gpg_key_env >>
       RECORD_GPG_TRUST_ENV: << parameters.record_gpg_trust_env >>
       RECORD_USER_NAME_ENV: << parameters.record_user_name_env >>
@@ -153,4 +169,3 @@ steps:
       RECORD_SIGNING_KEY_ENV: << parameters.record_signing_key_env >>
       RECORD_PUSH_SSH_FINGERPRINT: << parameters.record_push_ssh_fingerprint >>
       RECORD_CONTEXT: << parameters.record_context >>
-      DRY_RUN: << parameters.dry_run >>
