@@ -1170,7 +1170,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ccc2776f0c61eca1ca32528f85548abd1a4be8fb53d1b21c013e4f18da1e7090"
 dependencies = [
  "data-encoding",
- "syn 1.0.109",
+ "syn 2.0.117",
 ]
 
 [[package]]
@@ -1698,9 +1698,9 @@ dependencies = [
 
 [[package]]
 name = "gen-bsky"
-version = "0.1.27"
+version = "0.1.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6151e2cbc8dc45a9d65c361612ea419937f94cbe21f295bc212d7ba46da6cb2f"
+checksum = "f59f12ba63809646cab34e4696c69e859d10dfc4eaa417d6c6922c9ee2a23e31"
 dependencies = [
  "base62",
  "bsky-sdk",
@@ -1744,9 +1744,9 @@ dependencies = [
 
 [[package]]
 name = "gen-linkedin"
-version = "0.1.20"
+version = "0.1.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c162e5c4a7dd3e2369100354faeb98d0c29ebb0c79e06ab00dcfd50971846a05"
+checksum = "91c892c983a9136666fa234ea3d601b43f11750b08990fcec1cce163d8841a43"
 dependencies = [
  "chrono",
  "log",
@@ -2711,9 +2711,9 @@ dependencies = [
 
 [[package]]
 name = "link-bridge"
-version = "0.2.5"
+version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5999f283fa333172a7cbe761872155ff7c4149d1f9d461cde04fb02871e22e80"
+checksum = "f71fa7a59714a666f345bbb80f4cd74acd19eae3f025b4c9649d29993e50294e"
 dependencies = [
  "base62",
  "chrono",
@@ -2746,9 +2746,9 @@ dependencies = [
 
 [[package]]
 name = "log"
-version = "0.4.32"
+version = "0.4.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "953f07c43838f8e6f9758cab68bf5bed85465e7587ebe0b823f1bcd81978ad3a"
+checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 
 [[package]]
 name = "lru"
@@ -3396,9 +3396,9 @@ dependencies = [
 
 [[package]]
 name = "pcu"
-version = "0.6.25"
+version = "0.6.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "13bf0f81c8e71e39b42f10e90b23bfbc662f42da754e2bb9efbaf884a4fdf6fc"
+checksum = "f9d216bb53acb65670c9470781276339cb4e64a9262a430e07d6e90b6cacadc7"
 dependencies = [
  "base62",
  "base64 0.22.1",
@@ -4475,7 +4475,7 @@ dependencies = [
  "regex",
  "regex-syntax",
  "sha1collisiondetection",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
  "xxhash-rust",
 ]
 
