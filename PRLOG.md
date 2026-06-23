@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - deps: bump quinn-proto for RUSTSEC-2026-0185(pr [#141])
 - deps: update pinned containers(pr [#138])
 - deps: update dependency gen-circleci-orb to v0.0.49(pr [#139])
+- deps: update rust crate pcu to 0.6.27(pr [#140])
 
 ## [0.0.49] - 2026-06-19
 
@@ -520,6 +521,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#141]: https://github.com/jerus-org/gen-circleci-orb/pull/141
 [#138]: https://github.com/jerus-org/gen-circleci-orb/pull/138
 [#139]: https://github.com/jerus-org/gen-circleci-orb/pull/139
+[#140]: https://github.com/jerus-org/gen-circleci-orb/pull/140
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.49...HEAD
 [0.0.49]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.48...v0.0.49
 [0.0.48]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.47...v0.0.48
