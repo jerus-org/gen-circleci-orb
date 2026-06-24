@@ -53,10 +53,10 @@ pub struct PatchReport {
 /// Marker comment opening a gen-circleci-orb-managed block in a consumer's
 /// config. `update` replaces everything between the begin/end markers, so the
 /// consumer's own jobs/customizations (outside the markers) are preserved.
-const MANAGED_BEGIN: &str =
+pub(crate) const MANAGED_BEGIN: &str =
     "# >>> gen-circleci-orb (managed — edits overwritten by 'gen-circleci-orb update')";
 /// Marker comment closing a gen-circleci-orb-managed block.
-const MANAGED_END: &str = "# <<< gen-circleci-orb";
+pub(crate) const MANAGED_END: &str = "# <<< gen-circleci-orb";
 
 fn managed_begin(indent: &str) -> String {
     format!("{indent}{MANAGED_BEGIN}")

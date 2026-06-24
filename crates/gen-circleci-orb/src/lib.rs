@@ -31,6 +31,8 @@ pub enum Commands {
     Generate(Box<commands::generate::Generate>),
     /// Wire orb generation into an existing repo's CI configuration.
     Init(Box<commands::init::Init>),
+    /// Re-sync an existing repo's orb-managed CI wiring to the current flow.
+    Update(commands::update::Update),
 }
 
 impl Cli {
@@ -41,6 +43,7 @@ impl Cli {
             Commands::EnsureOrbRegistered(cmd) => cmd.run(),
             Commands::Generate(cmd) => cmd.run(),
             Commands::Init(cmd) => cmd.run(),
+            Commands::Update(cmd) => cmd.run(),
         }
     }
 }
