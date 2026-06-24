@@ -58,7 +58,7 @@ parameters:
   gen_circleci_orb_version:
     type: string
     description: Version of the jerus-org/gen-circleci-orb orb to pin in generated CI. Defaults to the version of this binary (orb and crate are released together)
-    default: 0.0.50
+    default: 0.0.51
   mcp:
     type: boolean
     description: Wire in gen-orb-mcp MCP server generation + publish after orb publish
