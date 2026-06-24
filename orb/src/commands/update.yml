@@ -1,0 +1,27 @@
+description: Re-sync an existing repo's orb-managed CI wiring to the current flow
+parameters:
+  config:
+    type: string
+    description: Path to gen-circleci-orb.toml
+    default: gen-circleci-orb.toml
+  ci_dir:
+    type: string
+    description: Path to the .circleci/ directory
+    default: .circleci
+  check:
+    type: boolean
+    description: 'Verify mode: write nothing and exit non-zero (with a diff and guidance) when the CI wiring is out of date. For use in CI'
+    default: false
+steps:
+- when:
+    condition: << parameters.check >>
+    steps:
+    - run:
+        name: Set CHECK flag
+        command: echo 'export CHECK=true' >> "$BASH_ENV"
+- run:
+    name: Re-sync an existing repo's orb-managed CI wiring to the current flow
+    command: <<include(scripts/update.sh)>>
+    environment:
+      CONFIG: << parameters.config >>
+      CI_DIR: << parameters.ci_dir >>
