@@ -50,6 +50,21 @@ pub struct PatchReport {
     pub skipped: Vec<String>,
 }
 
+/// Marker comment opening a gen-circleci-orb-managed block in a consumer's
+/// config. `update` replaces everything between the begin/end markers, so the
+/// consumer's own jobs/customizations (outside the markers) are preserved.
+const MANAGED_BEGIN: &str =
+    "# >>> gen-circleci-orb (managed — edits overwritten by 'gen-circleci-orb update')";
+/// Marker comment closing a gen-circleci-orb-managed block.
+const MANAGED_END: &str = "# <<< gen-circleci-orb";
+
+fn managed_begin(indent: &str) -> String {
+    format!("{indent}{MANAGED_BEGIN}")
+}
+fn managed_end(indent: &str) -> String {
+    format!("{indent}{MANAGED_END}")
+}
+
 /// Patch a build/validation CircleCI config string.
 /// Returns the modified content and a report of what was changed or skipped.
 pub fn patch_build(content: &str, opts: &PatchOpts) -> (String, PatchReport) {
@@ -89,7 +104,8 @@ fn patch_step0_gen_circleci_orb_orb(
     if content.contains("gen-circleci-orb:") {
         report.skipped.push("gen-circleci-orb orb".to_string());
     } else if let Some(pos) = find_section_end(lines, "orbs:") {
-        lines.insert(pos, orb_entry);
+        let block = vec![managed_begin("  "), orb_entry, managed_end("  ")];
+        insert_block_at(lines, pos, &block);
         report.insertions.push("gen-circleci-orb orb".to_string());
     }
 }
@@ -280,7 +296,7 @@ fn pack_validate_steps(opts: &PatchOpts) -> Vec<String> {
     let orb_dir = &opts.orb_dir;
     let binary = &opts.binary;
     let records = !opts.record_contexts.is_empty();
-    let mut steps = vec![];
+    let mut steps = vec![managed_begin("      ")];
 
     // build_rust_binary — compiles the (release) binary and persists it to the
     // workspace. It does NOT depend on the test job: the slow release build runs
@@ -360,6 +376,7 @@ fn pack_validate_steps(opts: &PatchOpts) -> Vec<String> {
     steps.push("          requires: [pack-orb]".to_string());
     push_branch_ignore(&mut steps, &["main"]);
 
+    steps.push(managed_end("      "));
     steps
 }
 
@@ -400,6 +417,7 @@ fn orb_release_workflow_section(opts: &PatchOpts) -> Vec<String> {
 
     let mut lines = vec![
         String::new(),
+        managed_begin("  "),
         "  orb-release:".to_string(),
         "    jobs:".to_string(),
         "      - gen-circleci-orb/build_rust_binary:".to_string(),
@@ -506,6 +524,7 @@ fn orb_release_workflow_section(opts: &PatchOpts) -> Vec<String> {
         push_mcp_workflow_steps(&mut lines, opts, &only_tag, &ignore_branches);
     }
 
+    lines.push(managed_end("  "));
     lines
 }
 
@@ -1158,6 +1177,34 @@ mod tests {
         assert!(
             publish_block.contains("orb-release-ensure-registered-my-org"),
             "publish must require orb-release-ensure-registered-my-org:\n{publish_block}"
+        );
+    }
+
+    #[test]
+    fn patch_build_wraps_the_three_managed_blocks_in_markers() {
+        let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
+        // The three orb-managed regions (orbs entry, validation jobs, orb-release
+        // workflow) are each wrapped in begin/end markers so `update` can replace
+        // them surgically without touching the consumer's own content.
+        assert_eq!(
+            output.matches(MANAGED_BEGIN).count(),
+            3,
+            "expected 3 managed-block begin markers:\n{output}"
+        );
+        assert_eq!(
+            output.matches(MANAGED_END).count(),
+            3,
+            "expected 3 managed-block end markers:\n{output}"
+        );
+        // The validation jobs block is marked at job indentation (6 spaces).
+        assert!(
+            output.contains(&format!("      {MANAGED_BEGIN}")),
+            "validation jobs block must be marked at 6-space indent:\n{output}"
+        );
+        // The orbs entry and orb-release workflow are marked at 2-space indent.
+        assert!(
+            output.contains(&format!("  {MANAGED_BEGIN}")),
+            "orbs entry / orb-release must be marked at 2-space indent:\n{output}"
         );
     }
 
