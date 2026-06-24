@@ -13,4 +13,5 @@ set -- gen-circleci-orb generate
 [[ "${DRY_RUN:-false}" = "true" ]] && set -- "$@" --dry-run
 [[ -n "${CONFIG:-}" ]] && set -- "$@" --config "${CONFIG}"
 [[ "${NO_RECORD:-false}" = "true" ]] && set -- "$@" --no-record
+[[ "${CHECK:-false}" = "true" ]] && set -- "$@" --check
 "$@"

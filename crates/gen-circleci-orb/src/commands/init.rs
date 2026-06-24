@@ -723,6 +723,8 @@ impl Init {
             config: None,
             // init is a local bootstrap, not a CI run — never auto-record/push.
             no_record: true,
+            // init writes the orb for real; verify-only check mode is off.
+            check: false,
         };
         gen.run()?;
 

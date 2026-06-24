@@ -30,6 +30,14 @@ pub const MCP_APT_PACKAGES: &[&str] = &["gnupg", "libssl-dev", "pkg-config"];
 /// key trimmed from the agent. Injected when `[record].enabled`.
 pub const RECORD_APT_PACKAGES: &[&str] = &["gnupg", "openssh-client"];
 
+/// Commit message for the auto-record regenerate-orb commit.
+///
+/// It must NOT carry a ci-skip marker. push-orb runs only on PR branches, so
+/// this commit has to trigger a validation pipeline on the new HEAD — otherwise
+/// the PR's required status checks never report for that SHA and the GitHub
+/// merge is left waiting on checks that never run.
+const RECORD_COMMIT_MESSAGE: &str = "chore: regenerate orb";
+
 /// Whether the MCP feature is enabled in `[ci].mcp`.
 pub(crate) fn mcp_enabled(config: &crate::orb_config::OrbConfig) -> bool {
     config.ci.as_ref().and_then(|c| c.mcp).unwrap_or(false)
@@ -129,6 +137,14 @@ pub struct Generate {
     /// available.
     #[arg(long)]
     pub no_record: bool,
+
+    /// Verify mode: regenerate the orb and compare it to the committed files,
+    /// writing nothing and never recording. Exits non-zero if any file would be
+    /// created, updated, or removed — i.e. the committed orb is out of sync with
+    /// the CLI. Use this to gate packing/publishing so a drifted or hand-edited
+    /// orb is never published.
+    #[arg(long)]
+    pub check: bool,
 }
 
 /// Convert any git remote URL to a plain HTTPS URL, stripping the `.git` suffix.
@@ -405,12 +421,26 @@ impl Generate {
             .as_ref()
             .and_then(|o| o.custom_files.clone())
             .unwrap_or_default();
-        let report = output_writer::write_tree(&orb_root, &files, &custom_files, self.dry_run)?;
+        // --check (and --dry-run) write nothing; write_tree still computes the
+        // create/update/remove delta against the committed files.
+        let report = output_writer::write_tree(
+            &orb_root,
+            &files,
+            &custom_files,
+            self.dry_run || self.check,
+        )?;
 
         println!(
             "Done: {} created, {} updated, {} unchanged, {} removed",
             report.created, report.updated, report.unchanged, report.removed
         );
+
+        // --check is verify-only: nothing was written, never record, and fail if
+        // the committed orb is out of sync with the generator. Used to gate
+        // packing/publishing so a drifted or hand-edited orb is never published.
+        if self.check {
+            return verify_no_drift(&report);
+        }
 
         // Auto-record is config-driven: only when `[record].enabled = true` and
         // not suppressed by --no-record / --dry-run. The branch policy is
@@ -431,6 +461,23 @@ impl Generate {
         }
         Ok(())
     }
+}
+
+/// In `--check` mode any file the generator would create, update, or remove
+/// means the committed orb is out of sync with the CLI. Returns an error
+/// describing the drift so CI can fail before packing/publishing.
+fn verify_no_drift(report: &output_writer::WriteReport) -> Result<()> {
+    let drift = report.created + report.updated + report.removed;
+    if drift > 0 {
+        anyhow::bail!(
+            "orb is out of sync with the generator: {} to create, {} to update, \
+             {} to remove. Run `gen-circleci-orb generate` and commit the result.",
+            report.created,
+            report.updated,
+            report.removed,
+        );
+    }
+    Ok(())
 }
 
 /// Whether the current CI branch is one we should record (commit + push) to.
@@ -582,7 +629,7 @@ fn record_orb(orb_root: &std::path::Path, record: &crate::orb_config::RecordConf
         return Ok(());
     }
 
-    let message = "chore: regenerate orb [skip ci]";
+    let message = RECORD_COMMIT_MESSAGE;
     let sign_config = pcu::SignConfig::new(pcu::Sign::Gpg)
         .with_identity(&env.user_name, &env.user_email)
         .with_signing_key(&env.sign_key);
@@ -602,6 +649,59 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+
+    #[test]
+    fn regenerate_commit_does_not_skip_ci() {
+        // push-orb runs only on PR branches; the regen commit must trigger a
+        // validation pipeline on the new HEAD so the PR's required status checks
+        // report for that SHA. A ci-skip marker leaves them unreported and blocks
+        // the GitHub merge.
+        let msg = RECORD_COMMIT_MESSAGE.to_lowercase();
+        assert!(
+            !msg.contains("skip ci") && !msg.contains("ci skip"),
+            "regenerate-orb commit must not carry a ci-skip marker: {RECORD_COMMIT_MESSAGE}"
+        );
+    }
+
+    #[test]
+    fn verify_no_drift_passes_when_everything_unchanged() {
+        let report = output_writer::WriteReport {
+            created: 0,
+            updated: 0,
+            unchanged: 33,
+            removed: 0,
+        };
+        assert!(verify_no_drift(&report).is_ok());
+    }
+
+    #[test]
+    fn verify_no_drift_fails_when_files_would_be_updated() {
+        let report = output_writer::WriteReport {
+            created: 0,
+            updated: 11,
+            unchanged: 22,
+            removed: 0,
+        };
+        let err = verify_no_drift(&report).unwrap_err().to_string();
+        assert!(
+            err.contains("11 to update"),
+            "message should name the drift: {err}"
+        );
+    }
+
+    #[test]
+    fn verify_no_drift_fails_on_created_or_removed() {
+        assert!(verify_no_drift(&output_writer::WriteReport {
+            created: 1,
+            ..Default::default()
+        })
+        .is_err());
+        assert!(verify_no_drift(&output_writer::WriteReport {
+            removed: 1,
+            ..Default::default()
+        })
+        .is_err());
+    }
 
     /// Build a git repo with `orb/src/foo.yml` committed, then return the repo.
     fn repo_with_committed_orb(dir: &TempDir) -> git2::Repository {
