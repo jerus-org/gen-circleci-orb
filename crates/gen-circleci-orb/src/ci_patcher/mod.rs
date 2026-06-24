@@ -93,6 +93,131 @@ fn insert_block_at(lines: &mut Vec<String>, pos: usize, block: &[String]) {
     }
 }
 
+/// Names of the orb-managed jobs in a consumer's validation workflow — used by
+/// the name-set fallback when a config has no managed-block markers yet.
+const MANAGED_VALIDATION_JOBS: &[&str] = &[
+    "build-binary",
+    "regenerate-orb",
+    "pack-orb",
+    "review-orb",
+    "push-orb",
+];
+
+fn indent_of(line: &str) -> usize {
+    line.len() - line.trim_start().len()
+}
+
+/// Re-sync a consumer's config to the current generator flow: strip the existing
+/// gen-circleci-orb-managed blocks (between markers, or located by name when a
+/// config has no markers yet) and re-insert them fresh — with markers — via
+/// `patch_build`. Everything outside the managed blocks (the consumer's own jobs,
+/// params and customizations) is preserved.
+pub fn resync_build(content: &str, opts: &PatchOpts) -> (String, PatchReport) {
+    let stripped = strip_managed(content);
+    patch_build(&stripped, opts)
+}
+
+fn strip_managed(content: &str) -> String {
+    let stripped = if content.contains(MANAGED_BEGIN) {
+        strip_marked_blocks(content)
+    } else {
+        strip_unmarked_by_name(content)
+    };
+    normalize_blanks(&stripped, content.ends_with('\n'))
+}
+
+/// Drop every line between a `MANAGED_BEGIN` and the next `MANAGED_END` (inclusive).
+fn strip_marked_blocks(content: &str) -> String {
+    let mut out = Vec::new();
+    let mut in_block = false;
+    for l in content.lines() {
+        let t = l.trim_start();
+        if t.starts_with(MANAGED_BEGIN) {
+            in_block = true;
+            continue;
+        }
+        if in_block {
+            if t.starts_with(MANAGED_END) {
+                in_block = false;
+            }
+            continue;
+        }
+        out.push(l.to_string());
+    }
+    out.join("\n")
+}
+
+/// Locate gen-circleci-orb-managed content by name (no markers present) and drop
+/// it: the orbs entry, the orb-release workflow, and the managed validation jobs.
+fn strip_unmarked_by_name(content: &str) -> String {
+    let lines: Vec<&str> = content.lines().collect();
+    let mut out: Vec<String> = Vec::with_capacity(lines.len());
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i];
+        let trimmed = line.trim_start();
+        // (1) the gen-circleci-orb orbs entry — a single line.
+        if trimmed.starts_with("gen-circleci-orb: ") {
+            i += 1;
+            continue;
+        }
+        // (3) the orb-release workflow — its header plus the indented body.
+        if line.trim_end() == "  orb-release:" {
+            i += 1;
+            while i < lines.len() && (lines[i].is_empty() || indent_of(lines[i]) >= 4) {
+                i += 1;
+            }
+            continue;
+        }
+        // (2) a managed validation job block — a 6-space job invocation whose
+        // `name:` is in the managed set; drop the `- ` line + its continuation.
+        if indent_of(line) == 6 && trimmed.starts_with("- ") {
+            let mut j = i + 1;
+            while j < lines.len() && (lines[j].is_empty() || indent_of(lines[j]) > 6) {
+                j += 1;
+            }
+            if block_is_managed_validation(&lines[i..j]) {
+                i = j;
+                continue;
+            }
+        }
+        out.push(line.to_string());
+        i += 1;
+    }
+    out.join("\n")
+}
+
+fn block_is_managed_validation(block: &[&str]) -> bool {
+    block.iter().any(|l| {
+        let t = l.trim_start();
+        MANAGED_VALIDATION_JOBS
+            .iter()
+            .any(|n| t == format!("name: {n}"))
+    })
+}
+
+/// Collapse runs of >1 blank line (left by removals) and trim trailing blanks.
+fn normalize_blanks(content: &str, trailing_newline: bool) -> String {
+    let mut out: Vec<&str> = Vec::new();
+    let mut prev_blank = false;
+    for l in content.lines() {
+        let blank = l.trim().is_empty();
+        if blank && prev_blank {
+            continue;
+        }
+        out.push(l);
+        prev_blank = blank;
+    }
+    while out.last().map(|l| l.trim().is_empty()).unwrap_or(false) {
+        out.pop();
+    }
+    let mut s = out.join("\n");
+    if trailing_newline {
+        s.push('\n');
+    }
+    s
+}
+
 fn patch_step0_gen_circleci_orb_orb(
     content: &str,
     lines: &mut Vec<String>,
@@ -1207,6 +1332,98 @@ mod tests {
             "orbs entry / orb-release must be marked at 2-space indent:\n{output}"
         );
     }
+
+    #[test]
+    fn resync_is_stable_when_run_twice() {
+        // `update` must not churn: re-syncing an already-resynced config is a
+        // no-op. (The first resync may cosmetically reorder the orbs entry, which
+        // is why we assert stability rather than exact reproduction of the
+        // original patch_build output.)
+        let opts = make_opts();
+        let (patched, _) = patch_build(BUILD_FIXTURE, &opts);
+        let (r1, _) = resync_build(&patched, &opts);
+        let (r2, _) = resync_build(&r1, &opts);
+        assert_eq!(
+            r1, r2,
+            "running update twice must be stable:\n--- r1 ---\n{r1}\n--- r2 ---\n{r2}"
+        );
+    }
+
+    #[test]
+    fn resync_migrates_an_unmarked_old_flow_config() {
+        let (out, _) = resync_build(OLD_FLOW_FIXTURE, &make_opts());
+        assert!(
+            out.contains(MANAGED_BEGIN),
+            "managed markers must be added:\n{out}"
+        );
+        // consumer's own job preserved
+        assert!(
+            out.contains("- toolkit/common_tests"),
+            "consumer jobs must be preserved:\n{out}"
+        );
+        // old end-of-workflow push-orb removed (record off → new flow has none)
+        assert!(
+            !out.contains("name: push-orb"),
+            "the old push-orb job must be removed:\n{out}"
+        );
+        // new flow: regenerate-orb gated on build-binary + the test job
+        assert!(
+            out.contains("requires: [build-binary, common-tests]"),
+            "regenerate-orb must be re-wired to the new flow:\n{out}"
+        );
+        // orb-release verify gate present
+        assert!(
+            out.contains("name: verify-orb"),
+            "orb-release verify gate must be present:\n{out}"
+        );
+        // exactly one orbs entry (not duplicated)
+        assert_eq!(
+            out.matches("gen-circleci-orb: jerus-org/gen-circleci-orb@")
+                .count(),
+            1,
+            "must keep exactly one gen-circleci-orb orbs entry:\n{out}"
+        );
+    }
+
+    const OLD_FLOW_FIXTURE: &str = "\
+version: 2.1
+
+orbs:
+  toolkit: jerus-org/circleci-toolkit@6.0.0
+  gen-circleci-orb: jerus-org/gen-circleci-orb@0.0.1
+  orb-tools: circleci/orb-tools@12.3.3
+
+workflows:
+  validation:
+    jobs:
+      - toolkit/common_tests
+      - gen-circleci-orb/build_rust_binary:
+          name: build-binary
+          package: mytool
+          requires: [common-tests]
+      - gen-circleci-orb/generate:
+          name: regenerate-orb
+          binary: mytool
+          orb_dir: orb
+          no_record: true
+          requires: [build-binary]
+      - orb-tools/pack:
+          name: pack-orb
+          requires: [regenerate-orb]
+      - orb-tools/review:
+          name: review-orb
+          requires: [pack-orb]
+      - gen-circleci-orb/generate:
+          name: push-orb
+          binary: mytool
+          requires: [pack-orb, review-orb]
+
+  orb-release:
+    jobs:
+      - gen-circleci-orb/build_rust_binary:
+          name: orb-release-binary
+          package: mytool
+";
 
     #[test]
     fn validation_orb_chain_is_filtered_off_main() {
