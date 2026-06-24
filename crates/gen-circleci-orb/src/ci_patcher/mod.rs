@@ -279,17 +279,28 @@ fn find_workflow_jobs_end(lines: &[String], workflow: &str) -> Option<usize> {
 fn pack_validate_steps(opts: &PatchOpts) -> Vec<String> {
     let orb_dir = &opts.orb_dir;
     let binary = &opts.binary;
+    let records = !opts.record_contexts.is_empty();
     let mut steps = vec![];
 
-    // gen-circleci-orb/build_rust_binary — compiles the binary and persists to workspace
+    // build_rust_binary — compiles the (release) binary and persists it to the
+    // workspace. It does NOT depend on the test job: the slow release build runs
+    // in parallel with the test suite rather than serially after it. The test
+    // gate moves to regenerate-orb, so a regen is only pushed once tests pass.
     steps.push("      - gen-circleci-orb/build_rust_binary:".to_string());
     steps.push("          name: build-binary".to_string());
     steps.push(format!("          package: {binary}"));
-    if let Some(req) = &opts.requires_job {
-        steps.push(format!("          requires: [{req}]"));
-    }
 
-    // gen-circleci-orb/generate — attaches workspace, runs gen-circleci-orb generate
+    // regenerate-orb — regenerate the orb from the freshly-built binary.
+    //
+    // With auto-record on it regenerates WITH record: when the committed orb is
+    // out of date the binary commits + pushes the regen (no ci-skip marker). That
+    // push starts a fresh pipeline on the new HEAD and CircleCI auto-cancels this
+    // now-redundant run, so the expensive jobs are not run to completion twice;
+    // the fresh run finds the orb in sync and its required checks gate the merge.
+    // With auto-record off it just validates (no_record). Gated on build-binary +
+    // the configured test job so a regen is never pushed for broken code. Forked
+    // PRs still validate here — the binary's branch guard skips the push on a
+    // fork. (No separate push job: the push now happens here, early.)
     steps.push("      - gen-circleci-orb/generate:".to_string());
     steps.push("          name: regenerate-orb".to_string());
     steps.push(format!("          binary: {binary}"));
@@ -298,25 +309,31 @@ fn pack_validate_steps(opts: &PatchOpts) -> Vec<String> {
     }
     steps.push(format!("          orb_dir: {orb_dir}"));
     steps.push("          attach_workspace: true".to_string());
-    // Model B: the binary does NOT push here. It regenerates the orb
-    // (no_record) and persists it to the workspace, so pack/review validate the
-    // *regenerated* orb and the end-of-workflow push job commits + pushes it
-    // once, after validation. Without no_record the binary would attempt an
-    // ambient push that the read-only checkout key rejects (breaking CI).
-    steps.push("          no_record: true".to_string());
+    if records {
+        if !opts.record_push_ssh_fingerprint.is_empty() {
+            steps.push(format!(
+                "          ssh_fingerprint: \"{}\"",
+                opts.record_push_ssh_fingerprint
+            ));
+        }
+    } else {
+        steps.push("          no_record: true".to_string());
+    }
     steps.push("          persist_orb_workspace: true".to_string());
-    // Record context(s) remain attached for now; relocating signing to the
-    // end-of-workflow push job is handled separately. Harmless under no_record.
-    if !opts.record_contexts.is_empty() {
+    if records {
         steps.push(format!(
             "          context: [{}]",
             opts.record_contexts.join(", ")
         ));
     }
-    steps.push("          requires: [build-binary]".to_string());
-    // The orb regen/validate/push chain is pointless on `main` (can't push, and
-    // the orb-release verify gate covers publish-time drift). Run on PR branches
-    // only; the regen still validates on forked PRs (no push there).
+    let mut req = vec!["build-binary".to_string()];
+    if let Some(j) = &opts.requires_job {
+        req.push(j.clone());
+    }
+    steps.push(format!("          requires: [{}]", req.join(", ")));
+    // The orb chain is a no-op on `main` (can't push; the orb-release verify gate
+    // covers publish-time drift). Run on PR branches only; the regen still
+    // validates on forked PRs (the binary's branch guard skips the push there).
     push_branch_ignore(&mut steps, &["main"]);
 
     // orb-tools/pack — checkout:false + attach the regenerated orb from the
@@ -342,38 +359,6 @@ fn pack_validate_steps(opts: &PatchOpts) -> Vec<String> {
     steps.push("                at: .".to_string());
     steps.push("          requires: [pack-orb]".to_string());
     push_branch_ignore(&mut steps, &["main"]);
-
-    // End-of-workflow push job (only when auto-record is enabled). Runs generate
-    // WITH record (regenerate + signed commit + push) gated on the orb validations
-    // (pack/review) → the PR branch only receives a validated orb. When a write-key
-    // fingerprint is configured it is loaded (and the read-only checkout key dropped)
-    // so the push has write authority; otherwise the push uses the ambient
-    // credentials and fails with guidance (a read-only checkout key can't push).
-    if !opts.record_contexts.is_empty() {
-        steps.push("      - gen-circleci-orb/generate:".to_string());
-        steps.push("          name: push-orb".to_string());
-        steps.push(format!("          binary: {binary}"));
-        for ns in &opts.namespaces {
-            steps.push(format!("          orb_namespace: {ns}"));
-        }
-        steps.push(format!("          orb_dir: {orb_dir}"));
-        steps.push("          attach_workspace: true".to_string());
-        if !opts.record_push_ssh_fingerprint.is_empty() {
-            steps.push(format!(
-                "          ssh_fingerprint: \"{}\"",
-                opts.record_push_ssh_fingerprint
-            ));
-        }
-        steps.push(format!(
-            "          context: [{}]",
-            opts.record_contexts.join(", ")
-        ));
-        steps.push("          requires: [pack-orb, review-orb]".to_string());
-        // push-orb additionally skips forked PRs (no write access to the fork);
-        // it commits the regen to the same-repo PR branch, which reaches main via
-        // the merge. The pcu App authorizes the push, so it must NOT run on main.
-        push_branch_ignore(&mut steps, &["main", "/pull\\/[0-9]+/"]);
-    }
 
     steps
 }
@@ -647,51 +632,68 @@ mod tests {
     }
 
     #[test]
-    fn end_push_job_wired_after_validation_when_record_enabled() {
+    fn regenerate_orb_records_and_pushes_when_record_enabled() {
         let opts = PatchOpts {
             record_contexts: vec!["release".to_string()],
             record_push_ssh_fingerprint: "SHA256:test".to_string(),
             ..make_opts()
         };
         let steps = pack_validate_steps(&opts).join("\n");
+        // The push happens in regenerate-orb (early) — there is no separate push job.
         assert!(
-            steps.contains("name: push-orb"),
-            "end push job must be present when record is enabled:\n{steps}"
+            !steps.contains("name: push-orb"),
+            "there must be no separate push-orb job:\n{steps}"
+        );
+        let regen = steps
+            .split("name: regenerate-orb")
+            .nth(1)
+            .unwrap()
+            .split("\n      - ")
+            .next()
+            .unwrap();
+        assert!(
+            !regen.contains("no_record"),
+            "regenerate-orb must record (no no_record) when auto-record is on:\n{regen}"
         );
         assert!(
-            steps.contains("ssh_fingerprint: \"SHA256:test\""),
-            "push job must pass the configured write-key fingerprint:\n{steps}"
+            regen.contains("ssh_fingerprint: \"SHA256:test\""),
+            "regenerate-orb must pass the configured write-key fingerprint:\n{regen}"
         );
         assert!(
-            steps.contains("requires: [pack-orb, review-orb]"),
-            "the push must be gated on the orb validations (atomic):\n{steps}"
-        );
-        // push-orb must record (commit + push) — it must NOT carry no_record.
-        let push = &steps[steps.find("name: push-orb").unwrap()..];
-        assert!(
-            !push.contains("no_record"),
-            "push-orb must record (no no_record):\n{push}"
+            regen.contains("requires: [build-binary, common-tests]"),
+            "regenerate-orb must be gated on build-binary + the test job:\n{regen}"
         );
     }
 
     #[test]
-    fn end_push_job_omits_fingerprint_when_unset_and_absent_without_record() {
-        // Fingerprint is optional: present push job, no ssh_fingerprint line.
+    fn regenerate_orb_fingerprint_optional_and_no_record_when_disabled() {
+        // record on, no fingerprint → records, no ssh_fingerprint line.
         let with_record = PatchOpts {
             record_contexts: vec!["release".to_string()],
             ..make_opts()
         };
         let s1 = pack_validate_steps(&with_record).join("\n");
-        assert!(s1.contains("name: push-orb"), "push job present:\n{s1}");
+        assert!(
+            !s1.contains("name: push-orb"),
+            "no separate push job:\n{s1}"
+        );
         assert!(
             !s1.contains("ssh_fingerprint:"),
             "no ssh_fingerprint line when unset (ambient fallback):\n{s1}"
         );
-        // No record configured → no end push job at all.
+        assert!(
+            !s1.contains("no_record"),
+            "regenerate-orb records when auto-record is on:\n{s1}"
+        );
+        // record off → regenerate-orb validates only (no_record), no push.
         let s2 = pack_validate_steps(&make_opts()).join("\n");
         assert!(
+            s2.contains("no_record: true"),
+            "regenerate-orb must be no_record when auto-record is disabled:\n{s2}"
+        );
+        assert!(
             !s2.contains("name: push-orb"),
-            "no end push job when record is disabled:\n{s2}"
+            "no push job when record off:\n{s2}"
         );
     }
 
@@ -1176,19 +1178,17 @@ mod tests {
                 .unwrap()
                 .to_string()
         };
-        for job in ["regenerate-orb", "pack-orb", "review-orb", "push-orb"] {
+        for job in ["regenerate-orb", "pack-orb", "review-orb"] {
             let b = block(job);
             assert!(
                 b.contains("ignore:") && b.contains("- main"),
                 "{job} must be filtered off main:\n{b}"
             );
         }
-        // push-orb (which writes) additionally skips forked PRs.
-        let push = block("push-orb");
-        assert!(
-            push.contains(r"- /pull\/[0-9]+/"),
-            "push-orb must also skip forked PRs:\n{push}"
-        );
+        // regenerate-orb is the job that pushes (when recording); it stays on PR
+        // branches via `ignore: main` and still validates on forked PRs — the
+        // binary's branch guard skips the push there, so no separate forked-PR
+        // filter is needed.
     }
 
     #[test]
@@ -1379,30 +1379,37 @@ mod tests {
     }
 
     #[test]
-    fn validation_build_step_requires_configured_job() {
+    fn validation_build_binary_starts_in_parallel() {
+        // build-binary no longer depends on the test job — the release build runs
+        // in parallel with the test suite; the gate moves to regenerate-orb.
         let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
-        let after_bb = output
-            .split("gen-circleci-orb/build_rust_binary:")
+        let bb_block = output
+            .split("name: build-binary")
             .nth(1)
-            .expect("no build_rust_binary step in validation");
-        let step_block = after_bb.split("      - ").next().unwrap_or(after_bb);
+            .expect("no build-binary step in validation")
+            .split("\n      - ")
+            .next()
+            .unwrap();
         assert!(
-            step_block.contains("requires: [common-tests]"),
-            "build_rust_binary step must require the configured job:\n{step_block}"
+            !bb_block.contains("requires:"),
+            "build-binary must start in parallel (no requires):\n{bb_block}"
         );
     }
 
     #[test]
-    fn validation_generate_step_requires_build_binary() {
+    fn validation_generate_step_requires_build_binary_and_test_job() {
         let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
         let after_regen = output
-            .split("gen-circleci-orb/generate:")
+            .split("name: regenerate-orb")
             .nth(1)
-            .expect("no gen-circleci-orb/generate step");
-        let step_block = after_regen.split("      - ").next().unwrap_or(after_regen);
+            .expect("no regenerate-orb step");
+        let step_block = after_regen
+            .split("\n      - ")
+            .next()
+            .unwrap_or(after_regen);
         assert!(
-            step_block.contains("requires: [build-binary]"),
-            "generate step must require build-binary:\n{step_block}"
+            step_block.contains("requires: [build-binary, common-tests]"),
+            "regenerate-orb must require build-binary + the configured test job:\n{step_block}"
         );
     }
 
