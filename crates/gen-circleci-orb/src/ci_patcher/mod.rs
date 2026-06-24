@@ -314,6 +314,10 @@ fn pack_validate_steps(opts: &PatchOpts) -> Vec<String> {
         ));
     }
     steps.push("          requires: [build-binary]".to_string());
+    // The orb regen/validate/push chain is pointless on `main` (can't push, and
+    // the orb-release verify gate covers publish-time drift). Run on PR branches
+    // only; the regen still validates on forked PRs (no push there).
+    push_branch_ignore(&mut steps, &["main"]);
 
     // orb-tools/pack — checkout:false + attach the regenerated orb from the
     // workspace (persisted by regenerate-orb), so the packed/validated orb is
@@ -326,6 +330,7 @@ fn pack_validate_steps(opts: &PatchOpts) -> Vec<String> {
     steps.push("            - attach_workspace:".to_string());
     steps.push("                at: .".to_string());
     steps.push("          requires: [regenerate-orb]".to_string());
+    push_branch_ignore(&mut steps, &["main"]);
 
     // orb-tools/review (best-practice review of the regenerated, packed orb)
     steps.push("      - orb-tools/review:".to_string());
@@ -336,6 +341,7 @@ fn pack_validate_steps(opts: &PatchOpts) -> Vec<String> {
     steps.push("            - attach_workspace:".to_string());
     steps.push("                at: .".to_string());
     steps.push("          requires: [pack-orb]".to_string());
+    push_branch_ignore(&mut steps, &["main"]);
 
     // End-of-workflow push job (only when auto-record is enabled). Runs generate
     // WITH record (regenerate + signed commit + push) gated on the orb validations
@@ -363,6 +369,10 @@ fn pack_validate_steps(opts: &PatchOpts) -> Vec<String> {
             opts.record_contexts.join(", ")
         ));
         steps.push("          requires: [pack-orb, review-orb]".to_string());
+        // push-orb additionally skips forked PRs (no write access to the fork);
+        // it commits the regen to the same-repo PR branch, which reaches main via
+        // the merge. The pcu App authorizes the push, so it must NOT run on main.
+        push_branch_ignore(&mut steps, &["main", "/pull\\/[0-9]+/"]);
     }
 
     steps
@@ -376,6 +386,17 @@ fn push_tag_filters(lines: &mut Vec<String>, only_tag: &str, ignore_branches: &s
     lines.push(only_tag.to_string());
     lines.push("            branches:".to_string());
     lines.push(ignore_branches.to_string());
+}
+
+/// Append a `filters: branches: ignore:` block (block sequence — never an inline
+/// `[a, b]` flow sequence, whose `\` in `/pull\/...` is invalid YAML).
+fn push_branch_ignore(steps: &mut Vec<String>, branches: &[&str]) {
+    steps.push("          filters:".to_string());
+    steps.push("            branches:".to_string());
+    steps.push("              ignore:".to_string());
+    for b in branches {
+        steps.push(format!("                - {b}"));
+    }
 }
 
 /// Generate the complete `orb-release:` workflow section for config.yml.
@@ -403,11 +424,29 @@ fn orb_release_workflow_section(opts: &PatchOpts) -> Vec<String> {
     push_tag_filters(&mut lines, &only_tag, &ignore_branches);
     lines.push(String::new());
 
+    // Verify gate: regenerate the orb with the freshly-built binary and fail if
+    // the committed orb is out of sync (generate --check). pack and container —
+    // and therefore publish — require it, so a drifted or hand-edited orb is
+    // never packed or published.
+    lines.push("      - gen-circleci-orb/generate:".to_string());
+    lines.push("          name: verify-orb".to_string());
+    lines.push(format!("          binary: {binary}"));
+    for ns in &opts.namespaces {
+        lines.push(format!("          orb_namespace: {ns}"));
+    }
+    lines.push(format!("          orb_dir: {orb_dir}"));
+    lines.push("          attach_workspace: true".to_string());
+    lines.push("          check: true".to_string());
+    lines.push("          requires: [orb-release-binary]".to_string());
+    push_tag_filters(&mut lines, &only_tag, &ignore_branches);
+    lines.push(String::new());
+
     // orb-tools/pack (checkout: false + pre-steps for version injection)
     lines.push("      - orb-tools/pack:".to_string());
     lines.push("          name: orb-release-pack".to_string());
     lines.push("          checkout: false".to_string());
     lines.push(format!("          source_dir: {orb_dir}/src"));
+    lines.push("          requires: [verify-orb]".to_string());
     lines.push("          pre-steps:".to_string());
     lines.push("            - checkout".to_string());
     lines.push("            - run:".to_string());
@@ -433,7 +472,7 @@ fn orb_release_workflow_section(opts: &PatchOpts) -> Vec<String> {
     lines.push(format!("          docker_namespace: {docker_ns}"));
     lines.push(format!("          orb_dir: {orb_dir}"));
     lines.push(format!("          crate_tag_prefix: {prefix}"));
-    lines.push("          requires: [orb-release-binary]".to_string());
+    lines.push("          requires: [verify-orb]".to_string());
     lines.push(format!("          context: [{docker_ctx}]"));
     push_tag_filters(&mut lines, &only_tag, &ignore_branches);
     lines.push(String::new());
@@ -833,8 +872,8 @@ mod tests {
             "build_container step must pass crate_tag_prefix param:\n{step}"
         );
         assert!(
-            step.contains("requires: [orb-release-binary]"),
-            "build_container step must require orb-release-binary:\n{step}"
+            step.contains("requires: [verify-orb]"),
+            "build_container step must require the verify-orb gate:\n{step}"
         );
         assert!(
             step.contains("context: [docker]"),
@@ -1117,6 +1156,91 @@ mod tests {
         assert!(
             publish_block.contains("orb-release-ensure-registered-my-org"),
             "publish must require orb-release-ensure-registered-my-org:\n{publish_block}"
+        );
+    }
+
+    #[test]
+    fn validation_orb_chain_is_filtered_off_main() {
+        let opts = PatchOpts {
+            record_contexts: vec!["release".to_string()],
+            ..make_opts()
+        };
+        let steps = pack_validate_steps(&opts).join("\n");
+        let block = |name: &str| {
+            steps
+                .split(&format!("name: {name}"))
+                .nth(1)
+                .unwrap_or_else(|| panic!("job {name} not found:\n{steps}"))
+                .split("\n      - ")
+                .next()
+                .unwrap()
+                .to_string()
+        };
+        for job in ["regenerate-orb", "pack-orb", "review-orb", "push-orb"] {
+            let b = block(job);
+            assert!(
+                b.contains("ignore:") && b.contains("- main"),
+                "{job} must be filtered off main:\n{b}"
+            );
+        }
+        // push-orb (which writes) additionally skips forked PRs.
+        let push = block("push-orb");
+        assert!(
+            push.contains(r"- /pull\/[0-9]+/"),
+            "push-orb must also skip forked PRs:\n{push}"
+        );
+    }
+
+    #[test]
+    fn orb_release_has_verify_gate_before_pack_and_container() {
+        let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
+        // A verify-orb job runs `generate --check` (check: true) against the
+        // freshly-built binary and gates the release.
+        assert!(
+            output.contains("name: verify-orb"),
+            "orb-release must emit a verify-orb job:\n{output}"
+        );
+        let verify_block = output
+            .split("name: verify-orb")
+            .nth(1)
+            .expect("no verify-orb job")
+            .split("\n      - ")
+            .next()
+            .unwrap()
+            .to_string();
+        assert!(
+            verify_block.contains("check: true"),
+            "verify-orb must invoke generate with check: true:\n{verify_block}"
+        );
+        assert!(
+            verify_block.contains("requires: [orb-release-binary]"),
+            "verify-orb must require the freshly-built binary:\n{verify_block}"
+        );
+        // pack and container must be gated on the verify, so a drifted orb is
+        // never packed/published.
+        let pack_block = output
+            .split("name: orb-release-pack")
+            .nth(1)
+            .unwrap()
+            .split("\n      - ")
+            .next()
+            .unwrap()
+            .to_string();
+        assert!(
+            pack_block.contains("verify-orb"),
+            "orb-release-pack must require verify-orb:\n{pack_block}"
+        );
+        let container_block = output
+            .split("name: orb-release-container")
+            .nth(1)
+            .unwrap()
+            .split("\n      - ")
+            .next()
+            .unwrap()
+            .to_string();
+        assert!(
+            container_block.contains("verify-orb"),
+            "orb-release-container must require verify-orb:\n{container_block}"
         );
     }
 
