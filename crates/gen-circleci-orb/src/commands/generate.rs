@@ -30,6 +30,14 @@ pub const MCP_APT_PACKAGES: &[&str] = &["gnupg", "libssl-dev", "pkg-config"];
 /// key trimmed from the agent. Injected when `[record].enabled`.
 pub const RECORD_APT_PACKAGES: &[&str] = &["gnupg", "openssh-client"];
 
+/// Commit message for the auto-record regenerate-orb commit.
+///
+/// It must NOT carry a ci-skip marker. push-orb runs only on PR branches, so
+/// this commit has to trigger a validation pipeline on the new HEAD — otherwise
+/// the PR's required status checks never report for that SHA and the GitHub
+/// merge is left waiting on checks that never run.
+const RECORD_COMMIT_MESSAGE: &str = "chore: regenerate orb";
+
 /// Whether the MCP feature is enabled in `[ci].mcp`.
 pub(crate) fn mcp_enabled(config: &crate::orb_config::OrbConfig) -> bool {
     config.ci.as_ref().and_then(|c| c.mcp).unwrap_or(false)
@@ -621,7 +629,7 @@ fn record_orb(orb_root: &std::path::Path, record: &crate::orb_config::RecordConf
         return Ok(());
     }
 
-    let message = "chore: regenerate orb [skip ci]";
+    let message = RECORD_COMMIT_MESSAGE;
     let sign_config = pcu::SignConfig::new(pcu::Sign::Gpg)
         .with_identity(&env.user_name, &env.user_email)
         .with_signing_key(&env.sign_key);
@@ -641,6 +649,19 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+
+    #[test]
+    fn regenerate_commit_does_not_skip_ci() {
+        // push-orb runs only on PR branches; the regen commit must trigger a
+        // validation pipeline on the new HEAD so the PR's required status checks
+        // report for that SHA. A ci-skip marker leaves them unreported and blocks
+        // the GitHub merge.
+        let msg = RECORD_COMMIT_MESSAGE.to_lowercase();
+        assert!(
+            !msg.contains("skip ci") && !msg.contains("ci skip"),
+            "regenerate-orb commit must not carry a ci-skip marker: {RECORD_COMMIT_MESSAGE}"
+        );
+    }
 
     #[test]
     fn verify_no_drift_passes_when_everything_unchanged() {
