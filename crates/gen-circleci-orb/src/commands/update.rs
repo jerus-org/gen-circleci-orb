@@ -39,7 +39,21 @@ impl Update {
         let config_path = self.ci_dir.join("config.yml");
         let current = std::fs::read_to_string(&config_path)
             .with_context(|| format!("reading {}", config_path.display()))?;
-        let (resynced, _report) = ci_patcher::resync_build(&current, &opts);
+        let (resynced, report) = ci_patcher::resync_build(&current, &opts);
+
+        // Content the strip kept because it was not recognised as ours, yet sat
+        // inside a managed-marker region: preserved, but worth a human's eyes.
+        if !report.warnings.is_empty() {
+            eprintln!(
+                "warning: {} item(s) inside a gen-circleci-orb managed region were not recognised \
+                 and have been preserved — review them (a marker may be damaged, or custom content \
+                 was added inside a managed block):",
+                report.warnings.len()
+            );
+            for w in &report.warnings {
+                eprintln!("  - {w}");
+            }
+        }
 
         if self.check {
             if resynced != current {
