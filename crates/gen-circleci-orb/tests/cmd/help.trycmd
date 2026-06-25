@@ -9,6 +9,7 @@ Commands:
   ensure-orb-registered  Ensure a CircleCI orb is registered, creating it if it does not exist
   generate               Generate orb source files from a CLI binary's --help output
   init                   Wire orb generation into an existing repo's CI configuration
+  update                 Re-sync an existing repo's orb-managed CI wiring to the current flow
   help                   Print this message or the help of the given subcommand(s)
 
 Options:

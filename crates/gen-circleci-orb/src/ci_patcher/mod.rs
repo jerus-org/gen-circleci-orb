@@ -48,6 +48,29 @@ pub struct PatchOpts {
 pub struct PatchReport {
     pub insertions: Vec<String>,
     pub skipped: Vec<String>,
+    /// Diagnostics surfaced during a re-sync (`resync_build`): content the strip
+    /// kept because it was not recognised as gen-circleci-orb-managed, yet sat
+    /// inside a managed-marker region. Preserved, but flagged for operator review.
+    pub warnings: Vec<String>,
+}
+
+/// Marker comment opening a gen-circleci-orb-managed block in a consumer's
+/// config. The markers are advisory: `update` re-syncs the managed items by
+/// matching them by content (the orbs entry, the `orb-release` workflow, and the
+/// validation jobs it generates), not by deleting whatever sits between the
+/// markers. The consumer's own jobs/customizations are preserved whether they
+/// sit outside or inside a marker region — content kept inside a region that
+/// was not recognised as ours is additionally surfaced as a warning.
+pub(crate) const MANAGED_BEGIN: &str =
+    "# >>> gen-circleci-orb (managed — edits overwritten by 'gen-circleci-orb update')";
+/// Marker comment closing a gen-circleci-orb-managed block.
+pub(crate) const MANAGED_END: &str = "# <<< gen-circleci-orb";
+
+fn managed_begin(indent: &str) -> String {
+    format!("{indent}{MANAGED_BEGIN}")
+}
+fn managed_end(indent: &str) -> String {
+    format!("{indent}{MANAGED_END}")
 }
 
 /// Patch a build/validation CircleCI config string.
@@ -56,6 +79,7 @@ pub fn patch_build(content: &str, opts: &PatchOpts) -> (String, PatchReport) {
     let mut report = PatchReport {
         insertions: vec![],
         skipped: vec![],
+        warnings: vec![],
     };
     let mut lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
 
@@ -78,6 +102,139 @@ fn insert_block_at(lines: &mut Vec<String>, pos: usize, block: &[String]) {
     }
 }
 
+/// Names of the orb-managed jobs in a consumer's validation workflow — used by
+/// the name-set fallback when a config has no managed-block markers yet.
+const MANAGED_VALIDATION_JOBS: &[&str] = &[
+    "build-binary",
+    "regenerate-orb",
+    "pack-orb",
+    "review-orb",
+    "push-orb",
+];
+
+fn indent_of(line: &str) -> usize {
+    line.len() - line.trim_start().len()
+}
+
+/// Re-sync a consumer's config to the current generator flow: strip the existing
+/// gen-circleci-orb-managed content and re-insert it fresh — with markers — via
+/// `patch_build`. Everything outside the managed content (the consumer's own jobs,
+/// params and customizations) is preserved. Any warnings raised by the strip (for
+/// unrecognised content found inside a managed-marker region) are folded into the
+/// report.
+pub fn resync_build(content: &str, opts: &PatchOpts) -> (String, PatchReport) {
+    let (stripped, warnings) = strip_managed(content);
+    let (out, mut report) = patch_build(&stripped, opts);
+    report.warnings.extend(warnings);
+    (out, report)
+}
+
+/// Strip gen-circleci-orb-managed content so it can be re-inserted fresh.
+///
+/// Removal is authorised by CONTENT, never by marker position: we delete only the
+/// items we generate — the `gen-circleci-orb:` orbs entry, the `orb-release:`
+/// workflow, and validation jobs whose `name:` is in `MANAGED_VALIDATION_JOBS` —
+/// each bounded by its own indentation (the same locate-by-name → indentation-block
+/// approach used by gen-orb-mcp's migration applicator). Managed-marker comments
+/// are advisory: we drop them wherever they appear, but a damaged, partial or
+/// missing marker can never cause us to consume adjacent user content. Anything
+/// kept while inside a marker region that we did not recognise is reported as a
+/// warning (preserved, but flagged for review).
+fn strip_managed(content: &str) -> (String, Vec<String>) {
+    let lines: Vec<&str> = content.lines().collect();
+    let mut out: Vec<String> = Vec::with_capacity(lines.len());
+    let mut warnings: Vec<String> = Vec::new();
+    let mut in_marked_region = false;
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i];
+        let trimmed = line.trim_start();
+        // Marker comments are advisory only: drop them (patch_build re-inserts a
+        // fresh pair) and track the region so we can flag unrecognised content —
+        // but never use a marker to delete by position.
+        if trimmed.starts_with(MANAGED_BEGIN) {
+            in_marked_region = true;
+            i += 1;
+            continue;
+        }
+        if trimmed.starts_with(MANAGED_END) {
+            in_marked_region = false;
+            i += 1;
+            continue;
+        }
+        // (1) the gen-circleci-orb orbs entry — a single line.
+        if trimmed.starts_with("gen-circleci-orb: ") {
+            i += 1;
+            continue;
+        }
+        // (3) the orb-release workflow — its header plus the indented body.
+        if line.trim_end() == "  orb-release:" {
+            i += 1;
+            while i < lines.len() && (lines[i].is_empty() || indent_of(lines[i]) >= 4) {
+                i += 1;
+            }
+            continue;
+        }
+        // (2) a managed validation job block — a 6-space job invocation whose
+        // `name:` is in the managed set; drop the `- ` line + its continuation.
+        if indent_of(line) == 6 && trimmed.starts_with("- ") {
+            let mut j = i + 1;
+            while j < lines.len() && (lines[j].is_empty() || indent_of(lines[j]) > 6) {
+                j += 1;
+            }
+            if block_is_managed_validation(&lines[i..j]) {
+                i = j;
+                continue;
+            }
+        }
+        // Keep this line. If it sits inside a managed-marker region but was not one
+        // of our items, surface it: preserved, but the operator should know custom
+        // content lives in a managed block (or that a marker is damaged).
+        if in_marked_region && !trimmed.is_empty() {
+            warnings.push(format!(
+                "kept unrecognised content inside a gen-circleci-orb managed region (preserved, review): {trimmed}"
+            ));
+        }
+        out.push(line.to_string());
+        i += 1;
+    }
+    (
+        normalize_blanks(&out.join("\n"), content.ends_with('\n')),
+        warnings,
+    )
+}
+
+fn block_is_managed_validation(block: &[&str]) -> bool {
+    block.iter().any(|l| {
+        let t = l.trim_start();
+        MANAGED_VALIDATION_JOBS
+            .iter()
+            .any(|n| t == format!("name: {n}"))
+    })
+}
+
+/// Collapse runs of >1 blank line (left by removals) and trim trailing blanks.
+fn normalize_blanks(content: &str, trailing_newline: bool) -> String {
+    let mut out: Vec<&str> = Vec::new();
+    let mut prev_blank = false;
+    for l in content.lines() {
+        let blank = l.trim().is_empty();
+        if blank && prev_blank {
+            continue;
+        }
+        out.push(l);
+        prev_blank = blank;
+    }
+    while out.last().map(|l| l.trim().is_empty()).unwrap_or(false) {
+        out.pop();
+    }
+    let mut s = out.join("\n");
+    if trailing_newline {
+        s.push('\n');
+    }
+    s
+}
+
 fn patch_step0_gen_circleci_orb_orb(
     content: &str,
     lines: &mut Vec<String>,
@@ -89,7 +246,8 @@ fn patch_step0_gen_circleci_orb_orb(
     if content.contains("gen-circleci-orb:") {
         report.skipped.push("gen-circleci-orb orb".to_string());
     } else if let Some(pos) = find_section_end(lines, "orbs:") {
-        lines.insert(pos, orb_entry);
+        let block = vec![managed_begin("  "), orb_entry, managed_end("  ")];
+        insert_block_at(lines, pos, &block);
         report.insertions.push("gen-circleci-orb orb".to_string());
     }
 }
@@ -178,6 +336,7 @@ pub fn patch_release(content: &str, _opts: &PatchOpts) -> (String, PatchReport) 
     let report = PatchReport {
         insertions: vec![],
         skipped: vec![],
+        warnings: vec![],
     };
     (content.to_string(), report)
 }
@@ -280,7 +439,7 @@ fn pack_validate_steps(opts: &PatchOpts) -> Vec<String> {
     let orb_dir = &opts.orb_dir;
     let binary = &opts.binary;
     let records = !opts.record_contexts.is_empty();
-    let mut steps = vec![];
+    let mut steps = vec![managed_begin("      ")];
 
     // build_rust_binary — compiles the (release) binary and persists it to the
     // workspace. It does NOT depend on the test job: the slow release build runs
@@ -360,6 +519,7 @@ fn pack_validate_steps(opts: &PatchOpts) -> Vec<String> {
     steps.push("          requires: [pack-orb]".to_string());
     push_branch_ignore(&mut steps, &["main"]);
 
+    steps.push(managed_end("      "));
     steps
 }
 
@@ -400,6 +560,7 @@ fn orb_release_workflow_section(opts: &PatchOpts) -> Vec<String> {
 
     let mut lines = vec![
         String::new(),
+        managed_begin("  "),
         "  orb-release:".to_string(),
         "    jobs:".to_string(),
         "      - gen-circleci-orb/build_rust_binary:".to_string(),
@@ -506,6 +667,7 @@ fn orb_release_workflow_section(opts: &PatchOpts) -> Vec<String> {
         push_mcp_workflow_steps(&mut lines, opts, &only_tag, &ignore_branches);
     }
 
+    lines.push(managed_end("  "));
     lines
 }
 
@@ -1158,6 +1320,306 @@ mod tests {
         assert!(
             publish_block.contains("orb-release-ensure-registered-my-org"),
             "publish must require orb-release-ensure-registered-my-org:\n{publish_block}"
+        );
+    }
+
+    #[test]
+    fn patch_build_wraps_the_three_managed_blocks_in_markers() {
+        let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
+        // The three orb-managed regions (orbs entry, validation jobs, orb-release
+        // workflow) are each wrapped in begin/end markers so `update` can replace
+        // them surgically without touching the consumer's own content.
+        assert_eq!(
+            output.matches(MANAGED_BEGIN).count(),
+            3,
+            "expected 3 managed-block begin markers:\n{output}"
+        );
+        assert_eq!(
+            output.matches(MANAGED_END).count(),
+            3,
+            "expected 3 managed-block end markers:\n{output}"
+        );
+        // The validation jobs block is marked at job indentation (6 spaces).
+        assert!(
+            output.contains(&format!("      {MANAGED_BEGIN}")),
+            "validation jobs block must be marked at 6-space indent:\n{output}"
+        );
+        // The orbs entry and orb-release workflow are marked at 2-space indent.
+        assert!(
+            output.contains(&format!("  {MANAGED_BEGIN}")),
+            "orbs entry / orb-release must be marked at 2-space indent:\n{output}"
+        );
+    }
+
+    #[test]
+    fn resync_is_stable_when_run_twice() {
+        // `update` must not churn: re-syncing an already-resynced config is a
+        // no-op. (The first resync may cosmetically reorder the orbs entry, which
+        // is why we assert stability rather than exact reproduction of the
+        // original patch_build output.)
+        let opts = make_opts();
+        let (patched, _) = patch_build(BUILD_FIXTURE, &opts);
+        let (r1, _) = resync_build(&patched, &opts);
+        let (r2, _) = resync_build(&r1, &opts);
+        assert_eq!(
+            r1, r2,
+            "running update twice must be stable:\n--- r1 ---\n{r1}\n--- r2 ---\n{r2}"
+        );
+    }
+
+    #[test]
+    fn resync_migrates_an_unmarked_old_flow_config() {
+        let (out, _) = resync_build(OLD_FLOW_FIXTURE, &make_opts());
+        assert!(
+            out.contains(MANAGED_BEGIN),
+            "managed markers must be added:\n{out}"
+        );
+        // consumer's own job preserved
+        assert!(
+            out.contains("- toolkit/common_tests"),
+            "consumer jobs must be preserved:\n{out}"
+        );
+        // old end-of-workflow push-orb removed (record off → new flow has none)
+        assert!(
+            !out.contains("name: push-orb"),
+            "the old push-orb job must be removed:\n{out}"
+        );
+        // new flow: regenerate-orb gated on build-binary + the test job
+        assert!(
+            out.contains("requires: [build-binary, common-tests]"),
+            "regenerate-orb must be re-wired to the new flow:\n{out}"
+        );
+        // orb-release verify gate present
+        assert!(
+            out.contains("name: verify-orb"),
+            "orb-release verify gate must be present:\n{out}"
+        );
+        // exactly one orbs entry (not duplicated)
+        assert_eq!(
+            out.matches("gen-circleci-orb: jerus-org/gen-circleci-orb@")
+                .count(),
+            1,
+            "must keep exactly one gen-circleci-orb orbs entry:\n{out}"
+        );
+    }
+
+    const OLD_FLOW_FIXTURE: &str = "\
+version: 2.1
+
+orbs:
+  toolkit: jerus-org/circleci-toolkit@6.0.0
+  gen-circleci-orb: jerus-org/gen-circleci-orb@0.0.1
+  orb-tools: circleci/orb-tools@12.3.3
+
+workflows:
+  validation:
+    jobs:
+      - toolkit/common_tests
+      - gen-circleci-orb/build_rust_binary:
+          name: build-binary
+          package: mytool
+          requires: [common-tests]
+      - gen-circleci-orb/generate:
+          name: regenerate-orb
+          binary: mytool
+          orb_dir: orb
+          no_record: true
+          requires: [build-binary]
+      - orb-tools/pack:
+          name: pack-orb
+          requires: [regenerate-orb]
+      - orb-tools/review:
+          name: review-orb
+          requires: [pack-orb]
+      - gen-circleci-orb/generate:
+          name: push-orb
+          binary: mytool
+          requires: [pack-orb, review-orb]
+
+  orb-release:
+    jobs:
+      - gen-circleci-orb/build_rust_binary:
+          name: orb-release-binary
+          package: mytool
+";
+
+    // A config whose validation managed-END marker has been deleted, leaving a
+    // user job (`user-coverage`) immediately after where the marker used to be.
+    // A blind drain-between-markers would consume the user job (it falls inside
+    // the orphaned begin..next-end span); content-matched removal must not.
+    const DAMAGED_END_MARKER_FIXTURE: &str = "\
+version: 2.1
+
+orbs:
+  # >>> gen-circleci-orb (managed — edits overwritten by 'gen-circleci-orb update')
+  gen-circleci-orb: jerus-org/gen-circleci-orb@0.0.1
+  # <<< gen-circleci-orb
+  toolkit: jerus-org/circleci-toolkit@6.0.0
+  orb-tools: circleci/orb-tools@12.3.3
+
+workflows:
+  validation:
+    jobs:
+      - toolkit/common_tests
+      # >>> gen-circleci-orb (managed — edits overwritten by 'gen-circleci-orb update')
+      - gen-circleci-orb/build_rust_binary:
+          name: build-binary
+          package: mytool
+          requires: [common-tests]
+      - gen-circleci-orb/generate:
+          name: regenerate-orb
+          binary: mytool
+          requires: [build-binary]
+      - orb-tools/pack:
+          name: pack-orb
+          requires: [regenerate-orb]
+      - orb-tools/review:
+          name: review-orb
+          requires: [pack-orb]
+      - codecov/upload:
+          name: user-coverage
+          requires: [review-orb]
+
+  orb-release:
+    # >>> gen-circleci-orb (managed — edits overwritten by 'gen-circleci-orb update')
+    jobs:
+      - gen-circleci-orb/build_rust_binary:
+          name: orb-release-binary
+          package: mytool
+    # <<< gen-circleci-orb
+";
+
+    #[test]
+    fn resync_does_not_over_consume_user_content_when_a_marker_is_damaged() {
+        let (out, _) = resync_build(DAMAGED_END_MARKER_FIXTURE, &make_opts());
+        assert!(
+            out.contains("name: user-coverage"),
+            "user content after a damaged managed-end marker must be preserved:\n{out}"
+        );
+        // the managed wiring is still re-synced (markers restored).
+        assert!(
+            out.contains("name: build-binary"),
+            "managed jobs kept:\n{out}"
+        );
+        assert!(out.contains(MANAGED_BEGIN), "markers restored:\n{out}");
+    }
+
+    // orbs + orb-release keep their markers; the validation block's markers were
+    // removed and it is left on the OLD flow (push-orb present). The presence of
+    // markers elsewhere must NOT route us to a marker-only strip that misses the
+    // unmarked block — content matching locates it by job name regardless.
+    const PARTIAL_MARKERS_FIXTURE: &str = "\
+version: 2.1
+
+orbs:
+  # >>> gen-circleci-orb (managed — edits overwritten by 'gen-circleci-orb update')
+  gen-circleci-orb: jerus-org/gen-circleci-orb@0.0.1
+  # <<< gen-circleci-orb
+  toolkit: jerus-org/circleci-toolkit@6.0.0
+  orb-tools: circleci/orb-tools@12.3.3
+
+workflows:
+  validation:
+    jobs:
+      - toolkit/common_tests
+      - gen-circleci-orb/build_rust_binary:
+          name: build-binary
+          package: mytool
+          requires: [common-tests]
+      - gen-circleci-orb/generate:
+          name: regenerate-orb
+          binary: mytool
+          no_record: true
+          requires: [build-binary]
+      - orb-tools/pack:
+          name: pack-orb
+          requires: [regenerate-orb]
+      - orb-tools/review:
+          name: review-orb
+          requires: [pack-orb]
+      - gen-circleci-orb/generate:
+          name: push-orb
+          binary: mytool
+          requires: [pack-orb, review-orb]
+
+  orb-release:
+    # >>> gen-circleci-orb (managed — edits overwritten by 'gen-circleci-orb update')
+    jobs:
+      - gen-circleci-orb/build_rust_binary:
+          name: orb-release-binary
+          package: mytool
+    # <<< gen-circleci-orb
+";
+
+    #[test]
+    fn resync_with_partial_markers_still_resyncs_the_unmarked_block() {
+        let (out, _) = resync_build(PARTIAL_MARKERS_FIXTURE, &make_opts());
+        assert!(
+            !out.contains("name: push-orb"),
+            "the unmarked-but-stale validation block must still be re-synced:\n{out}"
+        );
+        assert!(
+            out.contains("- toolkit/common_tests"),
+            "consumer jobs preserved:\n{out}"
+        );
+    }
+
+    // A user job placed INSIDE an intact validation managed region. Content
+    // matching keeps it (it is not one of ours), and a warning surfaces it so
+    // the operator knows custom content lives in a managed block.
+    const CUSTOM_INSIDE_BLOCK_FIXTURE: &str = "\
+version: 2.1
+
+orbs:
+  # >>> gen-circleci-orb (managed — edits overwritten by 'gen-circleci-orb update')
+  gen-circleci-orb: jerus-org/gen-circleci-orb@0.0.1
+  # <<< gen-circleci-orb
+  toolkit: jerus-org/circleci-toolkit@6.0.0
+  orb-tools: circleci/orb-tools@12.3.3
+
+workflows:
+  validation:
+    jobs:
+      - toolkit/common_tests
+      # >>> gen-circleci-orb (managed — edits overwritten by 'gen-circleci-orb update')
+      - gen-circleci-orb/build_rust_binary:
+          name: build-binary
+          package: mytool
+          requires: [common-tests]
+      - my-org/custom:
+          name: user-extra
+          requires: [build-binary]
+      - orb-tools/pack:
+          name: pack-orb
+          requires: [build-binary]
+      - orb-tools/review:
+          name: review-orb
+          requires: [pack-orb]
+      # <<< gen-circleci-orb
+
+  orb-release:
+    # >>> gen-circleci-orb (managed — edits overwritten by 'gen-circleci-orb update')
+    jobs:
+      - gen-circleci-orb/build_rust_binary:
+          name: orb-release-binary
+          package: mytool
+    # <<< gen-circleci-orb
+";
+
+    #[test]
+    fn resync_warns_when_user_content_sits_inside_a_managed_region() {
+        let (out, report) = resync_build(CUSTOM_INSIDE_BLOCK_FIXTURE, &make_opts());
+        assert!(
+            out.contains("name: user-extra"),
+            "user content inside a managed region must be preserved, not dropped:\n{out}"
+        );
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|w| w.contains("user-extra") || w.contains("unrecognized")),
+            "a warning must flag user content kept inside a managed region: {:?}",
+            report.warnings
         );
     }
 

@@ -81,6 +81,10 @@ parameters:
     type: string
     description: SSH key fingerprint (a public-key hash, not a secret) used to push the regenerated orb with write authority. When set, the key is loaded and the read-only checkout key is dropped from the agent. Empty (default) falls back to the ambient environment credentials.
     default: ''
+  check_ci_wiring:
+    type: boolean
+    description: Verify the consumer's CI wiring is in sync with this orb version's generated flow (runs `gen-circleci-orb update --check`); fails with upgrade instructions when out of date. Default true.
+    default: true
 steps:
 - checkout
 - when:
@@ -125,3 +129,9 @@ steps:
         root: .
         paths:
         - << parameters.orb_dir >>
+- when:
+    condition: << parameters.check_ci_wiring >>
+    steps:
+    - run:
+        name: Check the CI wiring is current
+        command: gen-circleci-orb update --check
