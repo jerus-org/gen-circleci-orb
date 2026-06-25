@@ -417,6 +417,7 @@ fn render_job(sub: &SubCommand, opts: &GenerateOpts, config: Option<&OrbConfig>)
             build_persist_orb_param(),
         );
         parameters.insert("ssh_fingerprint".to_string(), build_ssh_fingerprint_param());
+        parameters.insert("check_ci_wiring".to_string(), build_check_ci_wiring_param());
     }
 
     let invoke_step = build_invoke_step(sub, RESERVED_JOB_PARAMS);
@@ -436,6 +437,7 @@ fn render_job(sub: &SubCommand, opts: &GenerateOpts, config: Option<&OrbConfig>)
     steps.push(invoke_step);
     if is_orb_producing {
         steps.push(build_persist_orb_step());
+        steps.push(build_check_ci_wiring_step());
     }
     let job = OrbJob {
         description: format!("Run {} command in a dedicated job.", sub.name),
@@ -814,6 +816,53 @@ fn build_persist_orb_param() -> OrbParameter {
         default: Some(serde_yaml::Value::Bool(false)),
         enum_values: None,
     }
+}
+
+/// Boolean job parameter (default true) gating the CI-wiring drift check.
+fn build_check_ci_wiring_param() -> OrbParameter {
+    OrbParameter {
+        param_type: "boolean".to_string(),
+        description: "Verify the consumer's CI wiring is in sync with this orb \
+                      version's generated flow (runs `gen-circleci-orb update --check`); \
+                      fails with upgrade instructions when out of date. Default true."
+            .to_string(),
+        default: Some(serde_yaml::Value::Bool(true)),
+        enum_values: None,
+    }
+}
+
+/// Conditional step: when `check_ci_wiring` is true, run `gen-circleci-orb update
+/// --check` so a consumer whose CI wiring has drifted from the current generator
+/// flow gets a failing build with guidance. Delivered via the orb version (this
+/// step is part of the orb job), so even a config on the old wiring triggers it.
+fn build_check_ci_wiring_step() -> serde_yaml::Value {
+    let mut run_map = serde_yaml::Mapping::new();
+    run_map.insert(
+        serde_yaml::Value::String("name".to_string()),
+        serde_yaml::Value::String("Check the CI wiring is current".to_string()),
+    );
+    run_map.insert(
+        serde_yaml::Value::String("command".to_string()),
+        serde_yaml::Value::String("gen-circleci-orb update --check".to_string()),
+    );
+    let mut run_step = serde_yaml::Mapping::new();
+    run_step.insert(
+        serde_yaml::Value::String("run".to_string()),
+        serde_yaml::Value::Mapping(run_map),
+    );
+    let inner_steps = serde_yaml::Value::Sequence(vec![serde_yaml::Value::Mapping(run_step)]);
+    let mut when_inner = serde_yaml::Mapping::new();
+    when_inner.insert(
+        serde_yaml::Value::String("condition".to_string()),
+        serde_yaml::Value::String("<< parameters.check_ci_wiring >>".to_string()),
+    );
+    when_inner.insert(serde_yaml::Value::String("steps".to_string()), inner_steps);
+    let mut when_map = serde_yaml::Mapping::new();
+    when_map.insert(
+        serde_yaml::Value::String("when".to_string()),
+        serde_yaml::Value::Mapping(when_inner),
+    );
+    serde_yaml::Value::Mapping(when_map)
 }
 
 /// Optional string job parameter naming the SSH key fingerprint used to push the
@@ -2291,6 +2340,38 @@ mod tests {
         assert!(
             job.contains("<< parameters.orb_dir >>"),
             "the persist step must reference the orb_dir parameter:\n{job}"
+        );
+    }
+
+    #[test]
+    fn orb_producing_job_gains_ci_wiring_check() {
+        // An orb-producing job must expose a `check_ci_wiring` toggle (default
+        // true) and a conditional step running `gen-circleci-orb update --check`.
+        // Because this lives in the orb job, a consumer whose config is still on
+        // the old wiring triggers the drift alert once they bump the orb version.
+        let params = vec![Parameter {
+            long_name: "orb_dir".to_string(),
+            short: None,
+            param_type: ParamType::String,
+            default: Some("orb".to_string()),
+            required: false,
+            description: "Orb output directory.".to_string(),
+        }];
+        let sub = make_leaf("generate", params);
+        let cli = make_cli("mytool", vec![sub]);
+        let files = generate(&cli, &default_opts(), None);
+        let job = &files[&PathBuf::from("src/jobs/generate.yml")];
+        assert!(
+            job.contains("check_ci_wiring:"),
+            "orb-producing job must expose check_ci_wiring:\n{job}"
+        );
+        assert!(
+            job.contains("gen-circleci-orb update --check"),
+            "must run the CI-wiring drift check:\n{job}"
+        );
+        assert!(
+            job.contains("<< parameters.check_ci_wiring >>"),
+            "the check step must be gated on the check_ci_wiring param:\n{job}"
         );
     }
 
