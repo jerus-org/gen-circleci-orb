@@ -55,8 +55,12 @@ pub struct PatchReport {
 }
 
 /// Marker comment opening a gen-circleci-orb-managed block in a consumer's
-/// config. `update` replaces everything between the begin/end markers, so the
-/// consumer's own jobs/customizations (outside the markers) are preserved.
+/// config. The markers are advisory: `update` re-syncs the managed items by
+/// matching them by content (the orbs entry, the `orb-release` workflow, and the
+/// validation jobs it generates), not by deleting whatever sits between the
+/// markers. The consumer's own jobs/customizations are preserved whether they
+/// sit outside or inside a marker region — content kept inside a region that
+/// was not recognised as ours is additionally surfaced as a warning.
 pub(crate) const MANAGED_BEGIN: &str =
     "# >>> gen-circleci-orb (managed — edits overwritten by 'gen-circleci-orb update')";
 /// Marker comment closing a gen-circleci-orb-managed block.
