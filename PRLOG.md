@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- cede build_mcp_server to gen-orb-mcp orb (Stage 3)(pr [#150])
+
 ### Fixed
 
 - deps: bump anyhow to 1.0.103 (RUSTSEC-2026-0190)(pr [#149])
@@ -560,6 +564,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#145]: https://github.com/jerus-org/gen-circleci-orb/pull/145
 [#146]: https://github.com/jerus-org/gen-circleci-orb/pull/146
 [#149]: https://github.com/jerus-org/gen-circleci-orb/pull/149
+[#150]: https://github.com/jerus-org/gen-circleci-orb/pull/150
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.53...HEAD
 [0.0.53]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.52...v0.0.53
 [0.0.52]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.51...v0.0.52
