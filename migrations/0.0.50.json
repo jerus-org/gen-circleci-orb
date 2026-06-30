@@ -1,0 +1,18 @@
+[
+  {
+    "type": "ParameterRemoved",
+    "data": {
+      "job": "init",
+      "parameter": "record_write_token_env",
+      "since_version": "0.0.50"
+    }
+  },
+  {
+    "type": "CommandParameterRemoved",
+    "data": {
+      "command": "init",
+      "parameter": "record_write_token_env",
+      "since_version": "0.0.50"
+    }
+  }
+]
