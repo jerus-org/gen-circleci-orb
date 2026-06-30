@@ -34,6 +34,10 @@ pub struct PatchOpts {
     /// CircleCI context providing push authority for MCP server build + publish + save steps.
     /// Only used when `mcp` is true.
     pub mcp_context: Vec<String>,
+    /// Version of the jerus-org/gen-orb-mcp orb to declare in the orbs section
+    /// and invoke for build_mcp_server (Mechanism A: gen-orb-mcp owns the MCP
+    /// build). Only used when `mcp` is true.
+    pub gen_orb_mcp_orb_version: String,
     /// CircleCI context(s) the regenerate-orb job attaches when auto-record is
     /// enabled, supplying the signing material. Empty when auto-record is
     /// disabled (no context attached, and no end push job wired).
@@ -84,6 +88,7 @@ pub fn patch_build(content: &str, opts: &PatchOpts) -> (String, PatchReport) {
     let mut lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
 
     patch_step0_gen_circleci_orb_orb(content, &mut lines, opts, &mut report);
+    patch_step0b_gen_orb_mcp_orb(content, &mut lines, opts, &mut report);
     patch_step1_orb_tools(content, &mut lines, opts, &mut report);
     patch_step2_build_regen_jobs(content, &mut lines, opts, &mut report);
     patch_step3_pack_validate(content, &mut lines, opts, &mut report);
@@ -249,6 +254,29 @@ fn patch_step0_gen_circleci_orb_orb(
         let block = vec![managed_begin("  "), orb_entry, managed_end("  ")];
         insert_block_at(lines, pos, &block);
         report.insertions.push("gen-circleci-orb orb".to_string());
+    }
+}
+
+/// Declare the jerus-org/gen-orb-mcp orb when the MCP feature is enabled, so the
+/// build_mcp_server job (Mechanism A) resolves. Skips if the consumer already
+/// declares the orb (a hand-authored pin is respected).
+fn patch_step0b_gen_orb_mcp_orb(
+    content: &str,
+    lines: &mut Vec<String>,
+    opts: &PatchOpts,
+    report: &mut PatchReport,
+) {
+    if !opts.mcp {
+        return;
+    }
+    let version = &opts.gen_orb_mcp_orb_version;
+    let orb_entry = format!("  gen-orb-mcp: jerus-org/gen-orb-mcp@{version}");
+    if content.contains("gen-orb-mcp:") {
+        report.skipped.push("gen-orb-mcp orb".to_string());
+    } else if let Some(pos) = find_section_end(lines, "orbs:") {
+        let block = vec![managed_begin("  "), orb_entry, managed_end("  ")];
+        insert_block_at(lines, pos, &block);
+        report.insertions.push("gen-orb-mcp orb".to_string());
     }
 }
 
@@ -691,8 +719,9 @@ fn push_mcp_workflow_steps(
         .collect();
     let requires_str = requires.join(", ");
 
-    // gen-circleci-orb/build_mcp_server — primes, generates, compiles, publishes, saves
-    lines.push("      - gen-circleci-orb/build_mcp_server:".to_string());
+    // gen-orb-mcp/build_mcp_server — primes, generates, compiles, publishes, saves
+    // (Mechanism A: gen-orb-mcp owns the MCP build; gen-circleci-orb ceded it).
+    lines.push("      - gen-orb-mcp/build_mcp_server:".to_string());
     lines.push("          name: build-mcp-server".to_string());
     lines.push(format!("          binary_name: {binary}"));
     lines.push(format!("          tag_prefix: {prefix}"));
@@ -727,6 +756,7 @@ mod tests {
             mcp: false,
             mcp_earliest_version: "1.0.0".to_string(),
             mcp_context: vec!["pcu-app".to_string()],
+            gen_orb_mcp_orb_version: "0.1.47".to_string(),
             record_contexts: vec![],
             record_push_ssh_fingerprint: String::new(),
         }
@@ -2118,8 +2148,12 @@ workflows:
             .nth(1)
             .expect("no orb-release workflow");
         assert!(
-            after_wf.contains("gen-circleci-orb/build_mcp_server:"),
-            "mcp must use gen-circleci-orb/build_mcp_server orb job:\n{after_wf}"
+            after_wf.contains("gen-orb-mcp/build_mcp_server:"),
+            "mcp must use the gen-orb-mcp/build_mcp_server orb job (Mechanism A):\n{after_wf}"
+        );
+        assert!(
+            !after_wf.contains("gen-circleci-orb/build_mcp_server:"),
+            "must NOT use the ceded gen-circleci-orb/build_mcp_server job:\n{after_wf}"
         );
         assert!(
             after_wf.contains("name: build-mcp-server"),
@@ -2259,11 +2293,21 @@ workflows:
     }
 
     #[test]
-    fn patch_build_mcp_does_not_add_gen_orb_mcp_orb_entry() {
+    fn patch_build_mcp_adds_gen_orb_mcp_orb_entry() {
         let (output, _) = patch_build(BUILD_FIXTURE, &make_opts_mcp());
         assert!(
-            !output.contains("gen-orb-mcp: jerus-org"),
-            "gen-orb-mcp orb must not appear — build_mcp_server is part of gen-circleci-orb:\n{output}"
+            output.contains("gen-orb-mcp: jerus-org/gen-orb-mcp@0.1.47"),
+            "gen-orb-mcp orb must be declared at the configured version \
+             (Mechanism A: gen-orb-mcp owns build_mcp_server):\n{output}"
+        );
+    }
+
+    #[test]
+    fn patch_build_no_gen_orb_mcp_orb_entry_when_mcp_disabled() {
+        let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
+        assert!(
+            !output.contains("gen-orb-mcp:"),
+            "gen-orb-mcp orb must not appear when mcp is disabled:\n{output}"
         );
     }
 

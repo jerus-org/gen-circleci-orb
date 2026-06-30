@@ -2,8 +2,8 @@ use anyhow::{Context, Result};
 use std::path::PathBuf;
 
 use crate::commands::init::{
-    DEFAULT_DOCKER_CONTEXT, DEFAULT_DOCKER_ORB_VERSION, DEFAULT_MCP_EARLIEST_VERSION,
-    DEFAULT_ORB_CONTEXT,
+    DEFAULT_DOCKER_CONTEXT, DEFAULT_DOCKER_ORB_VERSION, DEFAULT_GEN_ORB_MCP_ORB_VERSION,
+    DEFAULT_MCP_EARLIEST_VERSION, DEFAULT_ORB_CONTEXT,
 };
 use crate::{ci_patcher, orb_config};
 
@@ -122,6 +122,9 @@ fn opts_from_config(config: &orb_config::OrbConfig) -> ci_patcher::PatchOpts {
             .and_then(|c| c.mcp_earliest_version.clone())
             .unwrap_or_else(|| DEFAULT_MCP_EARLIEST_VERSION.to_string()),
         mcp_context: ci.and_then(|c| c.mcp_context.clone()).unwrap_or_default(),
+        gen_orb_mcp_orb_version: ci
+            .and_then(|c| c.gen_orb_mcp_orb_version.clone())
+            .unwrap_or_else(|| DEFAULT_GEN_ORB_MCP_ORB_VERSION.to_string()),
         record_contexts: record.map(|r| r.contexts.clone()).unwrap_or_default(),
         record_push_ssh_fingerprint: record
             .map(|r| r.push_ssh_fingerprint.clone())
