@@ -71,6 +71,9 @@ pub struct CiSection {
     pub mcp: Option<bool>,
     pub mcp_context: Option<Vec<String>>,
     pub mcp_earliest_version: Option<String>,
+    /// jerus-org/gen-orb-mcp orb version pinned for the build_mcp_server job.
+    /// Overrides the generator default when set. Only used when `mcp` is true.
+    pub gen_orb_mcp_orb_version: Option<String>,
 }
 
 #[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq)]
