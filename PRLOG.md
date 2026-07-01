@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- bump gen-orb-mcp orb default to 0.1.48(pr [#151])
+
 ## [0.0.54] - 2026-06-30
 
 ### Added
@@ -565,6 +571,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#146]: https://github.com/jerus-org/gen-circleci-orb/pull/146
 [#149]: https://github.com/jerus-org/gen-circleci-orb/pull/149
 [#150]: https://github.com/jerus-org/gen-circleci-orb/pull/150
+[#151]: https://github.com/jerus-org/gen-circleci-orb/pull/151
+[Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.54...HEAD
 [0.0.54]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.53...v0.0.54
 [0.0.53]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.52...v0.0.53
 [0.0.52]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.51...v0.0.52
