@@ -7,83 +7,8 @@ parameters:
 
 orbs:
   toolkit: jerus-org/circleci-toolkit@6.4.2
-
   orb-tools: circleci/orb-tools@12.4.0
-jobs:
-  build-binary:
-    docker:
-      - image: rust:latest@sha256:c6811167278337db5f3b0234964ced5f538f154a2a20f09ec03721d7411c933d
-    steps:
-      - checkout
-      - run:
-          name: Build binary
-          command: cargo build --release
-      - persist_to_workspace:
-          root: target/release
-          paths: [gen-circleci-orb]
-  # Parameterized regenerate job. record:true → regenerate, GPG-sign, commit and
-  # push the orb (early, on a diff); record:false → regenerate only. Either way
-  # it persists the orb to the workspace for pack/review. The SSH write key
-  # (add_ssh_keys) + read-only-key trim are gated on a fingerprint; gnupg is
-  # installed only when recording. Runs the freshly-built binary from /tmp/bin
-  # (so the PR's changes are exercised, not the published orb's baked-in binary —
-  # which is why this isn't the orb job).
-  regenerate:
-    parameters:
-      record:
-        type: boolean
-        default: false
-        description: "When true, sign + commit + push the regenerated orb; when false, persist it for validation."
-      ssh_fingerprint:
-        type: string
-        default: ""
-        description: "SSH write-key fingerprint. When set, load it + drop the read-only checkout key so the push has write authority."
-    docker:
-      - image: rust:latest@sha256:c6811167278337db5f3b0234964ced5f538f154a2a20f09ec03721d7411c933d
-    steps:
-      - checkout
-      - attach_workspace:
-          at: /tmp/bin
-      - when:
-          condition: << parameters.record >>
-          steps:
-            - run:
-                name: Install gnupg (GPG signing for record)
-                command: apt-get update && apt-get install -y gnupg
-      - when:
-          condition: << parameters.ssh_fingerprint >>
-          steps:
-            - run:
-                name: Install openssh-client (SSH agent for the write key)
-                command: apt-get update && apt-get install -y openssh-client
-            - add_ssh_keys:
-                fingerprints:
-                  - << parameters.ssh_fingerprint >>
-            - run:
-                name: Drop read-only checkout key from agent
-                command: ssh-add -d ~/.ssh/id_rsa.pub || true
-      - run:
-          name: Generate orb source
-          command: |
-            export PATH="/tmp/bin:$PATH"
-            no_record_flag="--no-record"
-            if [ "<< parameters.record >>" = "true" ]; then
-              no_record_flag=""
-            fi
-            gen-circleci-orb generate \
-              --binary gen-circleci-orb \
-              --orb-namespace jerus-org \
-              --orb-dir orb \
-              --circleci-cli-version 0.1.36202 \
-              ${no_record_flag}
-      # Persist the regenerated orb so pack/review (checkout:false +
-      # attach_workspace) validate exactly what was just generated — whether
-      # recording (record:true) or validating only (record:false).
-      - persist_to_workspace:
-          root: .
-          paths:
-            - orb
-
+  gen-circleci-orb: jerus-org/gen-circleci-orb@0.0.54
 
 workflows:
   validation:
@@ -140,18 +65,28 @@ workflows:
             - security with sonarcloud
       # build-binary starts in parallel with the test suite (no test-job
       # dependency); the gate moves to regenerate-orb so the slow release build
-      # overlaps the tests instead of running serially after them.
-      - build-binary
-      # regenerate-orb records (record:true): on a diff it GPG-signs, commits and
-      # pushes the regen early. That push starts a fresh pipeline and CircleCI
-      # auto-cancel-redundant kills this now-stale run, so the suite isn't run to
-      # completion twice; the fresh run finds the orb in sync and its required
-      # checks gate the merge. Gated on build-binary + common_tests so a regen is
-      # only pushed when the code passes. `release` supplies the BOT_* signing
-      # material; the write key is loaded via the fingerprint.
-      - regenerate:
+      # overlaps the tests instead of running serially after them. Dogfoods the
+      # orb's own build_rust_binary job — the fresh binary reaches regenerate-orb
+      # via the workspace, exactly as every consumer (e.g. gen-orb-mcp) does.
+      - gen-circleci-orb/build_rust_binary:
+          name: build-binary
+          package: gen-circleci-orb
+      # regenerate-orb records (default no_record=false): on a diff it GPG-signs,
+      # commits and pushes the regen early. That push starts a fresh pipeline and
+      # CircleCI auto-cancel-redundant kills this now-stale run, so the suite isn't
+      # run to completion twice; the fresh run finds the orb in sync and its
+      # required checks gate the merge. Gated on build-binary + common_tests so a
+      # regen is only pushed when the code passes. `release` supplies the BOT_*
+      # signing material; the write key is loaded via the fingerprint. Dogfoods the
+      # orb's own generate job: attach_workspace runs the FRESHLY-BUILT binary (not
+      # the published orb's baked-in one), so this repo eats its own dog food.
+      - gen-circleci-orb/generate:
           name: regenerate-orb
-          record: true
+          binary: gen-circleci-orb
+          orb_namespace: jerus-org
+          orb_dir: orb
+          attach_workspace: true
+          persist_orb_workspace: true
           ssh_fingerprint: "SHA256:OkxsH8Z6Iim6WDJBaII9eTT9aaO1f3eDc6IpsgYYPVg"
           context: [release]
           requires: [build-binary, toolkit/common_tests]
