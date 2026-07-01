@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- chore-retire build_mcp_server wrapper(pr [#152])
+
 ### Fixed
 
 - bump gen-orb-mcp orb default to 0.1.48(pr [#151])
@@ -572,6 +576,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#149]: https://github.com/jerus-org/gen-circleci-orb/pull/149
 [#150]: https://github.com/jerus-org/gen-circleci-orb/pull/150
 [#151]: https://github.com/jerus-org/gen-circleci-orb/pull/151
+[#152]: https://github.com/jerus-org/gen-circleci-orb/pull/152
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.54...HEAD
 [0.0.54]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.53...v0.0.54
 [0.0.53]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.52...v0.0.53
