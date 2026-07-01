@@ -12,62 +12,11 @@ parameters:
 
 orbs:
   toolkit: jerus-org/circleci-toolkit@6.4.2
-  orb-tools: circleci/orb-tools@12.4.0
-  docker: circleci/docker@4.0.0
-  gen-circleci-orb: jerus-org/gen-circleci-orb@0.0.51
-  gen-orb-mcp: jerus-org/gen-orb-mcp@0.1.48
 
-jobs:
-  build-container:
-    docker:
-      - image: cimg/base:stable
-    steps:
-      - checkout
-      - setup_remote_docker
-      - attach_workspace:
-          at: /tmp/release-versions
-      - run:
-          name: Build and push Docker image
-          command: |
-            source /tmp/release-versions/versions.env
-            VERSION=${CRATE_VERSION_GEN_CIRCLECI_ORB}
-            docker build -t jerusdp/gen-circleci-orb:${VERSION} -t jerusdp/gen-circleci-orb:latest orb
-            echo "${DOCKERHUB_PASSWORD}" | docker login -u "${DOCKERHUB_USERNAME}" --password-stdin
-            docker push jerusdp/gen-circleci-orb:${VERSION}
-            docker push jerusdp/gen-circleci-orb:latest
-
-  ensure-orb-registered:
-    executor: orb-tools/default
-    steps:
-      - run:
-          name: Ensure orb is registered
-          command: |
-            set +e
-            circleci setup --token "${CIRCLE_TOKEN}" --host https://circleci.com --no-prompt
-            setup_exit=$?
-            set -e
-            if [ "${setup_exit}" -ne 0 ] && [ "${setup_exit}" -ne 255 ]; then
-              echo "circleci setup failed with exit ${setup_exit}" >&2
-              exit "${setup_exit}"
-            fi
-            set +e
-            circleci orb info jerus-org/gen-circleci-orb
-            orb_info_exit=$?
-            set -e
-            echo "orb info exit: ${orb_info_exit}"
-            if [ "${orb_info_exit}" -ne 0 ] && [ "${orb_info_exit}" -ne 255 ]; then
-              set +e
-              create_output=$(circleci orb create jerus-org/gen-circleci-orb --no-prompt 2>&1)
-              create_exit=$?
-              set -e
-              echo "${create_output}"
-              if [ "${create_exit}" -ne 0 ] && ! echo "${create_output}" | grep -q "already exists"; then
-                exit "${create_exit}"
-              fi
-            fi
-            echo "Orb is registered."
-
-
+# release.yml runs ONLY the crate release. release_crate pushes the
+# gen-circleci-orb-v* tag, which triggers the tag-gated `orb-release` workflow in
+# config.yml (build + verify + pack + container + register + publish orb + build
+# MCP server). Keeping orb publishing out of here avoids double-publishing.
 workflows:
   release:
     jobs:
@@ -79,85 +28,23 @@ workflows:
 
       - approve-release:
           type: approval
-          requires:
-            - calculate-versions
-
-      - orb-tools/pack:
-          name: pack-orb-release
-          source_dir: orb/src
-          requires: [approve-release]
-
-      # Builds and persists the gen-circleci-orb binary to the workspace at
-      # /tmp/workspace/gen-circleci-orb. build-mcp-server attaches this at
-      # /tmp/bin and chmods it (orb job contract). Dogfoods the orb's own job,
-      # matching the orb-release-binary step ci_patcher generates for consumers.
-      - gen-circleci-orb/build_rust_binary:
-          name: build-binary-release
-          package: gen-circleci-orb
-          requires: [approve-release]
-
-      - ensure-orb-registered:
-          requires: [approve-release]
-          context: [orb-publishing]
+          requires: [calculate-versions]
 
       - toolkit/release_crate:
           name: release-gen-circleci-orb
           requires: [approve-release]
-          context:
-            - release
-            - bot-check
-            - pcu-app
           package: gen-circleci-orb
           crate_tag_prefix: gen-circleci-orb-v
           build_binary: true
           binary_name: gen-circleci-orb
-
-      - build-container:
-          requires: [release-gen-circleci-orb]
-          context: [docker]
-
-      - orb-tools/publish:
-          name: publish-orb-jerus-org
-          pre-steps:
-            - attach_workspace:
-                at: /tmp/release-versions
-            - run:
-                name: Export orb version as CIRCLE_TAG
-                command: |
-                  source /tmp/release-versions/versions.env
-                  echo "export CIRCLE_TAG=v${CRATE_VERSION_GEN_CIRCLECI_ORB}" >> "$BASH_ENV"
-          orb_name: jerus-org/gen-circleci-orb
-          pub_type: production
-          vcs_type: github
-          requires: [build-container, pack-orb-release, ensure-orb-registered]
-          context: [orb-publishing]
-
-      - toolkit/release_prlog:
-          name: release-prlog
-          requires:
-            - release-gen-circleci-orb
           context:
             - release
             - bot-check
             - pcu-app
 
-      - gen-orb-mcp/build_mcp_server:
-          name: build-mcp-server
-          binary_name: gen-circleci-orb
-          tag_prefix: v
-          earliest_version: "0.0.11"
-          pre-steps:
-            - attach_workspace:
-                at: /tmp/release-versions
-            - run:
-                name: Set CIRCLE_TAG from workspace versions
-                command: |
-                  source /tmp/release-versions/versions.env
-                  echo "export CIRCLE_TAG=v${WORKSPACE_VERSION}" >> "$BASH_ENV"
-          requires:
-            - release-prlog
-            - build-binary-release
+      - toolkit/release_prlog:
+          requires: [release-gen-circleci-orb]
           context:
-            - bot-check
             - release
+            - bot-check
             - pcu-app
