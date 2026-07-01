@@ -756,7 +756,7 @@ mod tests {
             mcp: false,
             mcp_earliest_version: "1.0.0".to_string(),
             mcp_context: vec!["pcu-app".to_string()],
-            gen_orb_mcp_orb_version: "0.1.47".to_string(),
+            gen_orb_mcp_orb_version: "0.1.48".to_string(),
             record_contexts: vec![],
             record_push_ssh_fingerprint: String::new(),
         }
@@ -2296,7 +2296,7 @@ workflows:
     fn patch_build_mcp_adds_gen_orb_mcp_orb_entry() {
         let (output, _) = patch_build(BUILD_FIXTURE, &make_opts_mcp());
         assert!(
-            output.contains("gen-orb-mcp: jerus-org/gen-orb-mcp@0.1.47"),
+            output.contains("gen-orb-mcp: jerus-org/gen-orb-mcp@0.1.48"),
             "gen-orb-mcp orb must be declared at the configured version \
              (Mechanism A: gen-orb-mcp owns build_mcp_server):\n{output}"
         );

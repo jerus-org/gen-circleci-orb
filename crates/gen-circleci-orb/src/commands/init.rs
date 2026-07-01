@@ -17,7 +17,7 @@ pub const DEFAULT_MCP_EARLIEST_VERSION: &str = "0.0.1";
 /// Default jerus-org/gen-orb-mcp orb version pinned for the build_mcp_server job
 /// (Mechanism A). Generator-owned (like the gen-circleci-orb pin) so the `update`
 /// gate stays authoritative; Renovate keeps this default current.
-pub const DEFAULT_GEN_ORB_MCP_ORB_VERSION: &str = "0.1.47";
+pub const DEFAULT_GEN_ORB_MCP_ORB_VERSION: &str = "0.1.48";
 
 /// Values resolved by the interactive dialogue (or non-interactive fallback).
 /// These are used by both `PatchOpts` and the bootstrap config.
