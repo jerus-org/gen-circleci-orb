@@ -14,8 +14,8 @@ orbs:
   toolkit: jerus-org/circleci-toolkit@6.4.2
   orb-tools: circleci/orb-tools@12.4.0
   docker: circleci/docker@4.0.0
-  # renovate: datasource=circleci-orb depName=jerus-org/gen-circleci-orb
   gen-circleci-orb: jerus-org/gen-circleci-orb@0.0.51
+  gen-orb-mcp: jerus-org/gen-orb-mcp@0.1.48
 
 jobs:
   build-container:
@@ -141,7 +141,7 @@ workflows:
             - bot-check
             - pcu-app
 
-      - gen-circleci-orb/build_mcp_server:
+      - gen-orb-mcp/build_mcp_server:
           name: build-mcp-server
           binary_name: gen-circleci-orb
           tag_prefix: v
