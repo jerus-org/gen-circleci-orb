@@ -28,6 +28,10 @@ pub struct OrbConfig {
 /// setup is a single user-supplied end-of-workflow push job. The tool therefore
 /// holds no write token — only the GPG signing names needed to sign the commit.
 #[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq)]
+// A minimal `[record]` section (e.g. only `enabled = false`, the documented
+// silence opt-out) must parse: fall back to Default for any field the user omits
+// rather than erroring on "missing field".
+#[serde(default)]
 pub struct RecordConfig {
     /// Whether auto-record is enabled.
     pub enabled: bool,

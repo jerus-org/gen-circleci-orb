@@ -39,6 +39,25 @@ mod tests {
     }
 
     #[test]
+    fn load_config_parses_minimal_record_opt_out() {
+        // The documented silence opt-out (#155) — a [record] section with only
+        // `enabled = false` — must parse: the env-name fields default rather than
+        // erroring on "missing field".
+        let dir = TempDir::new().unwrap();
+        let path = write_toml(
+            &dir,
+            r#"
+[record]
+enabled = false
+"#,
+        );
+        let config = load_config(&path).unwrap();
+        let record = config.record.expect("[record] must parse");
+        assert!(!record.enabled);
+        assert!(record.gpg_key_env.is_empty());
+    }
+
+    #[test]
     fn load_config_parses_git_push_subcommands() {
         let dir = TempDir::new().unwrap();
         let path = write_toml(
