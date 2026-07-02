@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - gen-circleci-orb.toml completeness + orb-release round-trip stability (#155)(pr [#156])
 - require [orb] section, warn on missing [record] (config-completeness, #155)(pr [#157])
 - deps: update dependency toolkit to v6.5.0(pr [#160])
+- deps: update rust:1-slim-trixie docker digest to 31ee7fc(pr [#161])
 
 ## [0.0.54] - 2026-06-30
 
@@ -592,6 +593,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#158]: https://github.com/jerus-org/gen-circleci-orb/pull/158
 [#159]: https://github.com/jerus-org/gen-circleci-orb/pull/159
 [#160]: https://github.com/jerus-org/gen-circleci-orb/pull/160
+[#161]: https://github.com/jerus-org/gen-circleci-orb/pull/161
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.54...HEAD
 [0.0.54]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.53...v0.0.54
 [0.0.53]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.52...v0.0.53
