@@ -11,7 +11,7 @@ orbs:
   # Consumed by the orb-release workflow's build_mcp_server job (Mechanism A:
   # gen-orb-mcp owns the MCP build). Declared here (not in a managed block) so
   # `update` skips re-inserting it and stays round-trip stable.
-  gen-orb-mcp: jerus-org/gen-orb-mcp@0.1.48
+  gen-orb-mcp: jerus-org/gen-orb-mcp@0.1.49
   # >>> gen-circleci-orb (managed — edits overwritten by 'gen-circleci-orb update')
   gen-circleci-orb: jerus-org/gen-circleci-orb@0.0.54
   # <<< gen-circleci-orb
