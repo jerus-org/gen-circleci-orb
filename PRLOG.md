@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- interactive subcommand reservation (full exclusion)(pr [#159])
+
 ### Changed
 
 - chore-retire build_mcp_server wrapper(pr [#152])
@@ -585,6 +589,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#156]: https://github.com/jerus-org/gen-circleci-orb/pull/156
 [#157]: https://github.com/jerus-org/gen-circleci-orb/pull/157
 [#158]: https://github.com/jerus-org/gen-circleci-orb/pull/158
+[#159]: https://github.com/jerus-org/gen-circleci-orb/pull/159
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.54...HEAD
 [0.0.54]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.53...v0.0.54
 [0.0.53]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.52...v0.0.53
