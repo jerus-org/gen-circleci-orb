@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - bump gen-orb-mcp orb default to 0.1.48(pr [#151])
+- gen-circleci-orb.toml completeness + orb-release round-trip stability (#155)(pr [#156])
 
 ## [0.0.54] - 2026-06-30
 
@@ -579,6 +580,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#151]: https://github.com/jerus-org/gen-circleci-orb/pull/151
 [#152]: https://github.com/jerus-org/gen-circleci-orb/pull/152
 [#154]: https://github.com/jerus-org/gen-circleci-orb/pull/154
+[#156]: https://github.com/jerus-org/gen-circleci-orb/pull/156
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.54...HEAD
 [0.0.54]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.53...v0.0.54
 [0.0.53]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.52...v0.0.53
