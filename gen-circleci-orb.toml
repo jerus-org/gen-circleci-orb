@@ -80,3 +80,10 @@ orb_context = "orb-publishing"
 mcp = true
 mcp_context = ["release", "bot-check", "pcu-app"]
 mcp_earliest_version = "0.0.11"
+
+# init is interactive (dialoguer) developer setup — it wires orb generation into
+# a repo's CI and is never run in CI itself. Suppress its generated job (like the
+# help + config developer-tool subcommands) so the orb doesn't expose a nonsensical
+# `gen-circleci-orb/init` CI job.
+[subcommand.init]
+generate_job = false
