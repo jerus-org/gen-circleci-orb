@@ -34,6 +34,11 @@ impl Update {
     pub fn run(&self) -> Result<()> {
         let config = orb_config::load_config(&self.config)
             .with_context(|| format!("reading {}", self.config.display()))?;
+        // `update` relies on init-captured config; it must not guess. Fail on a
+        // missing required section, warn on present-but-empty required fields.
+        for w in validate_config_completeness(&config)? {
+            eprintln!("warning: {w}");
+        }
         let opts = opts_from_config(&config);
 
         let config_path = self.ci_dir.join("config.yml");
@@ -76,6 +81,56 @@ impl Update {
         }
         Ok(())
     }
+}
+
+/// Validate that the loaded config carries the sections/fields `update` needs to
+/// regenerate stable CI across tool upgrades. `init` captures these interactively;
+/// `update` is non-interactive and must never guess or emit a construct whose
+/// required config value is absent. Returns an error (pointing at `init`) when a
+/// required section is missing, and warnings for present-but-empty required fields.
+fn validate_config_completeness(config: &orb_config::OrbConfig) -> Result<Vec<String>> {
+    let Some(ci) = config.ci.as_ref() else {
+        anyhow::bail!(
+            "gen-circleci-orb.toml has no [ci] section — the generated orb-release \
+             wiring (container build, orb publish, MCP build) cannot be produced \
+             without it, and update must not guess. Run `gen-circleci-orb init` to \
+             configure it."
+        );
+    };
+    let mut warnings = Vec::new();
+    let is_blank = |v: &Option<String>| v.as_deref().unwrap_or_default().trim().is_empty();
+    if is_blank(&ci.crate_tag_prefix) {
+        warnings.push(
+            "[ci].crate_tag_prefix is empty — the orb-release tag filter and \
+             CIRCLE_TAG normalisation will be malformed; set it or re-run \
+             `gen-circleci-orb init`"
+                .to_string(),
+        );
+    }
+    if is_blank(&ci.docker_namespace) {
+        warnings.push(
+            "[ci].docker_namespace is empty — the build_container step will push to \
+             an invalid image name; set it or re-run `gen-circleci-orb init`"
+                .to_string(),
+        );
+    }
+    if ci.mcp.unwrap_or(false) {
+        if is_blank(&ci.mcp_earliest_version) {
+            warnings.push(
+                "[ci].mcp_earliest_version is empty — build_mcp_server will prime \
+                 from an unset earliest version; set it or re-run `gen-circleci-orb init`"
+                    .to_string(),
+            );
+        }
+        if ci.mcp_context.as_deref().unwrap_or_default().is_empty() {
+            warnings.push(
+                "[ci].mcp_context is empty — build_mcp_server will attach no context \
+                 (no signing/push credentials); set it or re-run `gen-circleci-orb init`"
+                    .to_string(),
+            );
+        }
+    }
+    Ok(warnings)
 }
 
 /// Build `ci_patcher::PatchOpts` from the committed gen-circleci-orb.toml. Fields
@@ -171,6 +226,60 @@ fn line_diff(current: &str, would_be: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::orb_config::{CiSection, OrbConfig};
+
+    // ── config completeness (#155): update must rely on init-captured config ──
+
+    #[test]
+    fn validate_fails_when_ci_section_missing() {
+        // update must not guess: a config with no [ci] section can't produce stable
+        // orb-release wiring, so fail and point the user at `init`.
+        let config = OrbConfig::default();
+        let err = validate_config_completeness(&config).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("[ci]"),
+            "error must name the missing section: {msg}"
+        );
+        assert!(
+            msg.contains("init"),
+            "error must direct the user to `init`: {msg}"
+        );
+    }
+
+    #[test]
+    fn validate_warns_on_empty_required_ci_fields() {
+        let config = OrbConfig {
+            ci: Some(CiSection::default()),
+            ..OrbConfig::default()
+        };
+        let warnings = validate_config_completeness(&config).unwrap();
+        assert!(
+            warnings.iter().any(|w| w.contains("crate_tag_prefix")),
+            "must warn on empty crate_tag_prefix: {warnings:?}"
+        );
+        assert!(
+            warnings.iter().any(|w| w.contains("docker_namespace")),
+            "must warn on empty docker_namespace: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn validate_passes_for_complete_ci() {
+        let config = OrbConfig {
+            ci: Some(CiSection {
+                crate_tag_prefix: Some("mytool-v".to_string()),
+                docker_namespace: Some("my-docker-org".to_string()),
+                ..CiSection::default()
+            }),
+            ..OrbConfig::default()
+        };
+        let warnings = validate_config_completeness(&config).unwrap();
+        assert!(
+            warnings.is_empty(),
+            "a complete [ci] must produce no warnings: {warnings:?}"
+        );
+    }
     use std::fs;
     use tempfile::TempDir;
 
