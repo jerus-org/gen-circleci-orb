@@ -260,6 +260,13 @@ fn patch_step0_gen_circleci_orb_orb(
 /// Declare the jerus-org/gen-orb-mcp orb when the MCP feature is enabled, so the
 /// build_mcp_server job (Mechanism A) resolves. Skips if the consumer already
 /// declares the orb (a hand-authored pin is respected).
+///
+/// Inserted UNMARKED (a plain orbs entry, like `orb-tools`), NOT wrapped in
+/// gen-circleci-orb managed markers: `strip_managed` only recognises the
+/// `gen-circleci-orb:` entry, so a marked `gen-orb-mcp:` block would be flagged
+/// "unrecognised" on every resync (not round-trip stable, #155 Gap B). Leaving it
+/// unmarked also lets Renovate own the version pin (public orb) without the
+/// generator overwriting the bump on the next `update`.
 fn patch_step0b_gen_orb_mcp_orb(
     content: &str,
     lines: &mut Vec<String>,
@@ -274,8 +281,7 @@ fn patch_step0b_gen_orb_mcp_orb(
     if content.contains("gen-orb-mcp:") {
         report.skipped.push("gen-orb-mcp orb".to_string());
     } else if let Some(pos) = find_section_end(lines, "orbs:") {
-        let block = vec![managed_begin("  "), orb_entry, managed_end("  ")];
-        insert_block_at(lines, pos, &block);
+        lines.insert(pos, orb_entry);
         report.insertions.push("gen-orb-mcp orb".to_string());
     }
 }
@@ -1394,6 +1400,31 @@ mod tests {
         assert_eq!(
             r1, r2,
             "running update twice must be stable:\n--- r1 ---\n{r1}\n--- r2 ---\n{r2}"
+        );
+    }
+
+    #[test]
+    fn resync_with_mcp_is_stable_and_warning_free() {
+        // Gap B (#155): when mcp is enabled the gen-orb-mcp orb declaration must be
+        // round-trip stable — resync must neither churn it nor flag it as
+        // "unrecognised content inside a managed region". (Regression: patch_step0b
+        // wrapped it in managed markers that strip_managed didn't recognise.)
+        let opts = make_opts_mcp();
+        let (patched, _) = patch_build(BUILD_FIXTURE, &opts);
+        let (r1, r1_report) = resync_build(&patched, &opts);
+        let (r2, _) = resync_build(&r1, &opts);
+        assert!(
+            r1_report.warnings.is_empty(),
+            "resync must not flag the gen-orb-mcp orb as unrecognised:\n{:?}",
+            r1_report.warnings
+        );
+        assert_eq!(
+            r1, r2,
+            "update with mcp must be stable across runs:\n--- r1 ---\n{r1}\n--- r2 ---\n{r2}"
+        );
+        assert!(
+            r1.contains("gen-orb-mcp: jerus-org/gen-orb-mcp@0.1.48"),
+            "gen-orb-mcp orb declaration must survive resync:\n{r1}"
         );
     }
 

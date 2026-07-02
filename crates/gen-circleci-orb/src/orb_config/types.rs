@@ -133,7 +133,7 @@ pub struct ParamOverride {
 ///   values (built-ins, tool commands with explicit values, third-party orb
 ///   steps, custom `run` steps) and declare job parameters explicitly via
 ///   [`parameter`](Self::parameter). Use this to build goal-oriented jobs such as
-///   `build_mcp_server`.
+///   `sync_and_publish`.
 ///
 /// When [`step`](Self::step) is present it takes precedence over
 /// [`steps`](Self::steps).

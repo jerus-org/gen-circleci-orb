@@ -3462,7 +3462,7 @@ mod tests {
             "<< parameters.tag_prefix >>".to_string(),
         );
         JobGroup {
-            name: "build_mcp_server".to_string(),
+            name: "sync_and_publish".to_string(),
             description: Some("Goal-oriented composite job.".to_string()),
             parameter: Some(vec![
                 JobGroupParam {
@@ -3515,7 +3515,7 @@ mod tests {
             ..OrbConfig::default()
         };
         let files = generate(&cli, &default_opts(), Some(&config));
-        files[&PathBuf::from("src/jobs/build_mcp_server.yml")].clone()
+        files[&PathBuf::from("src/jobs/sync_and_publish.yml")].clone()
     }
 
     #[test]
@@ -3573,7 +3573,7 @@ mod tests {
             ..OrbConfig::default()
         };
         let files = generate(&cli, &default_opts(), Some(&config));
-        let job = &files[&PathBuf::from("src/jobs/build_mcp_server.yml")];
+        let job = &files[&PathBuf::from("src/jobs/sync_and_publish.yml")];
 
         // The run step keeps its name + environment, but the (potentially long)
         // script is externalized to a scripts file and referenced via include
@@ -3587,7 +3587,7 @@ mod tests {
             "run step environment must appear:\n{job}"
         );
         assert!(
-            job.contains("<<include(scripts/build_mcp_server_set_up_git_and_environment.sh)>>"),
+            job.contains("<<include(scripts/sync_and_publish_set_up_git_and_environment.sh)>>"),
             "run command must be an <<include(...)>>, not inline:\n{job}"
         );
         assert!(
@@ -3598,7 +3598,7 @@ mod tests {
         // The script body lives in its own file.
         let script = files
             .get(&PathBuf::from(
-                "src/scripts/build_mcp_server_set_up_git_and_environment.sh",
+                "src/scripts/sync_and_publish_set_up_git_and_environment.sh",
             ))
             .expect("externalized run-step script file must be generated");
         assert!(

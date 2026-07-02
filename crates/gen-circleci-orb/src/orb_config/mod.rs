@@ -185,7 +185,7 @@ params = ["orb_path", "binary"]
             &dir,
             r#"
 [[job_group]]
-name = "build_mcp_server"
+name = "sync_and_publish"
 description = "Prime, generate, publish and commit back."
 
 [[job_group.parameter]]
@@ -223,7 +223,7 @@ orb = "toolkit/setup"
         let groups = config.job_group.unwrap();
         assert_eq!(groups.len(), 1);
         let g = &groups[0];
-        assert_eq!(g.name, "build_mcp_server");
+        assert_eq!(g.name, "sync_and_publish");
 
         let params = g.parameter.as_ref().expect("parameters missing");
         assert_eq!(params.len(), 2);
