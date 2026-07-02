@@ -1,5 +1,0 @@
-description: Suppress job generation for a subcommand (generate_job = false)
-steps:
-- run:
-    name: Suppress job generation for a subcommand (generate_job = false)
-    command: <<include(scripts/suppress.sh)>>

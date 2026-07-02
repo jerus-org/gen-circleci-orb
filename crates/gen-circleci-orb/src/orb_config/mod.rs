@@ -336,6 +336,7 @@ steps:
             "help".to_string(),
             SubcommandConfig {
                 generate_job: Some(false),
+                interactive: None,
                 param: None,
                 label: None,
             },
@@ -344,6 +345,7 @@ steps:
             "generate".to_string(),
             SubcommandConfig {
                 generate_job: None,
+                interactive: None,
                 param: Some(params),
                 label: None,
             },

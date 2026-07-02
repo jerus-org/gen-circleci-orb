@@ -113,6 +113,12 @@ pub struct OrbSection {
 #[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq)]
 pub struct SubcommandConfig {
     pub generate_job: Option<bool>,
+    /// When true, the subcommand is reserved as interactive/CLI-only and is FULLY
+    /// excluded from orb generation — no job, no command, no script (and, for a
+    /// parent, its whole subtree). Stronger than `generate_job = false`, which
+    /// drops only the job. Unset falls back to a built-in default: `init` and
+    /// `config` are interactive by default; set `false` to expose them in CI.
+    pub interactive: Option<bool>,
     pub param: Option<IndexMap<String, ParamOverride>>,
     /// Curated display name for the command's `run` step. When unset, the
     /// generator falls back to the command's short about (the first sentence

@@ -305,6 +305,16 @@ pub struct Init {
     pub dry_run: bool,
 }
 
+/// Subcommands present in the target binary that are interactive by default
+/// ([`DEFAULT_INTERACTIVE`]) — the ones `init` prompts about and scaffolds.
+pub(crate) fn present_default_interactive(cli: &CliDefinition) -> Vec<String> {
+    cli.subcommands
+        .iter()
+        .filter(|s| crate::orb_generator::render::DEFAULT_INTERACTIVE.contains(&s.name.as_str()))
+        .map(|s| s.name.clone())
+        .collect()
+}
+
 pub(crate) fn build_bootstrap_config(
     binary: &str,
     namespaces: &[String],
@@ -312,28 +322,27 @@ pub(crate) fn build_bootstrap_config(
     home_url: Option<&str>,
     source_url: Option<&str>,
     git_push_subcommands: &[String],
+    interactive: &[(String, bool)],
 ) -> OrbConfig {
+    // `help` is reserved at the `--help` parser, so it needs no entry. Interactive
+    // (CLI-only) subcommands — `init`/`config` by default, as confirmed at init
+    // time — are fully excluded from the orb (job + command + script); a parent
+    // (`config`) cascades to its whole subtree, so no per-child entries are needed.
     let mut subcommands = IndexMap::new();
-    // Suppress job generation for the built-in `help` command and for the
-    // `config` subcommands — the latter edit gen-circleci-orb.toml from the CLI
-    // and are developer tools, not CI jobs. (No-op for binaries lacking them.)
-    for name in [
-        "help",
-        "add-job-group",
-        "set-default",
-        "show",
-        "suppress",
-        "unsuppress",
-    ] {
+    for (name, is_interactive) in interactive {
         subcommands.insert(
-            name.to_string(),
+            name.clone(),
             SubcommandConfig {
-                generate_job: Some(false),
-                param: None,
-                label: None,
+                interactive: Some(*is_interactive),
+                ..SubcommandConfig::default()
             },
         );
     }
+    let subcommand = if subcommands.is_empty() {
+        None
+    } else {
+        Some(subcommands)
+    };
     OrbConfig {
         orb: Some(OrbSection {
             binary: Some(binary.to_string()),
@@ -354,7 +363,7 @@ pub(crate) fn build_bootstrap_config(
         }),
         ci: None, // populated by run() after gathering extras
         orbs: None,
-        subcommand: Some(subcommands),
+        subcommand,
         job_group: None,
         extra_job: None,
         record: None, // populated by run() after gathering extras
@@ -687,16 +696,40 @@ impl Init {
         })
     }
 
+    /// Decide which of the present default-interactive subcommands to reserve as
+    /// interactive/CLI-only (fully excluded from the orb). Interactive terminal:
+    /// prompt per subcommand, defaulting to reserved so the user confirms/overrides
+    /// in the initial scaffold. Non-interactive (CI/dry-run): reserve all (the safe
+    /// default), so the scaffold still records the choice explicitly.
+    fn resolve_interactive(&self, present: &[String]) -> Result<Vec<(String, bool)>> {
+        if is_non_interactive(self.dry_run) {
+            return Ok(present.iter().map(|n| (n.clone(), true)).collect());
+        }
+        present
+            .iter()
+            .map(|name| -> Result<(String, bool)> {
+                let reserve = dialoguer::Confirm::new()
+                    .with_prompt(format!(
+                        "Reserve `{name}` as interactive-only (CLI setup — excluded from the CI orb)?"
+                    ))
+                    .default(true)
+                    .interact()?;
+                Ok((name.clone(), reserve))
+            })
+            .collect()
+    }
+
     pub fn run(&self) -> Result<()> {
         // Parse binary early: detect push-capable subcommands (for dialogue default)
         // and subcommands with a required orb_path param (for config defaults).
-        let (detected_push, detected_orb_path) =
+        let (detected_push, detected_orb_path, present_interactive) =
             match crate::help_parser::parse_binary(&self.binary) {
                 Ok(cli) => (
                     detect_git_push_subcommands(&cli),
                     detect_orb_path_subcommands(&cli),
+                    present_default_interactive(&cli),
                 ),
-                Err(_) => (vec![], vec![]),
+                Err(_) => (vec![], vec![], vec![]),
             };
 
         let config_path = std::path::Path::new("gen-circleci-orb.toml");
@@ -772,6 +805,7 @@ impl Init {
 
         // Step 3: write bootstrap gen-circleci-orb.toml
         let config_path = std::path::Path::new("gen-circleci-orb.toml");
+        let interactive = self.resolve_interactive(&present_interactive)?;
         let mut bootstrap = build_bootstrap_config(
             &self.binary,
             opts.namespaces.as_slice(),
@@ -779,6 +813,7 @@ impl Init {
             extras.home_url.as_deref(),
             extras.source_url.as_deref(),
             &extras.git_push_subcommands,
+            &interactive,
         );
         populate_orb_path_defaults(&mut bootstrap, &detected_orb_path);
         bootstrap.ci = Some(CiSection {
@@ -831,8 +866,15 @@ mod tests {
 
     #[test]
     fn bootstrap_config_has_orb_section_with_binary() {
-        let config =
-            build_bootstrap_config("mytool", &["my-org".to_string()], "orb", None, None, &[]);
+        let config = build_bootstrap_config(
+            "mytool",
+            &["my-org".to_string()],
+            "orb",
+            None,
+            None,
+            &[],
+            &[],
+        );
         assert!(
             config.orb.is_some(),
             "bootstrap config must have [orb] section"
@@ -852,6 +894,7 @@ mod tests {
             None,
             None,
             &[],
+            &[],
         );
         assert_eq!(
             config.orb.as_ref().unwrap().namespaces.as_deref(),
@@ -860,19 +903,66 @@ mod tests {
     }
 
     #[test]
-    fn bootstrap_config_suppresses_help_subcommand() {
-        let config =
-            build_bootstrap_config("mytool", &["my-org".to_string()], "orb", None, None, &[]);
+    fn bootstrap_config_scaffolds_interactive_decisions() {
+        // The bootstrap scaffolds the init-time interactive decisions explicitly
+        // (init reserved, config opted in) and does NOT emit a help entry — help is
+        // reserved at the --help parser.
+        let config = build_bootstrap_config(
+            "mytool",
+            &["my-org".to_string()],
+            "orb",
+            None,
+            None,
+            &[],
+            &[("init".to_string(), true), ("config".to_string(), false)],
+        );
         let subcommands = config
             .subcommand
             .as_ref()
             .expect("subcommand section missing");
-        let help = subcommands.get("help").expect("help entry missing");
-        assert_eq!(
-            help.generate_job,
-            Some(false),
-            "help subcommand must be suppressed in bootstrap config"
+        assert_eq!(subcommands.get("init").unwrap().interactive, Some(true));
+        assert_eq!(subcommands.get("config").unwrap().interactive, Some(false));
+        assert!(
+            !subcommands.contains_key("help"),
+            "help is parser-reserved, not scaffolded into the toml"
         );
+    }
+
+    #[test]
+    fn bootstrap_config_has_no_subcommand_section_without_interactive() {
+        let config = build_bootstrap_config(
+            "mytool",
+            &["my-org".to_string()],
+            "orb",
+            None,
+            None,
+            &[],
+            &[],
+        );
+        assert!(
+            config.subcommand.is_none(),
+            "no interactive decisions → no [subcommand] section"
+        );
+    }
+
+    #[test]
+    fn present_default_interactive_returns_only_present_defaults() {
+        use crate::help_parser::types::{CliDefinition, SubCommand};
+        let sub = |name: &str| SubCommand {
+            name: name.to_string(),
+            description: String::new(),
+            is_leaf: true,
+            parameters: vec![],
+            subcommands: vec![],
+        };
+        // `init` is a default-interactive name present here; `run` is not; `config`
+        // is absent → only `init` is returned (the prompt fires only for present names).
+        let cli = CliDefinition {
+            binary_name: "mytool".to_string(),
+            description: String::new(),
+            subcommands: vec![sub("init"), sub("run")],
+        };
+        assert_eq!(present_default_interactive(&cli), vec!["init".to_string()]);
     }
 
     #[test]
@@ -928,6 +1018,7 @@ mod tests {
             None,
             None,
             &["save".to_string()],
+            &[],
         );
         assert_eq!(
             config.orb.as_ref().unwrap().git_push_subcommands.as_deref(),
@@ -937,8 +1028,15 @@ mod tests {
 
     #[test]
     fn bootstrap_config_git_push_subcommands_none_when_empty() {
-        let config =
-            build_bootstrap_config("mytool", &["my-org".to_string()], "orb", None, None, &[]);
+        let config = build_bootstrap_config(
+            "mytool",
+            &["my-org".to_string()],
+            "orb",
+            None,
+            None,
+            &[],
+            &[],
+        );
         assert_eq!(
             config.orb.as_ref().unwrap().git_push_subcommands,
             None,
@@ -977,6 +1075,7 @@ mod tests {
             "orb",
             Some("https://example.com/home"),
             Some("https://example.com/source"),
+            &[],
             &[],
         );
         assert_eq!(
@@ -1037,8 +1136,15 @@ mod tests {
 
     #[test]
     fn populate_orb_path_defaults_adds_subcommand_entries() {
-        let mut config =
-            build_bootstrap_config("mytool", &["my-org".to_string()], "orb", None, None, &[]);
+        let mut config = build_bootstrap_config(
+            "mytool",
+            &["my-org".to_string()],
+            "orb",
+            None,
+            None,
+            &[],
+            &[],
+        );
         populate_orb_path_defaults(
             &mut config,
             &["generate".to_string(), "validate".to_string()],
@@ -1058,19 +1164,33 @@ mod tests {
 
     #[test]
     fn populate_orb_path_defaults_preserves_existing_subcommand_entries() {
-        // [subcommand.help] generate_job = false must not be disturbed
-        let mut config =
-            build_bootstrap_config("mytool", &["my-org".to_string()], "orb", None, None, &[]);
+        // An existing interactive entry (init reserved) must not be disturbed when
+        // populate adds orb_path param defaults for another subcommand.
+        let mut config = build_bootstrap_config(
+            "mytool",
+            &["my-org".to_string()],
+            "orb",
+            None,
+            None,
+            &[],
+            &[("init".to_string(), true)],
+        );
         populate_orb_path_defaults(&mut config, &["generate".to_string()]);
-        // help suppression added by build_bootstrap_config must still be there
         let subcommands = config.subcommand.as_ref().unwrap();
-        assert_eq!(subcommands.get("help").unwrap().generate_job, Some(false));
+        assert_eq!(subcommands.get("init").unwrap().interactive, Some(true));
     }
 
     #[test]
     fn populate_orb_path_defaults_noop_when_empty() {
-        let mut config =
-            build_bootstrap_config("mytool", &["my-org".to_string()], "orb", None, None, &[]);
+        let mut config = build_bootstrap_config(
+            "mytool",
+            &["my-org".to_string()],
+            "orb",
+            None,
+            None,
+            &[],
+            &[],
+        );
         let before = config.subcommand.clone();
         populate_orb_path_defaults(&mut config, &[]);
         assert_eq!(
@@ -1579,6 +1699,7 @@ mod tests {
             "custom-orb",
             None,
             None,
+            &[],
             &[],
         );
         assert_eq!(

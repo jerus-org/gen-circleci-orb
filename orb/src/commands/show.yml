@@ -1,5 +1,0 @@
-description: Print the current configuration
-steps:
-- run:
-    name: Print the current configuration
-    command: <<include(scripts/show.sh)>>
