@@ -383,6 +383,21 @@ impl Generate {
 
         tracing::info!("Discovered {} subcommand(s)", cli_def.subcommands.len());
 
+        // Surface which subcommands are reserved as interactive/CLI-only (fully
+        // excluded from the orb) so non-init flows are informed too.
+        let reserved: Vec<&str> = cli_def
+            .subcommands
+            .iter()
+            .filter(|s| orb_generator::render::is_interactive(Some(&orb_config), &s.name))
+            .map(|s| s.name.as_str())
+            .collect();
+        if !reserved.is_empty() {
+            tracing::info!(
+                "Reserved interactive-only (excluded from orb): {}",
+                reserved.join(", ")
+            );
+        }
+
         let config_url = orb_config.orb.as_ref();
         let detected_url = self.source_url.is_none().then(detect_source_url).flatten();
         let source_url = self

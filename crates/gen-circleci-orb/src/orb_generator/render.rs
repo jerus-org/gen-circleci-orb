@@ -153,6 +153,23 @@ fn is_job_suppressed(config: Option<&OrbConfig>, name: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Subcommands that are interactive (CLI-only) by default, unless the consumer
+/// opts them back in with `[subcommand.<name>] interactive = false`. `help` is
+/// not listed here — it is reserved earlier, at the `--help` parser.
+pub(crate) const DEFAULT_INTERACTIVE: &[&str] = &["init", "config"];
+
+/// Whether a subcommand is reserved as interactive/CLI-only: an explicit
+/// `interactive` value wins, otherwise it falls back to [`DEFAULT_INTERACTIVE`].
+/// Interactive commands are fully excluded from the orb (job + command + script,
+/// and a parent's whole subtree).
+pub(crate) fn is_interactive(config: Option<&OrbConfig>, name: &str) -> bool {
+    config
+        .and_then(|c| c.subcommand.as_ref())
+        .and_then(|sc| sc.get(name))
+        .and_then(|sc_config| sc_config.interactive)
+        .unwrap_or_else(|| DEFAULT_INTERACTIVE.contains(&name))
+}
+
 fn render_subcommand(
     sub: &SubCommand,
     binary: &str,
@@ -160,6 +177,10 @@ fn render_subcommand(
     config: Option<&OrbConfig>,
     files: &mut HashMap<PathBuf, String>,
 ) {
+    // Interactive/CLI-only: emit nothing for this subcommand or its subtree.
+    if is_interactive(config, &sub.name) {
+        return;
+    }
     if sub.is_leaf {
         let snake = sub.name.replace('-', "_");
         files.insert(
@@ -3130,6 +3151,7 @@ mod tests {
             "help".to_string(),
             SubcommandConfig {
                 generate_job: Some(false),
+                interactive: None,
                 param: None,
                 label: None,
             },
@@ -3157,6 +3179,7 @@ mod tests {
             "help".to_string(),
             SubcommandConfig {
                 generate_job: Some(false),
+                interactive: None,
                 param: None,
                 label: None,
             },
@@ -3172,6 +3195,127 @@ mod tests {
         );
     }
 
+    // ── interactive (CLI-only) subcommands: full exclusion ────────────────────
+
+    fn config_with_subcommand(name: &str, sc: crate::orb_config::SubcommandConfig) -> OrbConfig {
+        use indexmap::IndexMap;
+        let mut subcommands = IndexMap::new();
+        subcommands.insert(name.to_string(), sc);
+        OrbConfig {
+            subcommand: Some(subcommands),
+            ..OrbConfig::default()
+        }
+    }
+
+    #[test]
+    fn interactive_true_excludes_job_command_and_script() {
+        use crate::orb_config::SubcommandConfig;
+        let cli = make_cli("mytool", vec![make_leaf("setup", vec![])]);
+        let config = config_with_subcommand(
+            "setup",
+            SubcommandConfig {
+                interactive: Some(true),
+                ..SubcommandConfig::default()
+            },
+        );
+        let files = generate(&cli, &default_opts(), Some(&config));
+        assert!(
+            !files.contains_key(&PathBuf::from("src/jobs/setup.yml")),
+            "no job"
+        );
+        assert!(
+            !files.contains_key(&PathBuf::from("src/commands/setup.yml")),
+            "no command"
+        );
+        assert!(
+            !files.contains_key(&PathBuf::from("src/scripts/setup.sh")),
+            "no script"
+        );
+    }
+
+    #[test]
+    fn interactive_true_for_init_and_false_for_config() {
+        // The two default-interactive names, controlled independently: init keeps
+        // the default (reserved → excluded); config is opted back into CI with
+        // interactive = false (generated).
+        use crate::orb_config::SubcommandConfig;
+        let cli = make_cli(
+            "mytool",
+            vec![make_leaf("init", vec![]), make_leaf("config", vec![])],
+        );
+        let config = config_with_subcommand(
+            "config",
+            SubcommandConfig {
+                interactive: Some(false),
+                ..SubcommandConfig::default()
+            },
+        );
+        let files = generate(&cli, &default_opts(), Some(&config));
+        // init — default interactive → fully excluded
+        assert!(
+            !files.contains_key(&PathBuf::from("src/commands/init.yml")),
+            "init defaults to interactive → excluded"
+        );
+        // config — interactive = false → generated (command + job)
+        assert!(
+            files.contains_key(&PathBuf::from("src/commands/config.yml")),
+            "config interactive=false → command generated"
+        );
+        assert!(
+            files.contains_key(&PathBuf::from("src/jobs/config.yml")),
+            "config interactive=false → job generated"
+        );
+    }
+
+    #[test]
+    fn interactive_on_parent_excludes_subtree() {
+        use crate::orb_config::SubcommandConfig;
+        let child = make_leaf("show", vec![]);
+        let parent = SubCommand {
+            name: "admin".to_string(),
+            description: "Admin tools".to_string(),
+            is_leaf: false,
+            parameters: vec![],
+            subcommands: vec![child],
+        };
+        let cli = make_cli("mytool", vec![parent]);
+        let config = config_with_subcommand(
+            "admin",
+            SubcommandConfig {
+                interactive: Some(true),
+                ..SubcommandConfig::default()
+            },
+        );
+        let files = generate(&cli, &default_opts(), Some(&config));
+        assert!(
+            !files.contains_key(&PathBuf::from("src/commands/show.yml")),
+            "subtree of an interactive parent must be excluded"
+        );
+    }
+
+    #[test]
+    fn interactive_takes_precedence_over_generate_job() {
+        use crate::orb_config::SubcommandConfig;
+        let cli = make_cli("mytool", vec![make_leaf("setup", vec![])]);
+        let config = config_with_subcommand(
+            "setup",
+            SubcommandConfig {
+                interactive: Some(true),
+                generate_job: Some(true),
+                ..SubcommandConfig::default()
+            },
+        );
+        let files = generate(&cli, &default_opts(), Some(&config));
+        assert!(
+            !files.contains_key(&PathBuf::from("src/jobs/setup.yml")),
+            "interactive=true wins over generate_job=true (no job)"
+        );
+        assert!(
+            !files.contains_key(&PathBuf::from("src/commands/setup.yml")),
+            "and no command either"
+        );
+    }
+
     #[test]
     fn suppressed_subcommand_not_in_example_yml() {
         use crate::orb_config::{OrbConfig, SubcommandConfig};
@@ -3184,6 +3328,7 @@ mod tests {
             "help".to_string(),
             SubcommandConfig {
                 generate_job: Some(false),
+                interactive: None,
                 param: None,
                 label: None,
             },
@@ -3229,6 +3374,7 @@ mod tests {
             "generate".to_string(),
             SubcommandConfig {
                 generate_job: None,
+                interactive: None,
                 param: Some(param_overrides),
                 label: None,
             },

@@ -23,25 +23,16 @@ custom_files = [
     "src/scripts/set_https_remote.sh",
 ]
 
-[subcommand.help]
-generate_job = false
+# init and config are interactive (dialoguer) developer tools — CLI-only setup,
+# never CI jobs. `interactive = true` fully excludes them from the orb (job,
+# command and script); marking the `config` parent cascades to its subcommands.
+# `help` needs no entry — it is reserved at the `--help` parser. Set
+# `interactive = false` to expose one of these in CI.
+[subcommand.init]
+interactive = true
 
-# The `config` subcommands edit gen-circleci-orb.toml from the CLI; they are
-# developer tools, not CI jobs, so suppress their job generation.
-[subcommand."add-job-group"]
-generate_job = false
-
-[subcommand."set-default"]
-generate_job = false
-
-[subcommand.show]
-generate_job = false
-
-[subcommand.suppress]
-generate_job = false
-
-[subcommand.unsuppress]
-generate_job = false
+[subcommand.config]
+interactive = true
 
 # Auto-record: after `generate` regenerates the orb, the CI job commits the orb
 # source back (GPG-signed) and pushes it to the PR branch so the change is
@@ -80,10 +71,3 @@ orb_context = "orb-publishing"
 mcp = true
 mcp_context = ["release", "bot-check", "pcu-app"]
 mcp_earliest_version = "0.0.11"
-
-# init is interactive (dialoguer) developer setup — it wires orb generation into
-# a repo's CI and is never run in CI itself. Suppress its generated job (like the
-# help + config developer-tool subcommands) so the orb doesn't expose a nonsensical
-# `gen-circleci-orb/init` CI job.
-[subcommand.init]
-generate_job = false
