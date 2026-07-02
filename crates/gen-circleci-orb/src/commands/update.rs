@@ -89,6 +89,24 @@ impl Update {
 /// required config value is absent. Returns an error (pointing at `init`) when a
 /// required section is missing, and warnings for present-but-empty required fields.
 fn validate_config_completeness(config: &orb_config::OrbConfig) -> Result<Vec<String>> {
+    let is_blank = |v: &Option<String>| v.as_deref().unwrap_or_default().trim().is_empty();
+
+    // [orb] — the binary name + namespaces underpin every generated job.
+    let Some(orb) = config.orb.as_ref() else {
+        anyhow::bail!(
+            "gen-circleci-orb.toml has no [orb] section — the binary name and \
+             namespaces it provides underpin every generated job, and update must \
+             not guess. Run `gen-circleci-orb init` to configure it."
+        );
+    };
+    if is_blank(&orb.binary) {
+        anyhow::bail!(
+            "[orb].binary is empty — it names the generated jobs, executor and MCP \
+             server; update cannot proceed without it. Run `gen-circleci-orb init`."
+        );
+    }
+
+    // [ci] — configures the orb-release / publish / MCP wiring.
     let Some(ci) = config.ci.as_ref() else {
         anyhow::bail!(
             "gen-circleci-orb.toml has no [ci] section — the generated orb-release \
@@ -97,8 +115,31 @@ fn validate_config_completeness(config: &orb_config::OrbConfig) -> Result<Vec<St
              configure it."
         );
     };
+
     let mut warnings = Vec::new();
-    let is_blank = |v: &Option<String>| v.as_deref().unwrap_or_default().trim().is_empty();
+
+    if orb.namespaces.as_deref().unwrap_or_default().is_empty() {
+        warnings.push(
+            "[orb].namespaces is empty — the ensure_orb_registered and orb publish \
+             steps have no target namespace; set it or re-run `gen-circleci-orb init`"
+                .to_string(),
+        );
+    }
+
+    // [record] is optional (its absence disables auto-record), so warn rather than
+    // fail — this surfaces an accidental loss (e.g. a corrupted config) while a
+    // deliberate `[record]` opt-out (even `enabled = false`) silences it.
+    if config.record.is_none() {
+        warnings.push(
+            "gen-circleci-orb.toml has no [record] section — auto-record (the signed \
+             commit-back that keeps the published orb in sync with the CLI) is \
+             disabled. If intentional, add a `[record]` section with `enabled = false` \
+             to silence this; if unexpected, the config may be corrupted — run \
+             `gen-circleci-orb init` to restore it."
+                .to_string(),
+        );
+    }
+
     if is_blank(&ci.crate_tag_prefix) {
         warnings.push(
             "[ci].crate_tag_prefix is empty — the orb-release tag filter and \
@@ -226,24 +267,82 @@ fn line_diff(current: &str, would_be: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::orb_config::{CiSection, OrbConfig};
+    use crate::orb_config::{CiSection, OrbConfig, OrbSection, RecordConfig};
 
     // ── config completeness (#155): update must rely on init-captured config ──
 
+    /// A fully-valid config: [orb] (binary + namespaces), [ci] (tag prefix +
+    /// docker namespace) and [record] all present. Each test removes/blanks one
+    /// piece to isolate its effect.
+    fn complete_config() -> OrbConfig {
+        OrbConfig {
+            orb: Some(OrbSection {
+                binary: Some("mytool".to_string()),
+                namespaces: Some(vec!["my-org".to_string()]),
+                ..OrbSection::default()
+            }),
+            ci: Some(CiSection {
+                crate_tag_prefix: Some("mytool-v".to_string()),
+                docker_namespace: Some("my-docker-org".to_string()),
+                ..CiSection::default()
+            }),
+            record: Some(RecordConfig {
+                enabled: true,
+                ..RecordConfig::default()
+            }),
+            ..OrbConfig::default()
+        }
+    }
+
+    #[test]
+    fn validate_passes_for_complete_config() {
+        let warnings = validate_config_completeness(&complete_config()).unwrap();
+        assert!(
+            warnings.is_empty(),
+            "a complete config must produce no warnings: {warnings:?}"
+        );
+    }
+
     #[test]
     fn validate_fails_when_ci_section_missing() {
-        // update must not guess: a config with no [ci] section can't produce stable
-        // orb-release wiring, so fail and point the user at `init`.
-        let config = OrbConfig::default();
-        let err = validate_config_completeness(&config).unwrap_err();
-        let msg = err.to_string();
+        let config = OrbConfig {
+            ci: None,
+            ..complete_config()
+        };
+        let msg = validate_config_completeness(&config)
+            .unwrap_err()
+            .to_string();
+        assert!(msg.contains("[ci]"), "error must name the section: {msg}");
+        assert!(msg.contains("init"), "error must direct to `init`: {msg}");
+    }
+
+    #[test]
+    fn validate_fails_when_orb_section_missing() {
+        let config = OrbConfig {
+            orb: None,
+            ..complete_config()
+        };
+        let msg = validate_config_completeness(&config)
+            .unwrap_err()
+            .to_string();
+        assert!(msg.contains("[orb]"), "error must name the section: {msg}");
+        assert!(msg.contains("init"), "error must direct to `init`: {msg}");
+    }
+
+    #[test]
+    fn validate_fails_when_orb_binary_empty() {
+        let mut config = complete_config();
+        config.orb = Some(OrbSection {
+            binary: Some(String::new()),
+            namespaces: Some(vec!["my-org".to_string()]),
+            ..OrbSection::default()
+        });
+        let msg = validate_config_completeness(&config)
+            .unwrap_err()
+            .to_string();
         assert!(
-            msg.contains("[ci]"),
-            "error must name the missing section: {msg}"
-        );
-        assert!(
-            msg.contains("init"),
-            "error must direct the user to `init`: {msg}"
+            msg.contains("[orb].binary"),
+            "error must name the empty binary: {msg}"
         );
     }
 
@@ -251,7 +350,7 @@ mod tests {
     fn validate_warns_on_empty_required_ci_fields() {
         let config = OrbConfig {
             ci: Some(CiSection::default()),
-            ..OrbConfig::default()
+            ..complete_config()
         };
         let warnings = validate_config_completeness(&config).unwrap();
         assert!(
@@ -265,21 +364,57 @@ mod tests {
     }
 
     #[test]
-    fn validate_passes_for_complete_ci() {
+    fn validate_warns_on_empty_orb_namespaces() {
         let config = OrbConfig {
-            ci: Some(CiSection {
-                crate_tag_prefix: Some("mytool-v".to_string()),
-                docker_namespace: Some("my-docker-org".to_string()),
-                ..CiSection::default()
+            orb: Some(OrbSection {
+                binary: Some("mytool".to_string()),
+                namespaces: Some(vec![]),
+                ..OrbSection::default()
             }),
-            ..OrbConfig::default()
+            ..complete_config()
         };
         let warnings = validate_config_completeness(&config).unwrap();
         assert!(
-            warnings.is_empty(),
-            "a complete [ci] must produce no warnings: {warnings:?}"
+            warnings.iter().any(|w| w.contains("namespaces")),
+            "must warn on empty [orb].namespaces: {warnings:?}"
         );
     }
+
+    #[test]
+    fn validate_warns_when_record_section_missing() {
+        // [record] is optional (its absence disables auto-record), but warn so an
+        // accidental loss is surfaced — with a hint on how to opt out silently.
+        let config = OrbConfig {
+            record: None,
+            ..complete_config()
+        };
+        let warnings = validate_config_completeness(&config).unwrap();
+        let w = warnings
+            .iter()
+            .find(|w| w.contains("[record]"))
+            .expect("expected a [record] warning");
+        assert!(
+            w.contains("enabled = false"),
+            "warning must hint how to silence it: {w}"
+        );
+    }
+
+    #[test]
+    fn validate_no_record_warning_when_record_present_even_if_disabled() {
+        let config = OrbConfig {
+            record: Some(RecordConfig {
+                enabled: false,
+                ..RecordConfig::default()
+            }),
+            ..complete_config()
+        };
+        let warnings = validate_config_completeness(&config).unwrap();
+        assert!(
+            !warnings.iter().any(|w| w.contains("[record]")),
+            "an explicit [record] opt-out must silence the warning: {warnings:?}"
+        );
+    }
+
     use std::fs;
     use tempfile::TempDir;
 
