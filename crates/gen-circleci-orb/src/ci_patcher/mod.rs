@@ -502,12 +502,12 @@ fn pack_validate_steps(opts: &PatchOpts) -> Vec<String> {
     }
     steps.push(format!("          orb_dir: {orb_dir}"));
     steps.push("          attach_workspace: true".to_string());
-    // Wiring check explicitly OFF during the default-flip transition: the currently
-    // *published* orb still defaults check_ci_wiring true, so we must override it to
-    // false here (and on verify-orb) to bypass the self-referential drift until the
-    // new default ships. Flip this to `true` once the orb with default-false is
-    // published, to restore the validation-time wiring check.
-    steps.push("          check_ci_wiring: false".to_string());
+    // Validation opts INTO the wiring check (the param defaults false so it never
+    // runs at release; verify-orb leaves it off). This is where a consumer's config
+    // is verified against the generator on every PR. Safe in steady state — the
+    // fresh binary's version matches the published/pinned orb; the transient drift
+    // only exists in the window after a version bump until Renovate re-pins.
+    steps.push("          check_ci_wiring: true".to_string());
     if records {
         if !opts.record_push_ssh_fingerprint.is_empty() {
             steps.push(format!(
@@ -798,6 +798,23 @@ mod tests {
     }
 
     // ── auto-record context wiring on regenerate-orb ──────────────────────────
+
+    #[test]
+    fn validation_regenerate_orb_opts_into_wiring_check() {
+        // The validation regenerate-orb opts INTO the wiring check (check_ci_wiring:
+        // true) — this is where a consumer's config is verified against the
+        // generator on every PR. (The release verify-orb stays OFF; see
+        // verify_orb_keeps_source_check_but_disables_wiring_check.)
+        let steps = pack_validate_steps(&make_opts()).join("\n");
+        let regen = steps
+            .split("name: regenerate-orb")
+            .nth(1)
+            .expect("regenerate-orb present");
+        assert!(
+            regen.contains("check_ci_wiring: true"),
+            "validation regenerate-orb must opt into the wiring check:\n{regen}"
+        );
+    }
 
     #[test]
     fn regenerate_orb_gets_record_context_when_enabled() {
