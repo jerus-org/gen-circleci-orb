@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- restore the validation wiring check(pr [#173])
+
 ### Fixed
 
 - deps: pin rust docker tag to 31ee7fc(pr [#169])
@@ -629,6 +633,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#169]: https://github.com/jerus-org/gen-circleci-orb/pull/169
 [#170]: https://github.com/jerus-org/gen-circleci-orb/pull/170
 [#171]: https://github.com/jerus-org/gen-circleci-orb/pull/171
+[#173]: https://github.com/jerus-org/gen-circleci-orb/pull/173
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.57...HEAD
 [0.0.57]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.56...v0.0.57
 [0.0.56]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.55...v0.0.56
