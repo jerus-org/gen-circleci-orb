@@ -502,6 +502,12 @@ fn pack_validate_steps(opts: &PatchOpts) -> Vec<String> {
     }
     steps.push(format!("          orb_dir: {orb_dir}"));
     steps.push("          attach_workspace: true".to_string());
+    // Wiring check explicitly OFF during the default-flip transition: the currently
+    // *published* orb still defaults check_ci_wiring true, so we must override it to
+    // false here (and on verify-orb) to bypass the self-referential drift until the
+    // new default ships. Flip this to `true` once the orb with default-false is
+    // published, to restore the validation-time wiring check.
+    steps.push("          check_ci_wiring: false".to_string());
     if records {
         if !opts.record_push_ssh_fingerprint.is_empty() {
             steps.push(format!(
@@ -608,6 +614,14 @@ fn orb_release_workflow_section(opts: &PatchOpts) -> Vec<String> {
     // the committed orb is out of sync (generate --check). pack and container —
     // and therefore publish — require it, so a drifted or hand-edited orb is
     // never packed or published.
+    //
+    // check_ci_wiring is OFF here: it runs `update --check`, which expects the
+    // managed gen-circleci-orb orb pin to equal the running binary's own version.
+    // At release the attached binary is the NEW (about-to-publish) version while
+    // the committed pin still tracks the last-published one — so the wiring check
+    // would flag a false drift and deadlock a self-hosting orb's release (the pin
+    // cannot be bumped until the version is published). The wiring is enforced at
+    // PR/validation time via regenerate-orb; here we only verify the orb source.
     lines.push("      - gen-circleci-orb/generate:".to_string());
     lines.push("          name: verify-orb".to_string());
     lines.push(format!("          binary: {binary}"));
@@ -617,6 +631,7 @@ fn orb_release_workflow_section(opts: &PatchOpts) -> Vec<String> {
     lines.push(format!("          orb_dir: {orb_dir}"));
     lines.push("          attach_workspace: true".to_string());
     lines.push("          check: true".to_string());
+    lines.push("          check_ci_wiring: false".to_string());
     lines.push("          requires: [orb-release-binary]".to_string());
     push_tag_filters(&mut lines, &only_tag, &ignore_branches);
     lines.push(String::new());
@@ -1007,6 +1022,30 @@ mod tests {
         assert!(
             !jobs_section.contains("  orb-release-ensure-registered-"),
             "ensure-registered must NOT be an inline job definition:\n{jobs_section}"
+        );
+    }
+
+    #[test]
+    fn verify_orb_keeps_source_check_but_disables_wiring_check() {
+        // The release verify-orb must still verify the orb SOURCE (check: true) but
+        // must NOT run the wiring-pin check (check_ci_wiring) — the freshly-built
+        // binary's version is ahead of the committed pin at release, so the wiring
+        // check would deadlock a self-hosting orb's release.
+        let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
+        let verify_block = output
+            .split("name: verify-orb")
+            .nth(1)
+            .expect("verify-orb present")
+            .split("- orb-tools/pack")
+            .next()
+            .unwrap();
+        assert!(
+            verify_block.contains("check: true"),
+            "verify-orb must keep generate --check:\n{verify_block}"
+        );
+        assert!(
+            verify_block.contains("check_ci_wiring: false"),
+            "verify-orb must disable check_ci_wiring:\n{verify_block}"
         );
     }
 

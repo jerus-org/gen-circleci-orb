@@ -90,6 +90,7 @@ workflows:
           orb_namespace: jerus-org
           orb_dir: orb
           attach_workspace: true
+          check_ci_wiring: false
           ssh_fingerprint: "SHA256:OkxsH8Z6Iim6WDJBaII9eTT9aaO1f3eDc6IpsgYYPVg"
           persist_orb_workspace: true
           context: [release]
@@ -143,6 +144,7 @@ workflows:
           orb_dir: orb
           attach_workspace: true
           check: true
+          check_ci_wiring: false
           requires: [orb-release-binary]
           filters:
             tags:

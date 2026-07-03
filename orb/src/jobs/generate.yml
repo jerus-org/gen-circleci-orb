@@ -83,8 +83,8 @@ parameters:
     default: ''
   check_ci_wiring:
     type: boolean
-    description: Verify the consumer's CI wiring is in sync with this orb version's generated flow (runs `gen-circleci-orb update --check`); fails with upgrade instructions when out of date. Default true.
-    default: true
+    description: Verify the consumer's CI wiring is in sync with this orb version's generated flow (runs `gen-circleci-orb update --check`); fails with upgrade instructions when out of date. Default false — opt in on the validation job; never run it at release (the freshly-built release binary is ahead of the published orb pin, so the check would deadlock the publish).
+    default: false
 steps:
 - checkout
 - when:
