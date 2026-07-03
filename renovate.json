@@ -6,6 +6,18 @@
   "extends": [
     "github>jerusdp/renovate-config:default.json"
   ],
+  "packageRules": [
+    {
+      "description": "orb/Dockerfile is a generated artifact. Image digests are pinned in gen-circleci-orb.toml ([orb].base_image / builder_image) and re-emitted on every regeneration, which strips any digest Renovate writes directly into the Dockerfile. Disable the dockerfile manager here so the toml stays the single source of truth.",
+      "matchManagers": [
+        "dockerfile"
+      ],
+      "matchFileNames": [
+        "orb/Dockerfile"
+      ],
+      "enabled": false
+    }
+  ],
   "customManagers": [
     {
       "customType": "regex",
@@ -15,6 +27,17 @@
       ],
       "matchStrings": [
         "builder_image\\s*=\\s*\"(?<depName>[^:\"]+):(?<currentValue>[^@\"]+)@(?<currentDigest>sha256:[a-f0-9]+)\""
+      ],
+      "datasourceTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "description": "Track the pinned Rust runtime base image digest in gen-circleci-orb.toml ([orb].base_image)",
+      "managerFilePatterns": [
+        "/^gen-circleci-orb\\.toml$/"
+      ],
+      "matchStrings": [
+        "base_image\\s*=\\s*\"(?<depName>[^:\"]+):(?<currentValue>[^@\"]+)@(?<currentDigest>sha256:[a-f0-9]+)\""
       ],
       "datasourceTemplate": "docker"
     }

@@ -4,7 +4,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && cargo install gen-circleci-orb --locked
 
-FROM rust:1-slim-trixie
+FROM rust:1-slim-trixie@sha256:31ee7fc65186be7e0e0ccb3f2ca305f14e4739e7642a1ae65753aa5d7b874523
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates git gnupg libssl-dev openssh-client pkg-config \
     && rm -rf /var/lib/apt/lists/* \

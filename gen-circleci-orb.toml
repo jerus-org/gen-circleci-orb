@@ -8,6 +8,13 @@ apt_packages = ["gnupg"]
 # left to the generator's unpinned default) so the @sha256 digest survives
 # regeneration; Renovate updates this digest via a customManager (renovate.json).
 builder_image = "rust:1-slim-trixie@sha256:31ee7fc65186be7e0e0ccb3f2ca305f14e4739e7642a1ae65753aa5d7b874523"
+# Pinned runtime base image for the Dockerfile final stage. mcp = true defaults
+# this to an *unpinned* rust:1-slim-trixie, so without pinning it here the digest
+# is stripped on every regeneration (regenerate-orb rewrites Dockerfile from this
+# config, not from Renovate's in-Dockerfile edit). Pinned here so the @sha256
+# survives regeneration; Renovate updates it via a customManager (renovate.json).
+# Same image + digest as builder_image (both rust:1-slim-trixie).
+base_image = "rust:1-slim-trixie@sha256:31ee7fc65186be7e0e0ccb3f2ca305f14e4739e7642a1ae65753aa5d7b874523"
 # Hand-authored orb infrastructure (build/release commands, jobs and scripts)
 # that `generate` does not produce. Registered here so the prune step preserves
 # them — the orb tree is otherwise fully owned by (CLI subcommands ∪ config).
