@@ -845,9 +845,12 @@ fn build_check_ci_wiring_param() -> OrbParameter {
         param_type: "boolean".to_string(),
         description: "Verify the consumer's CI wiring is in sync with this orb \
                       version's generated flow (runs `gen-circleci-orb update --check`); \
-                      fails with upgrade instructions when out of date. Default true."
+                      fails with upgrade instructions when out of date. Default false — \
+                      opt in on the validation job; never run it at release (the \
+                      freshly-built release binary is ahead of the published orb pin, \
+                      so the check would deadlock the publish)."
             .to_string(),
-        default: Some(serde_yaml::Value::Bool(true)),
+        default: Some(serde_yaml::Value::Bool(false)),
         enum_values: None,
     }
 }
@@ -2367,9 +2370,10 @@ mod tests {
     #[test]
     fn orb_producing_job_gains_ci_wiring_check() {
         // An orb-producing job must expose a `check_ci_wiring` toggle (default
-        // true) and a conditional step running `gen-circleci-orb update --check`.
-        // Because this lives in the orb job, a consumer whose config is still on
-        // the old wiring triggers the drift alert once they bump the orb version.
+        // false — opt in on validation, never at release) and a conditional step
+        // running `gen-circleci-orb update --check`. Because this lives in the orb
+        // job, a consumer whose config is still on the old wiring triggers the
+        // drift alert once they opt in and bump the orb version.
         let params = vec![Parameter {
             long_name: "orb_dir".to_string(),
             short: None,
@@ -2393,6 +2397,15 @@ mod tests {
         assert!(
             job.contains("<< parameters.check_ci_wiring >>"),
             "the check step must be gated on the check_ci_wiring param:\n{job}"
+        );
+        // Default must be false: never run the wiring check unless a job opts in
+        // (so it never runs at release with the ahead-of-published release binary).
+        let after = &job[job.find("check_ci_wiring:").expect("check_ci_wiring param")..];
+        let default_at = &after[after.find("default:").expect("param default")..];
+        assert!(
+            default_at.starts_with("default: false"),
+            "check_ci_wiring must default to false:\n{}",
+            &default_at[..default_at.len().min(20)]
         );
     }
 
