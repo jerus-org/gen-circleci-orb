@@ -531,10 +531,15 @@ fn render_dockerfile(
             out.push_str(&format!("FROM {builder_image} AS builder\n"));
             out.push_str("RUN apt-get update \\\n");
             out.push_str(
-                "    && apt-get install -y --no-install-recommends ca-certificates libssl-dev pkg-config \\\n",
+                "    && apt-get install -y --no-install-recommends build-essential ca-certificates clang cmake libssl-dev pkg-config \\\n",
             );
             out.push_str("    && rm -rf /var/lib/apt/lists/* \\\n");
-            out.push_str(&format!("    && cargo install {binary}\n"));
+            // --locked builds the exact dependency set the crate was published/tested
+            // with (its bundled Cargo.lock), not a fresh resolve — so the container
+            // never diverges from CI. clang (libclang) + cmake cover native crates
+            // using bindgen / cmake (e.g. openssl-sys on newer OpenSSL, aws-lc-sys),
+            // so the builder is self-sufficient regardless of the base image's age.
+            out.push_str(&format!("    && cargo install {binary} --locked\n"));
             if let Some(ver) = circleci_cli_version {
                 out.push('\n');
                 out.push_str(&render_cli_installer_stage(ver));
@@ -2702,10 +2707,16 @@ mod tests {
             None,
             &[],
         );
-        // builder stage: ca-certificates libssl-dev pkg-config (alphabetical)
+        // builder stage: a self-sufficient native-build toolchain, alphabetical.
         assert!(
-            dockerfile.contains("ca-certificates libssl-dev pkg-config"),
-            "builder packages must be sorted: ca-certificates libssl-dev pkg-config\n{dockerfile}"
+            dockerfile
+                .contains("build-essential ca-certificates clang cmake libssl-dev pkg-config"),
+            "builder packages must be the sorted self-sufficient set:\n{dockerfile}"
+        );
+        // build the exact published dep set (Cargo.lock), not a fresh resolve.
+        assert!(
+            dockerfile.contains("cargo install mytool --locked"),
+            "builder must cargo install --locked:\n{dockerfile}"
         );
     }
 
