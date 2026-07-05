@@ -350,6 +350,7 @@ pub(crate) fn build_bootstrap_config(
             orb_dir: Some(orb_dir.to_string()),
             base_image: None,
             builder_image: None,
+            circleci_cli_version: None,
             install_method: None,
             apt_packages: None,
             home_url: home_url.map(str::to_string),

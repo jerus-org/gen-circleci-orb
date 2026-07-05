@@ -358,6 +358,7 @@ steps:
                 orb_dir: Some("orb".to_string()),
                 base_image: None,
                 builder_image: None,
+                circleci_cli_version: None,
                 install_method: None,
                 apt_packages: None,
                 home_url: None,
