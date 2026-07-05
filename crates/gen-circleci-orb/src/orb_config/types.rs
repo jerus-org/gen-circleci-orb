@@ -90,6 +90,14 @@ pub struct OrbSection {
     /// the binary. Set a pinned `rust:…@sha256:…` here so the digest survives
     /// regeneration (Renovate tracks it in this file). Defaults to `rust:1-slim-trixie`.
     pub builder_image: Option<String>,
+    /// circleci-cli version to install into the generated Docker image. This is a
+    /// version *override* only — it does not control *whether* the CLI is
+    /// installed. Binaries that intrinsically need the CLI (those exposing a
+    /// circleci-using subcommand, e.g. `ensure-orb-registered`) always get it, at
+    /// `DEFAULT_CIRCLECI_CLI_VERSION` when this is unset — so removing this key
+    /// cannot silently drop the CLI. Set it (Renovate-tracked) to pin/update the
+    /// version, or to opt a consumer's own binary into bundling the CLI.
+    pub circleci_cli_version: Option<String>,
     pub install_method: Option<String>,
     /// Extra apt packages installed in the generated Docker image's runtime stage.
     /// Use for tools that need build dependencies at runtime (e.g. a tool that

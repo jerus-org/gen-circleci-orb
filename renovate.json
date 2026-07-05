@@ -40,6 +40,19 @@
         "base_image\\s*=\\s*\"(?<depName>[^:\"]+):(?<currentValue>[^@\"]+)@(?<currentDigest>sha256:[a-f0-9]+)\""
       ],
       "datasourceTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "description": "Track the pinned circleci-cli version in gen-circleci-orb.toml ([orb].circleci_cli_version)",
+      "managerFilePatterns": [
+        "/^gen-circleci-orb\\.toml$/"
+      ],
+      "matchStrings": [
+        "circleci_cli_version\\s*=\\s*\"(?<currentValue>[^\"]+)\""
+      ],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "CircleCI-Public/circleci-cli",
+      "extractVersionTemplate": "^v(?<version>.+)$"
     }
   ]
 }

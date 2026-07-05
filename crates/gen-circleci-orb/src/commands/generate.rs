@@ -6,6 +6,18 @@ use crate::{help_parser, orb_config, orb_generator, output_writer};
 
 pub const DEFAULT_BASE_IMAGE: &str = "debian:13-slim";
 
+/// circleci-cli version baked into the generated image when the wrapped binary
+/// needs the CLI but no version is configured. A version *floor*, not a gate:
+/// binaries that use the CLI still get it at this version even if
+/// `[orb].circleci_cli_version` is removed, so the install can't be accidentally
+/// dropped. Renovate keeps the pinned override current; this is the fallback.
+pub const DEFAULT_CIRCLECI_CLI_VERSION: &str = "0.1.38646";
+
+/// Subcommand names whose generated orb artifacts shell out to the `circleci`
+/// CLI, so a binary exposing any of them needs the CLI bundled in its image.
+/// Extend this list as new subcommands start invoking `circleci`.
+const CIRCLECI_CLI_SUBCOMMANDS: &[&str] = &["ensure-orb-registered"];
+
 /// Default image for the Rust `builder` stage (Binstall method) that
 /// `cargo install`s the binary. Config-driven (`[orb].builder_image`) so a
 /// pinned `…@sha256:…` digest can be kept in gen-circleci-orb.toml and tracked
@@ -105,11 +117,14 @@ pub struct Generate {
     #[arg(long = "git-push-subcommand")]
     pub git_push_subcommands: Vec<String>,
 
-    /// circleci-cli version to install in the generated Docker image executor.
-    /// When set, adds a cli-installer builder stage that downloads the release
-    /// tarball, verifies its SHA-256 checksum, and copies the binary into the
-    /// final image.  Required when the wrapped binary calls `circleci` commands
-    /// at runtime (e.g. when generating gen-circleci-orb's own orb).
+    /// circleci-cli version to install in the generated Docker image executor
+    /// (overrides `[orb].circleci_cli_version` and the built-in default).
+    ///
+    /// This controls the *version*, not *whether* the CLI is installed: the
+    /// generator adds the cli-installer stage automatically whenever the wrapped
+    /// binary exposes a circleci-using subcommand (e.g. `ensure-orb-registered`),
+    /// at `DEFAULT_CIRCLECI_CLI_VERSION` when unset. Set this (or the config key)
+    /// to pin a version, or to opt a binary in when auto-detection doesn't apply.
     #[arg(long)]
     pub circleci_cli_version: Option<String>,
 
@@ -323,6 +338,54 @@ pub(crate) fn resolve_builder_image(config: &crate::orb_config::OrbConfig) -> St
         .unwrap_or_else(|| DEFAULT_BUILDER_IMAGE.to_string())
 }
 
+/// True when the wrapped binary exposes any subcommand that shells out to the
+/// `circleci` CLI (searched recursively through the whole command tree, so it
+/// works for nested subcommands too). Intrinsic — driven by the binary's own
+/// `--help`, not by config — so a regen or an edit can never drop it.
+pub(crate) fn binary_uses_circleci_cli(cli_def: &help_parser::types::CliDefinition) -> bool {
+    fn any_match(subs: &[help_parser::types::SubCommand]) -> bool {
+        subs.iter().any(|s| {
+            CIRCLECI_CLI_SUBCOMMANDS.contains(&s.name.as_str()) || any_match(&s.subcommands)
+        })
+    }
+    any_match(&cli_def.subcommands)
+}
+
+/// Resolve the circleci-cli version to install — and hence *whether* to install
+/// it (`Some` = install at this version; `None` = do not install):
+///   1. explicit `--circleci-cli-version`, else `[orb].circleci_cli_version`
+///      (either is an opt-in *and* a version override);
+///   2. otherwise, if the binary intrinsically needs the CLI, the baked-in
+///      `DEFAULT_CIRCLECI_CLI_VERSION`;
+///   3. otherwise `None`.
+///
+/// Presence is therefore never gated *solely* on a deletable config value: a
+/// binary that needs `circleci` still gets it (at the default) even when the
+/// version key is removed — the exact fragility that once let a hand-added
+/// `--circleci-cli-version` flag vanish on regen and break orb registration.
+pub(crate) fn resolve_circleci_cli_version(
+    cli: Option<&str>,
+    config: &crate::orb_config::OrbConfig,
+    cli_def: &help_parser::types::CliDefinition,
+) -> Option<String> {
+    let configured = cli
+        .map(str::to_string)
+        .or_else(|| {
+            config
+                .orb
+                .as_ref()
+                .and_then(|o| o.circleci_cli_version.clone())
+        })
+        .filter(|s| !s.is_empty());
+    if configured.is_some() {
+        return configured;
+    }
+    if binary_uses_circleci_cli(cli_def) {
+        return Some(DEFAULT_CIRCLECI_CLI_VERSION.to_string());
+    }
+    None
+}
+
 /// CLI flags take precedence over `[orb].apt_packages`. When the MCP feature is
 /// enabled, the build dependencies it requires (`MCP_APT_PACKAGES`) are unioned
 /// in regardless, since `build_mcp_server` cannot run without them.
@@ -423,7 +486,11 @@ impl Generate {
                 &self.git_push_subcommands,
                 &orb_config,
             ),
-            circleci_cli_version: self.circleci_cli_version.clone(),
+            circleci_cli_version: resolve_circleci_cli_version(
+                self.circleci_cli_version.as_deref(),
+                &orb_config,
+                &cli_def,
+            ),
             apt_packages: resolve_apt_packages(&self.apt_packages, &orb_config),
         };
 
@@ -1237,6 +1304,128 @@ mod tests {
         use crate::orb_config::OrbConfig;
         let result = resolve_base_image(None, &OrbConfig::default());
         assert_eq!(result, DEFAULT_BASE_IMAGE);
+    }
+
+    // ── resolve_circleci_cli_version ───────────────────────────────────────
+
+    fn sub(
+        name: &str,
+        children: Vec<help_parser::types::SubCommand>,
+    ) -> help_parser::types::SubCommand {
+        help_parser::types::SubCommand {
+            name: name.to_string(),
+            description: String::new(),
+            is_leaf: children.is_empty(),
+            parameters: vec![],
+            subcommands: children,
+        }
+    }
+
+    fn cli_with(subs: Vec<help_parser::types::SubCommand>) -> help_parser::types::CliDefinition {
+        help_parser::types::CliDefinition {
+            binary_name: "demo".to_string(),
+            description: String::new(),
+            subcommands: subs,
+        }
+    }
+
+    #[test]
+    fn circleci_cli_intrinsic_when_binary_has_ensure_orb_registered() {
+        use crate::orb_config::OrbConfig;
+        let cli = cli_with(vec![
+            sub("generate", vec![]),
+            sub("ensure-orb-registered", vec![]),
+        ]);
+        assert_eq!(
+            resolve_circleci_cli_version(None, &OrbConfig::default(), &cli),
+            Some(DEFAULT_CIRCLECI_CLI_VERSION.to_string()),
+        );
+    }
+
+    #[test]
+    fn circleci_cli_survives_config_version_deletion() {
+        // The regression guard: a binary that needs the CLI still gets it (at the
+        // default) even with no configured version — presence is never gated on a
+        // deletable config value.
+        use crate::orb_config::OrbConfig;
+        let cli = cli_with(vec![sub("ensure-orb-registered", vec![])]);
+        assert_eq!(
+            resolve_circleci_cli_version(None, &OrbConfig::default(), &cli),
+            Some(DEFAULT_CIRCLECI_CLI_VERSION.to_string()),
+        );
+    }
+
+    #[test]
+    fn circleci_cli_config_version_overrides_default() {
+        use crate::orb_config::{OrbConfig, OrbSection};
+        let cli = cli_with(vec![sub("ensure-orb-registered", vec![])]);
+        let config = OrbConfig {
+            orb: Some(OrbSection {
+                circleci_cli_version: Some("0.1.40000".to_string()),
+                ..OrbSection::default()
+            }),
+            ..OrbConfig::default()
+        };
+        assert_eq!(
+            resolve_circleci_cli_version(None, &config, &cli),
+            Some("0.1.40000".to_string()),
+        );
+    }
+
+    #[test]
+    fn circleci_cli_flag_overrides_config() {
+        use crate::orb_config::{OrbConfig, OrbSection};
+        let cli = cli_with(vec![sub("ensure-orb-registered", vec![])]);
+        let config = OrbConfig {
+            orb: Some(OrbSection {
+                circleci_cli_version: Some("0.1.30000".to_string()),
+                ..OrbSection::default()
+            }),
+            ..OrbConfig::default()
+        };
+        assert_eq!(
+            resolve_circleci_cli_version(Some("0.1.40000"), &config, &cli),
+            Some("0.1.40000".to_string()),
+        );
+    }
+
+    #[test]
+    fn circleci_cli_opt_in_via_config_without_subcommand() {
+        // A consumer whose own binary calls circleci can opt in by setting a version,
+        // even without a known circleci-using subcommand.
+        use crate::orb_config::{OrbConfig, OrbSection};
+        let cli = cli_with(vec![sub("build", vec![])]);
+        let config = OrbConfig {
+            orb: Some(OrbSection {
+                circleci_cli_version: Some("0.1.40000".to_string()),
+                ..OrbSection::default()
+            }),
+            ..OrbConfig::default()
+        };
+        assert_eq!(
+            resolve_circleci_cli_version(None, &config, &cli),
+            Some("0.1.40000".to_string()),
+        );
+    }
+
+    #[test]
+    fn circleci_cli_absent_when_no_need_and_no_config() {
+        use crate::orb_config::OrbConfig;
+        let cli = cli_with(vec![sub("build", vec![]), sub("generate", vec![])]);
+        assert_eq!(
+            resolve_circleci_cli_version(None, &OrbConfig::default(), &cli),
+            None,
+        );
+    }
+
+    #[test]
+    fn binary_uses_circleci_cli_detects_nested_subcommand() {
+        // Extensible + recursive: a circleci-using subcommand nested under a parent
+        // is still detected.
+        let cli = cli_with(vec![sub("orb", vec![sub("ensure-orb-registered", vec![])])]);
+        assert!(binary_uses_circleci_cli(&cli));
+        let none = cli_with(vec![sub("orb", vec![sub("info", vec![])])]);
+        assert!(!binary_uses_circleci_cli(&none));
     }
 
     // ── resolve_apt_packages ───────────────────────────────────────────────

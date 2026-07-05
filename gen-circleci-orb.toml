@@ -15,6 +15,14 @@ builder_image = "rust:1-slim-trixie@sha256:31ee7fc65186be7e0e0ccb3f2ca305f14e473
 # survives regeneration; Renovate updates it via a customManager (renovate.json).
 # Same image + digest as builder_image (both rust:1-slim-trixie).
 base_image = "rust:1-slim-trixie@sha256:31ee7fc65186be7e0e0ccb3f2ca305f14e4739e7642a1ae65753aa5d7b874523"
+# circleci-cli version bundled into this image. gen-circleci-orb's own
+# `ensure-orb-registered` subcommand shells out to `circleci orb create`, so the
+# image MUST carry the full CLI (the pipeline-provided `circleci` is the agent
+# and has no `orb` subcommand). The generator installs the CLI intrinsically
+# whenever the binary exposes a circleci-using subcommand, so removing this line
+# does NOT drop the CLI (it falls back to DEFAULT_CIRCLECI_CLI_VERSION) — this
+# pin just keeps the version current and Renovate-tracked (renovate.json).
+circleci_cli_version = "0.1.38646"
 # Hand-authored orb infrastructure (build/release commands, jobs and scripts)
 # that `generate` does not produce. Registered here so the prune step preserves
 # them — the orb tree is otherwise fully owned by (CLI subcommands ∪ config).
