@@ -43,7 +43,7 @@ parameters:
     default: ''
   circleci_cli_version:
     type: string
-    description: 'circleci-cli version to install in the generated Docker image executor (overrides `[orb].circleci_cli_version` and the built-in default).  This controls the *version*, not *whether* the CLI is installed: the generator adds the cli-installer stage automatically whenever the wrapped binary exposes a circleci-using subcommand (e.g. `ensure-orb-registered`), at `DEFAULT_CIRCLECI_CLI_VERSION` when unset. Set this (or the config key) to pin a version, or to opt a binary in when auto-detection doesn''t apply.'
+    description: circleci-cli version to install in the generated Docker image executor. When set, adds a cli-installer builder stage that downloads the release tarball, verifies its SHA-256 checksum, and copies the binary into the final image.  Required when the wrapped binary calls `circleci` commands at runtime (e.g. when generating gen-circleci-orb's own orb)
     default: ''
   apt_packages:
     type: string
