@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - deps: pin rust docker tag to 31ee7fc(pr [#171])
 - pin runtime base image digest in config(pr [#174])
 - install circleci CLI intrinsically, not via a deletable flag(pr [#175])
+- correct orb existence check (exit 255 = not found)(pr [#176])
 
 ## [0.0.57] - 2026-07-03
 
@@ -638,6 +639,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#173]: https://github.com/jerus-org/gen-circleci-orb/pull/173
 [#174]: https://github.com/jerus-org/gen-circleci-orb/pull/174
 [#175]: https://github.com/jerus-org/gen-circleci-orb/pull/175
+[#176]: https://github.com/jerus-org/gen-circleci-orb/pull/176
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.57...HEAD
 [0.0.57]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.56...v0.0.57
 [0.0.56]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.55...v0.0.56
