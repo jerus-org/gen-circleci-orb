@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- bump self-orb pin to 0.0.59 (CLI-equipped container)(pr [#178])
+
 ## [0.0.58] - 2026-07-06
 
 ### Added
@@ -640,6 +646,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#174]: https://github.com/jerus-org/gen-circleci-orb/pull/174
 [#175]: https://github.com/jerus-org/gen-circleci-orb/pull/175
 [#176]: https://github.com/jerus-org/gen-circleci-orb/pull/176
+[#178]: https://github.com/jerus-org/gen-circleci-orb/pull/178
+[Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.58...HEAD
 [0.0.58]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.57...v0.0.58
 [0.0.57]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.56...v0.0.57
 [0.0.56]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.55...v0.0.56
