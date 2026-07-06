@@ -49,9 +49,13 @@ impl EnsureOrbRegistered {
     }
 
     pub(crate) fn run_with_runner<R: CliRunner>(&self, runner: &R, token: &str) -> Result<()> {
+        // `circleci orb info` exits 0 only when the orb exists. A missing orb exits
+        // non-zero (255, "no Orb '…' was found"). 255 must NOT be treated as
+        // "registered": that inverts the check and means a missing orb is never
+        // created — defeating the whole purpose of this command.
         let (info_exit, _, _) = runner.run(&["circleci", "orb", "info", &self.orb_name], token)?;
 
-        if info_exit == 0 || info_exit == 255 {
+        if info_exit == 0 {
             println!("Orb is registered.");
             return Ok(());
         }
@@ -63,7 +67,11 @@ impl EnsureOrbRegistered {
         let (create_exit, create_out, create_err) = runner.run(&args, token)?;
         let combined = format!("{create_out}{create_err}");
 
-        if create_exit != 0 && create_exit != 255 && !combined.contains("already exists") {
+        // Success on a clean create (exit 0) or when the orb already exists
+        // (idempotent / race between info and create). Any other non-zero — auth,
+        // missing namespace, network — must surface; 255 is the CLI's generic error
+        // code, so it is NOT silently accepted.
+        if create_exit != 0 && !combined.contains("already exists") {
             anyhow::bail!("circleci orb create failed (exit {create_exit}): {combined}");
         }
 
@@ -126,9 +134,21 @@ mod tests {
     }
 
     #[test]
-    fn orb_exists_exit_255_tls_quirk_returns_ok() {
-        let runner = FakeRunner::new(vec![(255, "", "")]);
-        assert!(cmd("my-org/my-orb").run_with_runner(&runner, "tok").is_ok());
+    fn info_255_missing_orb_triggers_create() {
+        // `circleci orb info` exits 255 ("no Orb ... was found") when the orb does
+        // NOT exist. That must trigger creation — it must NOT be read as
+        // "already registered" (the old inverted behaviour that meant a missing
+        // orb was never created).
+        let runner = FakeRunner::new(vec![
+            (255, "", "no Orb 'my-org/my-orb@volatile' was found"),
+            (0, "", ""),
+        ]);
+        cmd("my-org/my-orb")
+            .run_with_runner(&runner, "tok")
+            .unwrap();
+        let calls = runner.calls();
+        assert_eq!(calls.len(), 2, "info (255) must be followed by create");
+        assert!(calls[1].contains(&"create".to_string()));
     }
 
     #[test]
@@ -201,14 +221,28 @@ mod tests {
     }
 
     #[test]
-    fn create_exit_255_treated_as_success() {
-        let runner = FakeRunner::new(vec![(1, "", ""), (255, "", "")]);
-        assert!(cmd("my-org/my-orb").run_with_runner(&runner, "tok").is_ok());
+    fn create_exit_255_without_already_exists_returns_error() {
+        // 255 is the CLI's generic error code (auth, missing namespace, network).
+        // Without an "already exists" marker it must surface, not be masked as success.
+        let runner = FakeRunner::new(vec![
+            (255, "", "not found"),
+            (255, "", "Error: permission denied"),
+        ]);
+        assert!(cmd("my-org/my-orb")
+            .run_with_runner(&runner, "tok")
+            .is_err());
     }
 
     #[test]
     fn create_already_exists_in_output_treated_as_success() {
-        let runner = FakeRunner::new(vec![(1, "", ""), (1, "orb already exists", "")]);
+        // Idempotent / race: the orb already exists. Accept regardless of exit code.
+        let runner = FakeRunner::new(vec![(255, "", "not found"), (1, "orb already exists", "")]);
+        assert!(cmd("my-org/my-orb").run_with_runner(&runner, "tok").is_ok());
+    }
+
+    #[test]
+    fn create_exit_0_is_success() {
+        let runner = FakeRunner::new(vec![(255, "", "not found"), (0, "", "")]);
         assert!(cmd("my-org/my-orb").run_with_runner(&runner, "tok").is_ok());
     }
 
