@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - deps: bump crossbeam-epoch to 0.9.20 (RUSTSEC-2026-0204)(pr [#181])
+- deps: update dependency toolkit to v6.5.1(pr [#183])
 
 ## [0.0.60] - 2026-07-06
 
@@ -661,6 +662,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#179]: https://github.com/jerus-org/gen-circleci-orb/pull/179
 [#180]: https://github.com/jerus-org/gen-circleci-orb/pull/180
 [#181]: https://github.com/jerus-org/gen-circleci-orb/pull/181
+[#183]: https://github.com/jerus-org/gen-circleci-orb/pull/183
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.60...HEAD
 [0.0.60]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.58...v0.0.60
 [0.0.58]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.57...v0.0.58
