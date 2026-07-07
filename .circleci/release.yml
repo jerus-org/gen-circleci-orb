@@ -11,7 +11,7 @@ parameters:
     description: "Override workspace v* version (empty = nextsv auto-detect)"
 
 orbs:
-  toolkit: jerus-org/circleci-toolkit@6.5.0
+  toolkit: jerus-org/circleci-toolkit@6.5.1
 
 # release.yml runs ONLY the crate release. release_crate pushes the
 # gen-circleci-orb-v* tag, which triggers the tag-gated `orb-release` workflow in
