@@ -78,6 +78,13 @@ pub struct CiSection {
     /// jerus-org/gen-orb-mcp orb version pinned for the build_mcp_server job.
     /// Overrides the generator default when set. Only used when `mcp` is true.
     pub gen_orb_mcp_orb_version: Option<String>,
+    /// Docker image the `build_rust_binary` CI jobs (`build-binary`,
+    /// `orb-release-binary`) compile in. This configures the CI pipeline — not the
+    /// orb's own container (see `[orb].base_image`/`builder_image` for that). Unset
+    /// falls back to the job default (`rust:latest`), which has no libclang; set a
+    /// clang-equipped image (e.g. `jerusdp/ci-rust:rolling-6mo@sha256:…`) when the
+    /// workspace pulls a bindgen-based `-sys` crate so bindgen can run.
+    pub rust_image: Option<String>,
 }
 
 #[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq)]

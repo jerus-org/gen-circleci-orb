@@ -86,3 +86,12 @@ orb_context = "orb-publishing"
 mcp = true
 mcp_context = ["release", "bot-check", "pcu-app"]
 mcp_earliest_version = "0.0.11"
+# Image the build_rust_binary CI jobs (build-binary, orb-release-binary) compile
+# in. This configures the CI pipeline, not the orb's own container ([orb].base_image
+# / builder_image do that). Overrides the job default (rust:latest), which has NO
+# libclang — bindgen fails there (openssl-sys via sequoia-openpgp's OpenSSL backend
+# once it pulls the ossl crate). ci-rust:rolling-6mo is the toolkit's compile image
+# and carries clang + libclang. Digest-pinned so it survives regeneration and
+# CircleCI can't serve a stale moving tag from cache; Renovate updates the digest
+# via a customManager (renovate.json).
+rust_image = "jerusdp/ci-rust:rolling-6mo@sha256:2256d29b9b92041dd29b9575aeac5c45abe539696c9db670c685b47f67df1f01"
