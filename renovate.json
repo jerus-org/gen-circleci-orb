@@ -43,6 +43,17 @@
     },
     {
       "customType": "regex",
+      "description": "Track the pinned build image digest in gen-circleci-orb.toml ([orb].rust_image)",
+      "managerFilePatterns": [
+        "/^gen-circleci-orb\\.toml$/"
+      ],
+      "matchStrings": [
+        "rust_image\\s*=\\s*\"(?<depName>[^:\"]+):(?<currentValue>[^@\"]+)@(?<currentDigest>sha256:[a-f0-9]+)\""
+      ],
+      "datasourceTemplate": "docker"
+    },
+    {
+      "customType": "regex",
       "description": "Track the pinned circleci-cli version in gen-circleci-orb.toml ([orb].circleci_cli_version)",
       "managerFilePatterns": [
         "/^gen-circleci-orb\\.toml$/"

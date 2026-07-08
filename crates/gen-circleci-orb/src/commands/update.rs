@@ -183,6 +183,7 @@ fn opts_from_config(config: &orb_config::OrbConfig) -> ci_patcher::PatchOpts {
     let record = config.record.as_ref();
     ci_patcher::PatchOpts {
         binary: orb.and_then(|o| o.binary.clone()).unwrap_or_default(),
+        rust_image: ci.and_then(|c| c.rust_image.clone()).unwrap_or_default(),
         namespaces: orb.and_then(|o| o.namespaces.clone()).unwrap_or_default(),
         orb_dir: orb
             .and_then(|o| o.orb_dir.clone())

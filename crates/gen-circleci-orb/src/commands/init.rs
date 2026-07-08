@@ -769,6 +769,9 @@ impl Init {
         // Step 2: patch CI configs
         let opts = ci_patcher::PatchOpts {
             binary: self.binary.clone(),
+            // Advanced knob — not gathered at init; set `[orb] rust_image` in the
+            // toml when the workspace needs a clang-equipped build image.
+            rust_image: String::new(),
             namespaces,
             docker_namespace: self.docker_namespace.clone(),
             orb_dir: self.orb_dir.clone(),
@@ -832,6 +835,9 @@ impl Init {
             // Left unset so the pin tracks the generator default (like the
             // gen-circleci-orb pin); set it in the toml only to override.
             gen_orb_mcp_orb_version: None,
+            // Advanced knob — not gathered at init; set `[ci] rust_image` in the
+            // toml when the workspace needs a clang-equipped build image.
+            rust_image: None,
         });
         bootstrap.record = extras.record.clone();
         if self.dry_run {
@@ -1062,6 +1068,7 @@ mod tests {
             mcp_context: Some(extras.mcp_context.clone()),
             mcp_earliest_version: Some(extras.mcp_earliest_version.clone()),
             gen_orb_mcp_orb_version: None,
+            rust_image: None,
         };
         assert_eq!(ci.build_workflow.as_deref(), Some("validation"));
         assert_eq!(ci.docker_context.as_deref(), Some(DEFAULT_DOCKER_CONTEXT));

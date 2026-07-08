@@ -47,6 +47,13 @@ pub struct PatchOpts {
     /// read-only checkout key). Empty falls back to the ambient environment
     /// credentials (the push then fails on a read-only key, with guidance).
     pub record_push_ssh_fingerprint: String,
+    /// Docker image the `build_rust_binary` jobs (`build-binary`, `orb-release-binary`)
+    /// compile in. Empty falls back to the job's own default (`rust:latest`). Set a
+    /// clang-equipped image (e.g. `jerusdp/ci-rust:rolling-6mo@sha256:…`) when the
+    /// workspace pulls a bindgen-based `-sys` crate — stock `rust:latest` has no
+    /// libclang, so bindgen (e.g. openssl-sys via sequoia-openpgp's OpenSSL backend)
+    /// fails there.
+    pub rust_image: String,
 }
 
 pub struct PatchReport {
@@ -482,6 +489,9 @@ fn pack_validate_steps(opts: &PatchOpts) -> Vec<String> {
     steps.push("      - gen-circleci-orb/build_rust_binary:".to_string());
     steps.push("          name: build-binary".to_string());
     steps.push(format!("          package: {binary}"));
+    if !opts.rust_image.is_empty() {
+        steps.push(format!("          rust_image: {}", opts.rust_image));
+    }
 
     // regenerate-orb — regenerate the orb from the freshly-built binary.
     //
@@ -607,6 +617,9 @@ fn orb_release_workflow_section(opts: &PatchOpts) -> Vec<String> {
         "          name: orb-release-binary".to_string(),
         format!("          package: {binary}"),
     ];
+    if !opts.rust_image.is_empty() {
+        lines.push(format!("          rust_image: {}", opts.rust_image));
+    }
     push_tag_filters(&mut lines, &only_tag, &ignore_branches);
     lines.push(String::new());
 
@@ -780,6 +793,7 @@ mod tests {
             gen_orb_mcp_orb_version: "0.1.48".to_string(),
             record_contexts: vec![],
             record_push_ssh_fingerprint: String::new(),
+            rust_image: String::new(),
         }
     }
 
@@ -795,6 +809,47 @@ mod tests {
             namespaces: vec!["my-org".to_string(), "other-org".to_string()],
             ..make_opts()
         }
+    }
+
+    // ── rust_image on the build_rust_binary jobs ──────────────────────────────
+
+    #[test]
+    fn build_rust_binary_emits_rust_image_when_set() {
+        // When rust_image is configured, BOTH build_rust_binary invocations — the
+        // validation `build-binary` and the release `orb-release-binary` — must pass
+        // it so they compile in a clang-equipped image (stock rust:latest lacks
+        // libclang and fails bindgen, e.g. openssl-sys via sequoia-openpgp).
+        let opts = PatchOpts {
+            rust_image: "jerusdp/ci-rust:rolling-6mo@sha256:abc".to_string(),
+            ..make_opts()
+        };
+
+        let val = pack_validate_steps(&opts).join("\n");
+        assert!(val.contains("name: build-binary"));
+        assert!(
+            val.contains("rust_image: jerusdp/ci-rust:rolling-6mo@sha256:abc"),
+            "validation build-binary must pass rust_image when set"
+        );
+
+        let rel = orb_release_workflow_section(&opts).join("\n");
+        assert!(rel.contains("name: orb-release-binary"));
+        assert!(
+            rel.contains("rust_image: jerusdp/ci-rust:rolling-6mo@sha256:abc"),
+            "orb-release-binary must pass rust_image when set"
+        );
+    }
+
+    #[test]
+    fn build_rust_binary_omits_rust_image_when_empty() {
+        // Empty rust_image (the default) emits no line, so the job falls back to its
+        // own default (rust:latest) — external consumers are unaffected.
+        let val = pack_validate_steps(&make_opts()).join("\n");
+        assert!(
+            !val.contains("rust_image:"),
+            "no rust_image line when unset"
+        );
+        let rel = orb_release_workflow_section(&make_opts()).join("\n");
+        assert!(!rel.contains("rust_image:"));
     }
 
     // ── auto-record context wiring on regenerate-orb ──────────────────────────
