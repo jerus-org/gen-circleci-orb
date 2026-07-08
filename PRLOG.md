@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- rust_image override for build binary jobs(pr [#184])
+
 ### Changed
 
 - chore-bump self-orb pin to 0.0.60 (activates CLI smoke gate)(pr [#180])
@@ -663,6 +667,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#180]: https://github.com/jerus-org/gen-circleci-orb/pull/180
 [#181]: https://github.com/jerus-org/gen-circleci-orb/pull/181
 [#183]: https://github.com/jerus-org/gen-circleci-orb/pull/183
+[#184]: https://github.com/jerus-org/gen-circleci-orb/pull/184
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.60...HEAD
 [0.0.60]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.58...v0.0.60
 [0.0.58]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.57...v0.0.58
