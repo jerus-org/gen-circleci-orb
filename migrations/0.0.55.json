@@ -1,0 +1,58 @@
+[
+  {
+    "type": "JobRemoved",
+    "data": {
+      "name": "build_mcp_server",
+      "since_version": "0.0.55"
+    }
+  },
+  {
+    "type": "JobRemoved",
+    "data": {
+      "name": "init",
+      "since_version": "0.0.55"
+    }
+  },
+  {
+    "type": "CommandRemoved",
+    "data": {
+      "name": "suppress",
+      "since_version": "0.0.55"
+    }
+  },
+  {
+    "type": "CommandRemoved",
+    "data": {
+      "name": "set_default",
+      "since_version": "0.0.55"
+    }
+  },
+  {
+    "type": "CommandRemoved",
+    "data": {
+      "name": "show",
+      "since_version": "0.0.55"
+    }
+  },
+  {
+    "type": "CommandRemoved",
+    "data": {
+      "name": "init",
+      "since_version": "0.0.55"
+    }
+  },
+  {
+    "type": "CommandRemoved",
+    "data": {
+      "name": "add_job_group",
+      "since_version": "0.0.55"
+    }
+  },
+  {
+    "type": "CommandRemoved",
+    "data": {
+      "name": "unsuppress",
+      "since_version": "0.0.55"
+    }
+  }
+]
