@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - deps: update dependency gen-circleci-orb to v0.0.61(pr [#185])
 - deps: lock file maintenance(pr [#186])
+- deps: update dependency gen-orb-mcp to v0.1.51(pr [#187])
 
 ## [0.0.61] - 2026-07-08
 
@@ -679,6 +680,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#182]: https://github.com/jerus-org/gen-circleci-orb/pull/182
 [#185]: https://github.com/jerus-org/gen-circleci-orb/pull/185
 [#186]: https://github.com/jerus-org/gen-circleci-orb/pull/186
+[#187]: https://github.com/jerus-org/gen-circleci-orb/pull/187
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.61...HEAD
 [0.0.61]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.60...v0.0.61
 [0.0.60]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.58...v0.0.60
