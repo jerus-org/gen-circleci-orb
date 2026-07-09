@@ -15,6 +15,15 @@ parameters:
     type: string
     description: Additional arguments passed to cargo build --release
     default: ''
+  resource_class:
+    type: string
+    default: medium
+    description: >-
+      CircleCI resource class. Declared explicitly rather than relying on the
+      platform default (which is "subject to change" per CircleCI docs).
+      `medium` (2 vCPU / 4 GB) suits most cargo builds; override to a larger
+      class if a heavy workspace OOMs.
+resource_class: << parameters.resource_class >>
 docker:
   - image: << parameters.rust_image >>
 steps:
