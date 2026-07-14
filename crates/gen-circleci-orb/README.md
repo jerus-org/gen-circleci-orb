@@ -8,9 +8,20 @@ Generate a CircleCI orb to provide the facilities offered by a CLI program.
 
 ## Overview
 
-**gen-circleci-orb** reads the `--help` output of any CLI binary and generates a complete
-CircleCI orb: one command and one job per subcommand, an executor, a Dockerfile, and
-optionally the CI configuration to keep the orb in sync with the binary automatically.
+**gen-circleci-orb** reads the `--help` output of a Rust [clap](https://docs.rs/clap) CLI
+binary and generates a complete CircleCI orb: one command and one job per subcommand, an
+executor, a Dockerfile, and optionally the CI configuration to keep the orb in sync with the
+binary automatically.
+
+The workflow is captured once in a `gen-circleci-orb.toml` file (`init`), regenerated on
+demand from the binary's `--help` (`generate`), and kept in sync as the generator evolves
+(`update`). It can also wire in [gen-orb-mcp](https://github.com/jerus-org/gen-orb-mcp)
+so an AI assistant can understand the generated orb.
+
+> **Pre-production (0.1.x).** The generator, the `gen-circleci-orb.toml` schema, and the
+> generated CI shape are stable enough for real use — this project dogfoods its own orb —
+> but the CLI and config surface may still change ahead of 1.0. Pin the orb version and
+> let [Renovate](https://docs.renovatebot.com/) manage upgrades.
 
 ## Installation
 
@@ -22,22 +33,19 @@ cargo install gen-circleci-orb
 
 ## Quick start
 
-**Step 1 — generate orb source for your binary (run from project root):**
+**Step 1 — set up with `init` (run once from project root):**
+
+`init` is the entry point. It runs `generate`, patches `.circleci/config.yml`, and records
+every value in a `gen-circleci-orb.toml` so later commands need no flags. It is interactive:
+run it with just the binary and it prompts for the required values it doesn't have, each
+pre-filled with a sensible default.
 
 ```bash
-gen-circleci-orb generate \
-  --binary my-tool \
-  --orb-namespace my-org
+gen-circleci-orb init --binary my-tool
 ```
 
-This writes orb source into an `orb/` subdirectory (the default `--orb-dir`):
-- `orb/src/@orb.yml` — orb metadata (version, description)
-- `orb/src/commands/<subcommand>.yml` — one per leaf subcommand
-- `orb/src/jobs/<subcommand>.yml` — one per leaf subcommand
-- `orb/src/executors/default.yml` — Docker executor with a `tag` parameter
-- `orb/Dockerfile` — image that pre-installs your binary
-
-**Step 2 — wire orb generation into CI:**
+Passing a flag skips its prompt, so the same command is fully scriptable (and non-interactive
+under `--dry-run` or without a TTY):
 
 ```bash
 gen-circleci-orb init \
@@ -51,11 +59,45 @@ gen-circleci-orb init \
   --release-after-job release-my-tool
 ```
 
-This patches `.circleci/config.yml` to add:
+`init` patches `.circleci/config.yml` to add:
 - A `build-binary` + `regenerate-orb` job pair that rebuilds and re-generates the orb on every build
 - `orb-tools/pack` + `orb-tools/review` steps to validate the generated orb
 - A tag-triggered `orb-release:` workflow that builds the container, registers the orb,
   and publishes it to the CircleCI registry on each crate release tag
+
+Commit `gen-circleci-orb.toml`.
+
+**Step 2 — regenerate the orb source with `generate`:**
+
+After `init`, `generate` needs no flags — it reads the binary, namespaces, and base image
+from `gen-circleci-orb.toml`. This is what the `regenerate-orb` CI job runs on every build:
+
+```bash
+gen-circleci-orb generate
+```
+
+It writes orb source into an `orb/` subdirectory (the default `--orb-dir`):
+- `orb/src/@orb.yml` — orb metadata (version, description)
+- `orb/src/commands/<subcommand>.yml` — one per leaf subcommand
+- `orb/src/jobs/<subcommand>.yml` — one per leaf subcommand
+- `orb/src/executors/default.yml` — Docker executor with a `tag` parameter
+- `orb/Dockerfile` — image that pre-installs your binary
+
+You can also run `generate` without a config for a quick one-off, supplying the values
+explicitly: `gen-circleci-orb generate --binary my-tool --orb-namespace my-org`.
+
+**Step 3 — keep the wiring current as the generator evolves:**
+
+```bash
+gen-circleci-orb update --check   # CI: fail if the managed wiring is out of date
+gen-circleci-orb update           # rewrite the managed blocks in place
+```
+
+`update` reads the committed `gen-circleci-orb.toml` (it never overwrites it) and rewrites
+only the gen-circleci-orb-managed blocks in `.circleci/config.yml`, preserving your own
+jobs and customizations. Run `--check` in CI to fail when a generator upgrade has changed
+the canonical wiring; run without `--check` to apply it. Renovate bumps the pinned orb
+version, and `update --check` flags the drift so you re-sync deliberately.
 
 ## `generate` reference
 
@@ -68,7 +110,7 @@ Options:
   --output <DIR>                  Project root directory [default: .]
   --orb-dir <DIR>                 Orb subdirectory within --output [default: orb]
   --install-method <METHOD>       binstall | apt [default: binstall]
-  --base-image <IMAGE>            Docker base image [default: debian:12-slim]
+  --base-image <IMAGE>            Docker base image [default: debian:13-slim]
   --home-url <URL>                Home URL for orb registry display
   --source-url <URL>              Source URL for orb registry display
   --dry-run                       Print planned files, write nothing
@@ -110,11 +152,64 @@ Options:
                                       [default: orb-publishing]
   --mcp                               Wire in gen-orb-mcp MCP server generation + publish
   --gen-orb-mcp-version <VER>         jerus-org/gen-orb-mcp orb pin (used with --mcp)
-                                      [default: 0.1.14]
+                                      [default: 0.1.48]
   --mcp-context <CTX>                 CircleCI context for MCP server publish (used with --mcp)
                                       [default: pcu-app]
   --dry-run                           Print planned changes, write nothing
 ```
+
+## `update` reference
+
+```
+gen-circleci-orb update [OPTIONS]
+
+Options:
+  --config <FILE>   Path to gen-circleci-orb.toml [default: gen-circleci-orb.toml]
+  --ci-dir <DIR>    Path to the .circleci/ directory [default: .circleci]
+  --check           Verify mode: write nothing and exit non-zero (with a diff and
+                    guidance) when the CI wiring is out of date. For use in CI.
+```
+
+`update` is non-interactive and relies entirely on the committed `gen-circleci-orb.toml`.
+It fails (pointing you at `init`) when a required section is missing and warns on
+present-but-empty required fields, rather than guessing.
+
+## `config` reference
+
+`config` inspects and edits `gen-circleci-orb.toml` without hand-editing TOML:
+
+```
+gen-circleci-orb config [--config <FILE>] <SUBCOMMAND>
+
+  show                              Print the current configuration
+  suppress-job <SUBCOMMAND>         Stop generating a job for a subcommand
+  unsuppress-job <SUBCOMMAND>       Re-enable a previously suppressed job
+  add-job-group --name <NAME> --steps <a,b,c> [--description <D>] [--parameters <p,q>]
+                                    Compose several subcommand steps into one job
+  set-parameter-default --subcommand <S> --parameter <P> --value <V>
+                                    Override a generated parameter default
+```
+
+## Configuration file (`gen-circleci-orb.toml`)
+
+`init` writes this file; `generate` and `update` read it. It is the single source of truth
+for the generated orb and CI, so it is safe to commit and review.
+
+| Section | Purpose |
+|---------|---------|
+| `[orb]` | `binary`, `namespaces`, `orb_dir`, `base_image`, `builder_image`, `circleci_cli_version` — the orb's own source and container |
+| `[ci]` | Workflow/job wiring: `build_workflow`, `release_workflow`, `requires_job`, `release_after_job`, `crate_tag_prefix`, `docker_namespace`, `docker_context`, `orb_context`, MCP fields, and `rust_image` |
+| `[record]` | Optional auto-record: after `generate`, commit the regenerated orb source back (GPG-signed) so the published orb stays in sync with the CLI. Stores only env-var **names** — the secrets stay in CI contexts |
+| `[orbs]`, `[[job_group]]`, `[[extra_job]]`, `[subcommand.*]` | Extra orb pins, composed jobs, custom jobs, and per-subcommand overrides (including `interactive` / `generate_job`) |
+
+Two image knobs are easy to confuse:
+
+- `[orb].base_image` / `[orb].builder_image` configure the **orb's own** generated
+  `Dockerfile` (the image your orb's consumers run).
+- `[ci].rust_image` configures the image the **CI build jobs** (`build-binary`,
+  `orb-release-binary`) compile in. The default `rust:latest` has no libclang; set a
+  clang-equipped, digest-pinned image (e.g. `jerusdp/ci-rust:rolling-6mo@sha256:…`) when
+  the workspace pulls a bindgen-based `-sys` crate.
 
 ## Generated artifacts
 
