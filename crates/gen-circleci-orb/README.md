@@ -211,6 +211,11 @@ Two image knobs are easy to confuse:
   clang-equipped, digest-pinned image (e.g. `jerusdp/ci-rust:rolling-6mo@sha256:…`) when
   the workspace pulls a bindgen-based `-sys` crate.
 
+For the full walkthrough of these settings — and of composing a single complex job from several
+commands (as gen-orb-mcp's `build_mcp_server` does) — see the
+[Configuration Guide](https://github.com/jerus-org/gen-circleci-orb/blob/main/docs/configuration-guide.md)
+and [Advanced Configuration Guide](https://github.com/jerus-org/gen-circleci-orb/blob/main/docs/advanced-configuration.md).
+
 ## Generated artifacts
 
 | File | Description |
