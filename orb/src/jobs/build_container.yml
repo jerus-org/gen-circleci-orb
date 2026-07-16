@@ -1,4 +1,8 @@
 description: Build and push a Docker image for a CLI binary.
+# Explicit (not the platform default, which is "subject to change" per CircleCI
+# docs). This container only orchestrates `docker build`/`push` — the heavy
+# compile runs on the remote docker — so `small` is ample.
+resource_class: small
 docker:
   - image: cimg/base:stable
 parameters:
