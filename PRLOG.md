@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - unblock CI — yanked spin + stale orb self-pin(pr [#190])
+- deps: update dependency toolkit to v6.6.1(pr [#191])
 
 ## [0.0.62] - 2026-07-09
 
@@ -688,6 +689,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#186]: https://github.com/jerus-org/gen-circleci-orb/pull/186
 [#187]: https://github.com/jerus-org/gen-circleci-orb/pull/187
 [#190]: https://github.com/jerus-org/gen-circleci-orb/pull/190
+[#191]: https://github.com/jerus-org/gen-circleci-orb/pull/191
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.62...HEAD
 [0.0.62]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.61...v0.0.62
 [0.0.61]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.60...v0.0.61
