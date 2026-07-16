@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- explicit resource_class on custom orb build jobs(pr [#188])
+
 ### Fixed
 
 - unblock CI — yanked spin + stale orb self-pin(pr [#190])
@@ -700,6 +704,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#196]: https://github.com/jerus-org/gen-circleci-orb/pull/196
 [#194]: https://github.com/jerus-org/gen-circleci-orb/pull/194
 [#195]: https://github.com/jerus-org/gen-circleci-orb/pull/195
+[#188]: https://github.com/jerus-org/gen-circleci-orb/pull/188
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.62...HEAD
 [0.0.62]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.61...v0.0.62
 [0.0.61]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.60...v0.0.61
