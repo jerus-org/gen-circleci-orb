@@ -205,26 +205,36 @@ The consumer invokes it as a single job:
 Everything a consumer would otherwise wire by hand — checkout, workspace, git setup, and the four
 tool commands with their exact `with:` values — is collapsed into one job the owner maintains.
 
-## Silence the jobs you only use as commands
+## Silence the jobs a consumer should not run alone
 
-A composed job consumes **commands**, and some of those commands make no sense as standalone jobs
-(they are pure plumbing). Suppress each such job with `generate_job = false` — this drops the
-standalone **job** but **keeps the command** (and its script), so the composite can still use it:
+Once you ship a composite, whether to *also* expose a subcommand's standalone job comes down to
+one test: **could a consumer validly combine the jobs in a way the composite does not already
+offer?** If yes, expose it. If no, suppressing it keeps the surface clean and stops a consumer
+wiring a workflow that cannot work.
+
+Suppress a job with `generate_job = false` — this drops the standalone **job** but **keeps the
+command** (and its script), so the composite can still use it:
 
 ```toml
 [subcommand.prime]
-generate_job = false            # used only inside build_mcp_server
+generate_job = false            # only meaningful as a step of build_mcp_server
 
 [subcommand.publish]
-generate_job = false
+generate_job = false            # only meaningful as a step of build_mcp_server
 
 [subcommand.save]
-generate_job = false
+generate_job = false            # only meaningful as a step of build_mcp_server
+
+[subcommand.build]
+generate_job = false            # redundant: generate --format binary already compiles
 ```
 
-For gen-orb-mcp that leaves a clean public surface: the `build_mcp_server` composite plus the
-genuinely standalone jobs `generate`, `validate`, `diff`, and `migrate` — no plumbing jobs on
-show.
+`prime`, `publish`, and `save` are plumbing — they only make sense as steps of `build_mcp_server`.
+`build` fails the test for a different reason: it is not a step of the composite at all (which
+compiles via `generate --format binary`), and `generate --format binary` already produces a binary
+on its own, so a separate `build` job adds no distinct scenario. What survives is the clean surface
+gen-orb-mcp actually ships: the `build_mcp_server` composite plus `generate`, `validate`, `diff`,
+and `migrate`.
 
 Suppressing `save`'s job does **not** break the composite: `generate_job = false` keeps the `save`
 command, and `set_https_remote` is generated from `[orb].git_push_subcommands` regardless of
