@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- unblock CI — yanked spin + stale orb self-pin(pr [#190])
+
 ## [0.0.62] - 2026-07-09
 
 ### Fixed
@@ -681,6 +687,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#185]: https://github.com/jerus-org/gen-circleci-orb/pull/185
 [#186]: https://github.com/jerus-org/gen-circleci-orb/pull/186
 [#187]: https://github.com/jerus-org/gen-circleci-orb/pull/187
+[#190]: https://github.com/jerus-org/gen-circleci-orb/pull/190
+[Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.62...HEAD
 [0.0.62]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.61...v0.0.62
 [0.0.61]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.60...v0.0.61
 [0.0.60]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.58...v0.0.60
