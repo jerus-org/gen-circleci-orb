@@ -6,7 +6,7 @@ parameters:
     default: "1.89"
 
 orbs:
-  toolkit: jerus-org/circleci-toolkit@6.5.1
+  toolkit: jerus-org/circleci-toolkit@6.6.1
   orb-tools: circleci/orb-tools@12.4.0
   # Consumed by the orb-release workflow's build_mcp_server job (Mechanism A:
   # gen-orb-mcp owns the MCP build). Declared here (not in a managed block) so
