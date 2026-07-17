@@ -57,7 +57,7 @@ is later suppressed (see `generate_job`).
 ### `custom_files`
 
 Authorises hand-authored orb files the generator does not produce so they survive the prune step.
-Covered in the [Advanced Configuration Guide](advanced-configuration.md#escape-hatches).
+Covered in the [Advanced Configuration Guide](advanced-configuration.md#escape-hatches-extra_job-and-custom_files).
 
 ## `[ci]` — release-pipeline wiring
 
