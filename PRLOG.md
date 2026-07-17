@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - deps: update rust crate tokio to 1.52.4(pr [#194])
 - deps: update rust crate toml to 1.1.3(pr [#195])
 - deps: update pinned containers(pr [#192])
+- deps: update rust crate tokio to 1.53.0(pr [#198])
 
 ## [0.0.62] - 2026-07-09
 
@@ -712,6 +713,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#188]: https://github.com/jerus-org/gen-circleci-orb/pull/188
 [#197]: https://github.com/jerus-org/gen-circleci-orb/pull/197
 [#192]: https://github.com/jerus-org/gen-circleci-orb/pull/192
+[#198]: https://github.com/jerus-org/gen-circleci-orb/pull/198
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.62...HEAD
 [0.0.62]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.61...v0.0.62
 [0.0.61]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.60...v0.0.61
