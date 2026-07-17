@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - chore-inherit renovate pin managers from shared config(pr [#197])
+- docs-user documentation for v0.1.0(pr [#199])
 
 ### Fixed
 
@@ -714,6 +715,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#197]: https://github.com/jerus-org/gen-circleci-orb/pull/197
 [#192]: https://github.com/jerus-org/gen-circleci-orb/pull/192
 [#198]: https://github.com/jerus-org/gen-circleci-orb/pull/198
+[#199]: https://github.com/jerus-org/gen-circleci-orb/pull/199
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.62...HEAD
 [0.0.62]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.61...v0.0.62
 [0.0.61]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.60...v0.0.61
