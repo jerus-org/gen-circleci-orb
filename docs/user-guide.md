@@ -514,9 +514,10 @@ There is no circular dependency: `regenerate-orb` (in the build workflow) uses t
 
 ## Keeping CI up to date
 
-There are two independent kinds of drift to keep on top of: **orb version pins** (the
-`@<version>` in `orbs:`) and the **generated wiring shape** (the jobs and workflow
-structure gen-circleci-orb emits, which can change as the generator itself evolves).
+There are three independent kinds of drift to keep on top of: **orb version pins** (the
+`@<version>` in `orbs:`), the **generated wiring shape** (the jobs and workflow structure
+gen-circleci-orb emits, which can change as the generator itself evolves), and **container
+image pins** (the tag or digest on images pinned in `gen-circleci-orb.toml`).
 
 ### Re-syncing the wiring: `update`
 
@@ -585,3 +586,82 @@ recording any renamed or restructured jobs in a structured, human-readable forma
 file can be consulted directly — without an AI tool — when manually upgrading consumers
 from one orb version to another. Passing `--mcp` now means the migration trail exists if
 it is ever needed, regardless of whether AI tooling is in use at the time.
+
+### Container image pins
+
+The images you pin in `gen-circleci-orb.toml` — `[orb].base_image` / `builder_image` and
+`[ci].rust_image` — go stale: a newer tag supersedes the one you pinned, or the tag you
+pinned is rebuilt under a new digest. Either way the pin should move on its own, without a
+gen-circleci-orb release: it lives in your repo and is yours to control. A rebuild of the
+same tag routinely carries security fixes you want in promptly.
+
+The toml is the single source of truth for every pin, but the two generated artifacts it
+feeds behave differently, and that difference is what a pin-management tool must account
+for:
+
+| Artifact | Regenerated at run time? | Pin tracked where |
+|---|---|---|
+| `orb/Dockerfile` | Yes — rebuilt from the toml on every run | Toml only; a pin written into the Dockerfile is stripped on the next regeneration |
+| `.circleci/config.yml` | No — CircleCI reads it from the commit | Toml **and** the committed config, which must agree |
+
+So `[ci].rust_image` is stored twice: in the toml, and in the `rust_image:` lines `update`
+emits into the CI config. **Both copies have to move together.** Bump one without the
+other and `update --check` fails on the drift — correctly, since the wiring genuinely no
+longer matches the toml. This applies to whatever the pin holds: a tag bump splits the two
+copies exactly as a digest bump does.
+
+#### Example: Renovate
+
+Any pin-management tool works, provided it updates both copies in the same change.
+Renovate needs a custom manager per pin, because an image inside a toml value or a
+CircleCI job parameter is not something its built-in managers recognise. The example
+below pins by digest, the usual case; the same shape works for a tag-only pin with the
+`currentDigest` group dropped:
+
+```json
+{
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Pinned build image digest in gen-circleci-orb.toml ([ci].rust_image)",
+      "managerFilePatterns": ["/^gen-circleci-orb\\.toml$/"],
+      "matchStrings": [
+        "rust_image\\s*=\\s*\"(?<depName>[^:\"]+):(?<currentValue>[^@\"]+)@(?<currentDigest>sha256:[a-f0-9]+)\""
+      ],
+      "datasourceTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "description": "The same digest, as emitted into the CircleCI config",
+      "managerFilePatterns": ["/^\\.circleci/.+\\.ya?ml$/"],
+      "matchStrings": [
+        "rust_image:\\s*(?<depName>[^:\\s]+):(?<currentValue>[^@\\s]+)@(?<currentDigest>sha256:[a-f0-9]+)"
+      ],
+      "datasourceTemplate": "docker"
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "Keep both copies in one PR so update --check stays green",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["my-org/ci-rust"],
+      "groupName": "pinned containers"
+    }
+  ]
+}
+```
+
+Both managers resolve to the same image, so the shared `groupName` puts them in a single
+PR that moves the toml and the config together. Grouping is the load-bearing part: without
+it the two copies can land in separate PRs, and whichever merges first breaks the check.
+
+A matching rule should disable the `dockerfile` manager on `orb/Dockerfile`, so the bot
+does not write a digest into a file that is regenerated out from under it:
+
+```json
+{
+  "matchManagers": ["dockerfile"],
+  "matchFileNames": ["orb/Dockerfile"],
+  "enabled": false
+}
+```

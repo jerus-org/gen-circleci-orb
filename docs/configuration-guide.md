@@ -79,6 +79,12 @@ rust_image = "my-org/ci-rust:pinned@sha256:…"   # image the CI build jobs comp
 pulls a bindgen-based `-sys` crate. This is the CI pipeline's image, distinct from the orb's own
 `[orb].base_image` / `builder_image`.
 
+If you pin it, note that `update` copies the value into the `rust_image:` lines of the generated
+CI config, so the pin is committed in two places and both must be bumped together — unlike
+`[orb].base_image` / `builder_image`, whose only artifact (`orb/Dockerfile`) is regenerated from
+this file on every run. See [Container image pins](user-guide.md#container-image-pins) for how to
+configure a pin-management tool to keep the two in step.
+
 MCP integration (`--mcp`) adds `mcp`, `mcp_context`, `mcp_earliest_version`, and
 `gen_orb_mcp_orb_version` here.
 
