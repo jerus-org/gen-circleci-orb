@@ -1,7 +1,7 @@
 # Getting started with gen-circleci-orb
 
 This guide takes you from installation to a running CI pipeline that auto-generates and
-publishes a CircleCI orb for your CLI tool.
+publishes a CircleCI orb for your Rust [clap](https://docs.rs/clap) CLI tool.
 
 ## Install
 
@@ -15,47 +15,19 @@ Or build from source:
 cargo install gen-circleci-orb
 ```
 
-## Generate an orb
+## Set up with `init`
 
-Run from your project root, pointing `generate` at any binary on your `PATH`:
-
-```bash
-gen-circleci-orb generate \
-  --binary my-tool \
-  --orb-namespace my-org
-```
-
-The tool runs `my-tool --help` and `my-tool <subcommand> --help` for each subcommand,
-then writes the full unpacked orb into an `orb/` subdirectory (the default `--orb-dir`):
-
-```
-orb/
-├── src/
-│   ├── @orb.yml
-│   ├── commands/
-│   │   ├── subcommand-a.yml
-│   │   └── subcommand-b.yml
-│   ├── executors/
-│   │   └── default.yml
-│   └── jobs/
-│       ├── subcommand-a.yml
-│       └── subcommand-b.yml
-└── Dockerfile
-```
-
-The orb source is always isolated in `<output>/<orb-dir>/` so it cannot be mixed with
-existing project source (e.g. a Rust `src/`). If the target directory exists but does not
-look like a CircleCI orb, the command refuses to write and reports an error.
-
-Verify the orb locally:
+`init` is the entry point. It captures your setup once into a `gen-circleci-orb.toml`, runs
+`generate`, and patches your CI — you do not run `generate` first. It is interactive: run it
+with just the binary and it prompts for the required values it doesn't have (workflow names,
+namespaces, tag prefix, contexts), each pre-filled with a sensible default.
 
 ```bash
-circleci orb pack orb/src > /tmp/my-tool-orb.yml
+gen-circleci-orb init --binary my-tool
 ```
 
-## Wire into CI
-
-Run `init` once from your repo root:
+Passing a flag skips its prompt, so the same command is fully scriptable (and non-interactive
+under `--dry-run` or without a TTY) by supplying everything up front:
 
 ```bash
 gen-circleci-orb init \
@@ -78,7 +50,7 @@ release workflow so only crate release tags trigger orb publishing.
 these are independent and often differ.
 
 This:
-1. Runs `generate` to write `orb/` (same as the manual step above)
+1. Runs `generate` to write `orb/`
 2. Patches `.circleci/config.yml`:
    - Adds `gen-circleci-orb:` and `orb-tools:` to the `orbs:` section
    - Adds a `build-binary` + `regenerate-orb` job pair: builds the binary from source on
@@ -87,11 +59,58 @@ This:
      verify the generated orb on every build
    - Adds a tag-triggered `orb-release:` workflow that fires on `<crate-tag-prefix>*` tags
      and runs the full release sequence using gen-circleci-orb orb jobs
+3. Writes a `gen-circleci-orb.toml` recording every value, so later runs of `generate` and
+   `update` reproduce the same orb and CI without re-passing flags. Commit it.
 
 Preview what would change without writing anything:
 
 ```bash
-gen-circleci-orb init ... --dry-run
+gen-circleci-orb init --binary my-tool ... --dry-run
+```
+
+## Regenerate with `generate`
+
+`generate` (re)writes the orb source from the binary's current `--help`. Once `init` has written
+the config, it needs **no flags** — it reads the binary, namespaces, base image, and output
+directory from `gen-circleci-orb.toml`:
+
+```bash
+gen-circleci-orb generate
+```
+
+This is exactly what the `regenerate-orb` CI job runs on every build. It writes the full unpacked
+orb into the configured `orb/` subdirectory:
+
+```
+orb/
+├── src/
+│   ├── @orb.yml
+│   ├── commands/
+│   │   ├── subcommand-a.yml
+│   │   └── subcommand-b.yml
+│   ├── executors/
+│   │   └── default.yml
+│   └── jobs/
+│       ├── subcommand-a.yml
+│       └── subcommand-b.yml
+└── Dockerfile
+```
+
+The orb source is always isolated in `<output>/<orb-dir>/` so it cannot be mixed with
+existing project source (e.g. a Rust `src/`). If the target directory exists but does not
+look like a CircleCI orb, the command refuses to write and reports an error.
+
+You can also run `generate` **without** a config — for a quick look, or to publish an orb by hand
+without CI automation — but then you supply the values (and need their defaults) explicitly:
+
+```bash
+gen-circleci-orb generate --binary my-tool --orb-namespace my-org
+```
+
+Verify the orb locally:
+
+```bash
+circleci orb pack orb/src > /tmp/my-tool-orb.yml
 ```
 
 ## On your next release
@@ -109,6 +128,22 @@ Once the CI changes are merged, pushing a tag matching `<crate-tag-prefix>*` tri
 
 From that point on, every build keeps the orb in sync with the binary — no manual
 orb maintenance required.
+
+## Keep the generated wiring current
+
+As gen-circleci-orb itself evolves, the canonical CI wiring it emits can change. `update`
+re-syncs the managed blocks in `.circleci/config.yml` from your committed
+`gen-circleci-orb.toml`, leaving your own jobs and customizations intact:
+
+```bash
+gen-circleci-orb update --check   # in CI: fail if the wiring is out of date
+gen-circleci-orb update           # apply the re-sync locally
+```
+
+Add `update --check` to your validation workflow so a generator upgrade surfaces as a
+failing check rather than silent drift. `update` never edits `gen-circleci-orb.toml` — it
+only reads it; to change the wiring, edit `gen-circleci-orb.toml` and re-run `update` (or re-run
+`init` to be re-prompted for the values).
 
 ## Keeping orb versions up to date
 
