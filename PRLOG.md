@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - refactor-drop redundant orb-release-binary + verify-orb jobs(pr [#203])
 
+### Fixed
+
+- deps: update rust crate anyhow to 1.0.104(pr [#205])
+
 ## [0.1.0] - 2026-07-17
 
 ### Added
@@ -723,6 +727,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#198]: https://github.com/jerus-org/gen-circleci-orb/pull/198
 [#199]: https://github.com/jerus-org/gen-circleci-orb/pull/199
 [#203]: https://github.com/jerus-org/gen-circleci-orb/pull/203
+[#205]: https://github.com/jerus-org/gen-circleci-orb/pull/205
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.62...v0.1.0
 [0.0.62]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.61...v0.0.62
