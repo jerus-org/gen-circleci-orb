@@ -539,8 +539,8 @@ workflows:
             "consumer job kept:\n{after}"
         );
         assert!(
-            after.contains("name: verify-orb"),
-            "verify gate added:\n{after}"
+            after.contains("name: orb-release-container") && !after.contains("name: verify-orb"),
+            "orb-release regenerated without the removed verify-orb job (#201):\n{after}"
         );
         // re-running update is now a no-op (the wiring is current).
         let cmd2 = Update {

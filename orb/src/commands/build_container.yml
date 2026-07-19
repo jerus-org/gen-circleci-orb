@@ -1,4 +1,4 @@
-description: Build and push a Docker image for a CLI binary, copying the binary from workspace.
+description: Build and push a Docker image for a CLI binary. The Dockerfile builds the binary itself (cargo install), so no workspace binary is attached.
 parameters:
   binary:
     type: string
@@ -14,8 +14,6 @@ parameters:
     type: string
     description: Tag prefix to strip from CIRCLE_TAG to get the bare semver version
 steps:
-  - attach_workspace:
-      at: /tmp/bin
   - setup_remote_docker
   - run:
       name: Build and push Docker image
