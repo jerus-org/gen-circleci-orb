@@ -1,6 +1,10 @@
 VERSION="${CIRCLE_TAG#${CRATE_TAG_PREFIX}}"
 cp "/tmp/bin/${BINARY}" "${ORB_DIR}/${BINARY}"
+# CRATE_VERSION pins the builder-stage `cargo install` to the exact released
+# version and gates on crates.io sparse-index propagation (#200): without it the
+# unpinned install can resolve the previous version while the index lags.
 docker build \
+  --build-arg CRATE_VERSION="${VERSION}" \
   -t "${DOCKER_NAMESPACE}/${BINARY}:${VERSION}" \
   -t "${DOCKER_NAMESPACE}/${BINARY}:latest" \
   "${ORB_DIR}"
