@@ -1,5 +1,4 @@
 VERSION="${CIRCLE_TAG#${CRATE_TAG_PREFIX}}"
-cp "/tmp/bin/${BINARY}" "${ORB_DIR}/${BINARY}"
 docker build \
   -t "${DOCKER_NAMESPACE}/${BINARY}:${VERSION}" \
   -t "${DOCKER_NAMESPACE}/${BINARY}:latest" \

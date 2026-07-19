@@ -613,48 +613,21 @@ fn orb_release_workflow_section(opts: &PatchOpts) -> Vec<String> {
         managed_begin("  "),
         "  orb-release:".to_string(),
         "    jobs:".to_string(),
-        "      - gen-circleci-orb/build_rust_binary:".to_string(),
-        "          name: orb-release-binary".to_string(),
-        format!("          package: {binary}"),
     ];
-    if !opts.rust_image.is_empty() {
-        lines.push(format!("          rust_image: {}", opts.rust_image));
-    }
-    push_tag_filters(&mut lines, &only_tag, &ignore_branches);
-    lines.push(String::new());
 
-    // Verify gate: regenerate the orb with the freshly-built binary and fail if
-    // the committed orb is out of sync (generate --check). pack and container —
-    // and therefore publish — require it, so a drifted or hand-edited orb is
-    // never packed or published.
-    //
-    // check_ci_wiring is OFF here: it runs `update --check`, which expects the
-    // managed gen-circleci-orb orb pin to equal the running binary's own version.
-    // At release the attached binary is the NEW (about-to-publish) version while
-    // the committed pin still tracks the last-published one — so the wiring check
-    // would flag a false drift and deadlock a self-hosting orb's release (the pin
-    // cannot be bumped until the version is published). The wiring is enforced at
-    // PR/validation time via regenerate-orb; here we only verify the orb source.
-    lines.push("      - gen-circleci-orb/generate:".to_string());
-    lines.push("          name: verify-orb".to_string());
-    lines.push(format!("          binary: {binary}"));
-    for ns in &opts.namespaces {
-        lines.push(format!("          orb_namespace: {ns}"));
-    }
-    lines.push(format!("          orb_dir: {orb_dir}"));
-    lines.push("          attach_workspace: true".to_string());
-    lines.push("          check: true".to_string());
-    lines.push("          check_ci_wiring: false".to_string());
-    lines.push("          requires: [orb-release-binary]".to_string());
-    push_tag_filters(&mut lines, &only_tag, &ignore_branches);
-    lines.push(String::new());
+    // #201: no orb-release-binary (release-time compile) and no verify-orb job.
+    // For the binstall method the container Dockerfile builds the binary itself
+    // via `cargo install` (#200), so a persisted workspace binary is never
+    // consumed; and the committed orb source is already regenerated and checked
+    // on every PR (regenerate-orb + `update --check`), so a release-tag re-check
+    // adds nothing a version bump could invalidate. pack and container therefore
+    // gate directly on the release tag.
 
     // orb-tools/pack (checkout: false + pre-steps for version injection)
     lines.push("      - orb-tools/pack:".to_string());
     lines.push("          name: orb-release-pack".to_string());
     lines.push("          checkout: false".to_string());
     lines.push(format!("          source_dir: {orb_dir}/src"));
-    lines.push("          requires: [verify-orb]".to_string());
     lines.push("          pre-steps:".to_string());
     lines.push("            - checkout".to_string());
     lines.push("            - run:".to_string());
@@ -680,7 +653,6 @@ fn orb_release_workflow_section(opts: &PatchOpts) -> Vec<String> {
     lines.push(format!("          docker_namespace: {docker_ns}"));
     lines.push(format!("          orb_dir: {orb_dir}"));
     lines.push(format!("          crate_tag_prefix: {prefix}"));
-    lines.push("          requires: [verify-orb]".to_string());
     lines.push(format!("          context: [{docker_ctx}]"));
     push_tag_filters(&mut lines, &only_tag, &ignore_branches);
     lines.push(String::new());
@@ -815,10 +787,11 @@ mod tests {
 
     #[test]
     fn build_rust_binary_emits_rust_image_when_set() {
-        // When rust_image is configured, BOTH build_rust_binary invocations — the
-        // validation `build-binary` and the release `orb-release-binary` — must pass
-        // it so they compile in a clang-equipped image (stock rust:latest lacks
-        // libclang and fails bindgen, e.g. openssl-sys via sequoia-openpgp).
+        // When rust_image is configured, the validation `build-binary` invocation of
+        // build_rust_binary must pass it so it compiles in a clang-equipped image
+        // (stock rust:latest lacks libclang and fails bindgen, e.g. openssl-sys via
+        // sequoia-openpgp). The release workflow no longer compiles the binary (#201;
+        // the container Dockerfile builds it), so there is no release-side invocation.
         let opts = PatchOpts {
             rust_image: "jerusdp/ci-rust:rolling-6mo@sha256:abc".to_string(),
             ..make_opts()
@@ -829,13 +802,6 @@ mod tests {
         assert!(
             val.contains("rust_image: jerusdp/ci-rust:rolling-6mo@sha256:abc"),
             "validation build-binary must pass rust_image when set"
-        );
-
-        let rel = orb_release_workflow_section(&opts).join("\n");
-        assert!(rel.contains("name: orb-release-binary"));
-        assert!(
-            rel.contains("rust_image: jerusdp/ci-rust:rolling-6mo@sha256:abc"),
-            "orb-release-binary must pass rust_image when set"
         );
     }
 
@@ -1098,51 +1064,6 @@ mod tests {
     }
 
     #[test]
-    fn verify_orb_keeps_source_check_but_disables_wiring_check() {
-        // The release verify-orb must still verify the orb SOURCE (check: true) but
-        // must NOT run the wiring-pin check (check_ci_wiring) — the freshly-built
-        // binary's version is ahead of the committed pin at release, so the wiring
-        // check would deadlock a self-hosting orb's release.
-        let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
-        let verify_block = output
-            .split("name: verify-orb")
-            .nth(1)
-            .expect("verify-orb present")
-            .split("- orb-tools/pack")
-            .next()
-            .unwrap();
-        assert!(
-            verify_block.contains("check: true"),
-            "verify-orb must keep generate --check:\n{verify_block}"
-        );
-        assert!(
-            verify_block.contains("check_ci_wiring: false"),
-            "verify-orb must disable check_ci_wiring:\n{verify_block}"
-        );
-    }
-
-    #[test]
-    fn orb_release_workflow_uses_build_rust_binary_orb_job() {
-        let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
-        let after_wf = output
-            .split("  orb-release:")
-            .nth(1)
-            .expect("no orb-release workflow");
-        assert!(
-            after_wf.contains("gen-circleci-orb/build_rust_binary:"),
-            "orb-release must use gen-circleci-orb/build_rust_binary orb job:\n{after_wf}"
-        );
-        assert!(
-            after_wf.contains("name: orb-release-binary"),
-            "build_rust_binary step must be named orb-release-binary:\n{after_wf}"
-        );
-        assert!(
-            after_wf.contains("package: mytool"),
-            "build_rust_binary step must set package: mytool:\n{after_wf}"
-        );
-    }
-
-    #[test]
     fn orb_release_workflow_uses_build_container_orb_job() {
         let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
         let after_wf = output
@@ -1156,6 +1077,34 @@ mod tests {
         assert!(
             after_wf.contains("name: orb-release-container"),
             "build_container step must be named orb-release-container:\n{after_wf}"
+        );
+    }
+
+    #[test]
+    fn orb_release_omits_binary_build_and_verify_jobs() {
+        // #201: the release-time compile (orb-release-binary) and verify-orb are
+        // redundant for the binstall method — the container Dockerfile builds the
+        // binary itself via `cargo install` (#200), so a persisted workspace binary
+        // is never consumed, and the committed orb source is already regenerated +
+        // checked on every PR (regenerate-orb + `update --check`). Neither job is
+        // emitted; pack and container gate directly on the release tag.
+        let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
+        let after_wf = output
+            .split("  orb-release:")
+            .nth(1)
+            .expect("no orb-release workflow");
+        assert!(
+            !after_wf.contains("name: orb-release-binary"),
+            "orb-release must NOT emit the redundant binary-build job:\n{after_wf}"
+        );
+        assert!(
+            !after_wf.contains("name: verify-orb"),
+            "orb-release must NOT emit the redundant verify-orb job:\n{after_wf}"
+        );
+        assert!(
+            !after_wf.contains("requires: [verify-orb]")
+                && !after_wf.contains("requires: [orb-release-binary]"),
+            "no surviving job may require a removed job:\n{after_wf}"
         );
     }
 
@@ -1181,10 +1130,6 @@ mod tests {
         assert!(
             step.contains("crate_tag_prefix: mytool-v"),
             "build_container step must pass crate_tag_prefix param:\n{step}"
-        );
-        assert!(
-            step.contains("requires: [verify-orb]"),
-            "build_container step must require the verify-orb gate:\n{step}"
         );
         assert!(
             step.contains("context: [docker]"),
@@ -1268,28 +1213,6 @@ mod tests {
             "public namespace ensure step must NOT set private:\n{step}"
         );
     }
-
-    // (kept for backwards compat shape — now tests orb job refs in workflow)
-    #[test]
-    fn orb_release_binary_job_uses_cargo_build_with_package_flag() {
-        // With orb jobs, the build logic lives in the orb; the workflow step
-        // just passes the package parameter to gen-circleci-orb/build_rust_binary.
-        let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
-        let after_wf = output
-            .split("  orb-release:")
-            .nth(1)
-            .expect("no orb-release workflow");
-        assert!(
-            after_wf.contains("package: mytool"),
-            "build_rust_binary step must pass package: mytool:\n{after_wf}"
-        );
-        assert!(
-            !after_wf.contains("cargo build --release -p mytool"),
-            "inline cargo command must not appear in workflow YAML:\n{after_wf}"
-        );
-    }
-
-    // (orb_release_binary_job_persists_binary_to_workspace: now lives in the orb script)
 
     // ── patch_build: orb-release workflow section ─────────────────────────────
 
@@ -1561,10 +1484,15 @@ mod tests {
             out.contains("requires: [build-binary, common-tests]"),
             "regenerate-orb must be re-wired to the new flow:\n{out}"
         );
-        // orb-release verify gate present
+        // orb-release regenerated to the new flow: pack + container, and NOT the
+        // removed release-time compile / verify-orb jobs (#201)
         assert!(
-            out.contains("name: verify-orb"),
-            "orb-release verify gate must be present:\n{out}"
+            out.contains("name: orb-release-pack") && out.contains("name: orb-release-container"),
+            "orb-release must regenerate its pack + container jobs:\n{out}"
+        );
+        assert!(
+            !out.contains("name: verify-orb") && !out.contains("name: orb-release-binary"),
+            "resync must strip the removed verify-orb / orb-release-binary jobs:\n{out}"
         );
         // exactly one orbs entry (not duplicated)
         assert_eq!(
@@ -1826,32 +1754,11 @@ workflows:
     }
 
     #[test]
-    fn orb_release_has_verify_gate_before_pack_and_container() {
+    fn orb_release_pack_and_container_gate_on_tag_publish_requires_both() {
+        // #201: with orb-release-binary + verify-orb removed, pack and container
+        // start directly on the release tag (no `requires`), and publish gates on
+        // both plus the ensure-registered job.
         let (output, _) = patch_build(BUILD_FIXTURE, &make_opts());
-        // A verify-orb job runs `generate --check` (check: true) against the
-        // freshly-built binary and gates the release.
-        assert!(
-            output.contains("name: verify-orb"),
-            "orb-release must emit a verify-orb job:\n{output}"
-        );
-        let verify_block = output
-            .split("name: verify-orb")
-            .nth(1)
-            .expect("no verify-orb job")
-            .split("\n      - ")
-            .next()
-            .unwrap()
-            .to_string();
-        assert!(
-            verify_block.contains("check: true"),
-            "verify-orb must invoke generate with check: true:\n{verify_block}"
-        );
-        assert!(
-            verify_block.contains("requires: [orb-release-binary]"),
-            "verify-orb must require the freshly-built binary:\n{verify_block}"
-        );
-        // pack and container must be gated on the verify, so a drifted orb is
-        // never packed/published.
         let pack_block = output
             .split("name: orb-release-pack")
             .nth(1)
@@ -1861,8 +1768,8 @@ workflows:
             .unwrap()
             .to_string();
         assert!(
-            pack_block.contains("verify-orb"),
-            "orb-release-pack must require verify-orb:\n{pack_block}"
+            !pack_block.contains("requires:"),
+            "orb-release-pack must gate on the tag, not a job:\n{pack_block}"
         );
         let container_block = output
             .split("name: orb-release-container")
@@ -1873,8 +1780,21 @@ workflows:
             .unwrap()
             .to_string();
         assert!(
-            container_block.contains("verify-orb"),
-            "orb-release-container must require verify-orb:\n{container_block}"
+            !container_block.contains("requires:"),
+            "orb-release-container must gate on the tag, not a job:\n{container_block}"
+        );
+        let publish_block = output
+            .split("      - orb-tools/publish:")
+            .nth(1)
+            .expect("no publish step")
+            .split("\n      - ")
+            .next()
+            .unwrap()
+            .to_string();
+        assert!(
+            publish_block.contains("orb-release-container")
+                && publish_block.contains("orb-release-pack"),
+            "publish must require both container and pack:\n{publish_block}"
         );
     }
 

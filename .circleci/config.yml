@@ -13,7 +13,7 @@ orbs:
   # `update` skips re-inserting it and stays round-trip stable.
   gen-orb-mcp: jerus-org/gen-orb-mcp@0.1.51
   # >>> gen-circleci-orb (managed — edits overwritten by 'gen-circleci-orb update')
-  gen-circleci-orb: jerus-org/gen-circleci-orb@0.0.62
+  gen-circleci-orb: jerus-org/gen-circleci-orb@0.1.0
   # <<< gen-circleci-orb
 workflows:
   validation:
@@ -129,36 +129,10 @@ workflows:
   # >>> gen-circleci-orb (managed — edits overwritten by 'gen-circleci-orb update')
   orb-release:
     jobs:
-      - gen-circleci-orb/build_rust_binary:
-          name: orb-release-binary
-          package: gen-circleci-orb
-          rust_image: jerusdp/ci-rust:rolling-6mo@sha256:09205391fdc1a899519f539dd4ce080315c60922ebd8d91b08fe9f6a0abefdad
-          filters:
-            tags:
-              only: /^gen-circleci-orb-v.*/
-            branches:
-              ignore: /.*/
-
-      - gen-circleci-orb/generate:
-          name: verify-orb
-          binary: gen-circleci-orb
-          orb_namespace: jerus-org
-          orb_dir: orb
-          attach_workspace: true
-          check: true
-          check_ci_wiring: false
-          requires: [orb-release-binary]
-          filters:
-            tags:
-              only: /^gen-circleci-orb-v.*/
-            branches:
-              ignore: /.*/
-
       - orb-tools/pack:
           name: orb-release-pack
           checkout: false
           source_dir: orb/src
-          requires: [verify-orb]
           pre-steps:
             - checkout
             - run:
@@ -181,7 +155,6 @@ workflows:
           docker_namespace: jerusdp
           orb_dir: orb
           crate_tag_prefix: gen-circleci-orb-v
-          requires: [verify-orb]
           context: [docker]
           filters:
             tags:
