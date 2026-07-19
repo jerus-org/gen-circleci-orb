@@ -529,6 +529,12 @@ fn render_dockerfile(
             let runtime_pkgs = sorted_package_list(apt_packages);
             let mut out = String::new();
             out.push_str(&format!("FROM {builder_image} AS builder\n"));
+            // CRATE_VERSION pins the exact released version passed by build-container.sh
+            // (from CIRCLE_TAG). An unpinned `cargo install` resolves the PREVIOUS
+            // version while the crates.io sparse index lags the publish API by minutes,
+            // shipping a container whose binary version != its own tag (#200). The ARG
+            // must precede the RUN that consumes it.
+            out.push_str("ARG CRATE_VERSION\n");
             out.push_str("RUN apt-get update \\\n");
             out.push_str(
                 "    && apt-get install -y --no-install-recommends build-essential ca-certificates clang cmake libssl-dev pkg-config \\\n",
@@ -539,7 +545,23 @@ fn render_dockerfile(
             // never diverges from CI. clang (libclang) + cmake cover native crates
             // using bindgen / cmake (e.g. openssl-sys on newer OpenSSL, aws-lc-sys),
             // so the builder is self-sufficient regardless of the base image's age.
-            out.push_str(&format!("    && cargo install {binary} --locked\n"));
+            //
+            // The install is wrapped in a bounded retry: the retry loop IS the
+            // crates.io propagation gate (cargo-only — the builder image has no
+            // curl/wget/python), waiting out sparse-index lag and failing LOUD on
+            // timeout instead of silently installing the prior version (#200).
+            out.push_str(&format!(
+                "    && {{ n=0; until cargo install {binary} --version \"${{CRATE_VERSION}}\" --locked; do \\\n"
+            ));
+            out.push_str("         n=$((n+1)); \\\n");
+            out.push_str(
+                "         [ \"$n\" -ge 20 ] && echo \"crates.io index never served ${CRATE_VERSION}\" >&2 && exit 1; \\\n",
+            );
+            out.push_str(
+                "         echo \"waiting for crates.io index to propagate ${CRATE_VERSION} (attempt $n)\"; \\\n",
+            );
+            out.push_str("         sleep 15; \\\n");
+            out.push_str("       done; }\n");
             if let Some(ver) = circleci_cli_version {
                 out.push('\n');
                 out.push_str(&render_cli_installer_stage(ver));
@@ -2715,8 +2737,49 @@ mod tests {
         );
         // build the exact published dep set (Cargo.lock), not a fresh resolve.
         assert!(
-            dockerfile.contains("cargo install mytool --locked"),
-            "builder must cargo install --locked:\n{dockerfile}"
+            dockerfile.contains("cargo install mytool --version \"${CRATE_VERSION}\" --locked"),
+            "builder must cargo install the pinned version --locked:\n{dockerfile}"
+        );
+    }
+
+    #[test]
+    fn dockerfile_binstall_pins_crate_version_with_retry() {
+        // #200: an unpinned `cargo install` resolves the PREVIOUS version while the
+        // crates.io sparse index lags the publish API, shipping a container whose
+        // binary version != its own tag. The builder must pin the exact released
+        // version via a build-arg and retry until the index serves it, failing loud
+        // on timeout rather than silently installing the wrong version.
+        let dockerfile = render_dockerfile(
+            "mytool",
+            &InstallMethod::Binstall,
+            "debian:13-slim",
+            "rust:1-slim-trixie",
+            None,
+            &[],
+        );
+        assert!(
+            dockerfile.contains("ARG CRATE_VERSION"),
+            "builder must declare a CRATE_VERSION build-arg:\n{dockerfile}"
+        );
+        assert!(
+            dockerfile
+                .contains("until cargo install mytool --version \"${CRATE_VERSION}\" --locked"),
+            "install must be wrapped in a retry loop that waits out index lag:\n{dockerfile}"
+        );
+        assert!(
+            dockerfile.contains("exit 1"),
+            "retry loop must fail loud after a bounded number of attempts:\n{dockerfile}"
+        );
+        // The ARG must precede the RUN that consumes it.
+        let arg_pos = dockerfile
+            .find("ARG CRATE_VERSION")
+            .expect("ARG CRATE_VERSION missing");
+        let run_pos = dockerfile
+            .find("RUN apt-get update")
+            .expect("builder RUN missing");
+        assert!(
+            arg_pos < run_pos,
+            "ARG CRATE_VERSION must precede the builder RUN:\n{dockerfile}"
         );
     }
 
