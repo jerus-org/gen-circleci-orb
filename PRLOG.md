@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- refactor-drop redundant orb-release-binary + verify-orb jobs(pr [#203])
+
+### Fixed
+
+- deps: update rust crate anyhow to 1.0.104(pr [#205])
+- deps: update dependency toolkit to v6.6.2(pr [#209])
+- deps: update rust crate serde to 1.0.229(pr [#206])
+- deps: update rust crate thiserror to 2.0.19(pr [#207])
+- deps: update dependency gen-orb-mcp to v0.2.0(pr [#208])
+
 ## [0.1.0] - 2026-07-17
 
 ### Added
@@ -716,6 +730,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#192]: https://github.com/jerus-org/gen-circleci-orb/pull/192
 [#198]: https://github.com/jerus-org/gen-circleci-orb/pull/198
 [#199]: https://github.com/jerus-org/gen-circleci-orb/pull/199
+[#203]: https://github.com/jerus-org/gen-circleci-orb/pull/203
+[#205]: https://github.com/jerus-org/gen-circleci-orb/pull/205
+[#209]: https://github.com/jerus-org/gen-circleci-orb/pull/209
+[#206]: https://github.com/jerus-org/gen-circleci-orb/pull/206
+[#207]: https://github.com/jerus-org/gen-circleci-orb/pull/207
+[#208]: https://github.com/jerus-org/gen-circleci-orb/pull/208
+[Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.62...v0.1.0
 [0.0.62]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.61...v0.0.62
 [0.0.61]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.60...v0.0.61
