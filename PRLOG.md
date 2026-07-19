@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- refactor-drop redundant orb-release-binary + verify-orb jobs(pr [#203])
+
 ## [0.1.0] - 2026-07-17
 
 ### Added
@@ -716,6 +722,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#192]: https://github.com/jerus-org/gen-circleci-orb/pull/192
 [#198]: https://github.com/jerus-org/gen-circleci-orb/pull/198
 [#199]: https://github.com/jerus-org/gen-circleci-orb/pull/199
+[#203]: https://github.com/jerus-org/gen-circleci-orb/pull/203
+[Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.62...v0.1.0
 [0.0.62]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.61...v0.0.62
 [0.0.61]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.60...v0.0.61
