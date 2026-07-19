@@ -508,12 +508,25 @@ fn render_cli_installer_stage(ver: &str) -> String {
     s
 }
 
-fn sorted_package_list(extra: &[String]) -> String {
+fn sorted_packages(extra: &[String]) -> Vec<&str> {
     let mut pkgs: Vec<&str> = vec!["ca-certificates", "git"];
     pkgs.extend(extra.iter().map(String::as_str));
     pkgs.sort_unstable();
     pkgs.dedup();
-    pkgs.join(" ")
+    pkgs
+}
+
+/// Emit an `apt-get install` fragment with one package per `\`-continued line,
+/// per docker:S7020 (a single long package line trips the length limit). The
+/// result slots into a `RUN apt-get update \` chain: it opens with
+/// `    && apt-get install …` and every line — including the last package —
+/// ends with a `\` continuation, so the caller appends `    && rm -rf …` next.
+fn render_apt_install(pkgs: &[&str]) -> String {
+    let mut s = String::from("    && apt-get install -y --no-install-recommends \\\n");
+    for pkg in pkgs {
+        s.push_str(&format!("    {pkg} \\\n"));
+    }
+    s
 }
 
 fn render_dockerfile(
@@ -526,7 +539,7 @@ fn render_dockerfile(
 ) -> String {
     match method {
         InstallMethod::Binstall => {
-            let runtime_pkgs = sorted_package_list(apt_packages);
+            let runtime_pkgs = sorted_packages(apt_packages);
             let mut out = String::new();
             out.push_str(&format!("FROM {builder_image} AS builder\n"));
             // CRATE_VERSION pins the exact released version passed by build-container.sh
@@ -536,9 +549,14 @@ fn render_dockerfile(
             // must precede the RUN that consumes it.
             out.push_str("ARG CRATE_VERSION\n");
             out.push_str("RUN apt-get update \\\n");
-            out.push_str(
-                "    && apt-get install -y --no-install-recommends build-essential ca-certificates clang cmake libssl-dev pkg-config \\\n",
-            );
+            out.push_str(&render_apt_install(&[
+                "build-essential",
+                "ca-certificates",
+                "clang",
+                "cmake",
+                "libssl-dev",
+                "pkg-config",
+            ]));
             out.push_str("    && rm -rf /var/lib/apt/lists/* \\\n");
             // --locked builds the exact dependency set the crate was published/tested
             // with (its bundled Cargo.lock), not a fresh resolve — so the container
@@ -569,9 +587,7 @@ fn render_dockerfile(
             out.push('\n');
             out.push_str(&format!("FROM {base_image}\n"));
             out.push_str("RUN apt-get update \\\n");
-            out.push_str(&format!(
-                "    && apt-get install -y --no-install-recommends {runtime_pkgs} \\\n"
-            ));
+            out.push_str(&render_apt_install(&runtime_pkgs));
             out.push_str("    && rm -rf /var/lib/apt/lists/* \\\n");
             out.push_str("    && useradd -ms /bin/bash circleci\n");
             out.push_str(&format!(
@@ -587,7 +603,7 @@ fn render_dockerfile(
             out
         }
         InstallMethod::Local => {
-            let runtime_pkgs = sorted_package_list(apt_packages);
+            let runtime_pkgs = sorted_packages(apt_packages);
             let mut out = String::new();
             if let Some(ver) = circleci_cli_version {
                 out.push_str(&render_cli_installer_stage(ver));
@@ -595,9 +611,7 @@ fn render_dockerfile(
             }
             out.push_str(&format!("FROM {base_image}\n"));
             out.push_str("RUN apt-get update \\\n");
-            out.push_str(&format!(
-                "    && apt-get install -y --no-install-recommends {runtime_pkgs} \\\n"
-            ));
+            out.push_str(&render_apt_install(&runtime_pkgs));
             out.push_str("    && rm -rf /var/lib/apt/lists/* \\\n");
             out.push_str("    && useradd -ms /bin/bash circleci\n");
             out.push_str(&format!("COPY {binary} /usr/local/bin/{binary}\n"));
@@ -611,15 +625,16 @@ fn render_dockerfile(
             out
         }
         InstallMethod::Apt => {
-            let extra_pkgs: Vec<&str> = apt_packages.iter().map(String::as_str).collect();
-            let mut all_pkgs = vec!["git", binary];
-            all_pkgs.extend(extra_pkgs);
+            let mut all_pkgs: Vec<&str> = vec!["git", binary];
+            all_pkgs.extend(apt_packages.iter().map(String::as_str));
             all_pkgs.sort_unstable();
             all_pkgs.dedup();
-            let pkg_list = all_pkgs.join(" ");
-            format!(
-                "FROM {base_image}\nRUN apt-get update \\\n    && apt-get install -y --no-install-recommends {pkg_list} \\\n    && rm -rf /var/lib/apt/lists/*\n"
-            )
+            let mut out = String::new();
+            out.push_str(&format!("FROM {base_image}\n"));
+            out.push_str("RUN apt-get update \\\n");
+            out.push_str(&render_apt_install(&all_pkgs));
+            out.push_str("    && rm -rf /var/lib/apt/lists/*\n");
+            out
         }
     }
 }
@@ -2729,10 +2744,17 @@ mod tests {
             None,
             &[],
         );
-        // builder stage: a self-sufficient native-build toolchain, alphabetical.
+        // builder stage: a self-sufficient native-build toolchain, alphabetical,
+        // one package per line (S7020).
         assert!(
-            dockerfile
-                .contains("build-essential ca-certificates clang cmake libssl-dev pkg-config"),
+            dockerfile.contains(&render_apt_install(&[
+                "build-essential",
+                "ca-certificates",
+                "clang",
+                "cmake",
+                "libssl-dev",
+                "pkg-config",
+            ])),
             "builder packages must be the sorted self-sufficient set:\n{dockerfile}"
         );
         // build the exact published dep set (Cargo.lock), not a fresh resolve.
@@ -2780,6 +2802,81 @@ mod tests {
         assert!(
             arg_pos < run_pos,
             "ARG CRATE_VERSION must precede the builder RUN:\n{dockerfile}"
+        );
+    }
+
+    #[test]
+    fn dockerfile_apt_install_is_one_package_per_line() {
+        // docker:S7020 — a single long `apt-get install` line trips the length
+        // limit. Every apt package must be on its own `\`-continued line.
+        let dockerfile = render_dockerfile(
+            "mytool",
+            &InstallMethod::Binstall,
+            "debian:13-slim",
+            "rust:1-slim-trixie",
+            None,
+            &["extra-pkg".to_string()],
+        );
+        // builder fixed toolchain: each package on its own continued line.
+        for pkg in [
+            "build-essential",
+            "ca-certificates",
+            "clang",
+            "cmake",
+            "libssl-dev",
+            "pkg-config",
+        ] {
+            assert!(
+                dockerfile.contains(&format!("    {pkg} \\\n")),
+                "builder package `{pkg}` must be on its own continued line:\n{dockerfile}"
+            );
+        }
+        // runtime stage extra package too.
+        assert!(
+            dockerfile.contains("    extra-pkg \\\n"),
+            "runtime package must be on its own continued line:\n{dockerfile}"
+        );
+        // the multi-package list must NOT appear space-joined on one line.
+        assert!(
+            !dockerfile
+                .contains("build-essential ca-certificates clang cmake libssl-dev pkg-config"),
+            "packages must not be emitted on a single line:\n{dockerfile}"
+        );
+        // the install directive opens the multi-line list.
+        assert!(
+            dockerfile
+                .contains("&& apt-get install -y --no-install-recommends \\\n    build-essential"),
+            "apt-get install must open a multi-line list:\n{dockerfile}"
+        );
+    }
+
+    #[test]
+    fn dockerfile_apt_install_multiline_covers_local_and_apt() {
+        // The one-per-line form (S7020) applies to the Local runtime stage and the
+        // single-stage Apt image, not just Binstall.
+        let local = render_dockerfile(
+            "mytool",
+            &InstallMethod::Local,
+            "debian:13-slim",
+            "rust:1-slim-trixie",
+            None,
+            &["libpq-dev".to_string()],
+        );
+        assert!(
+            local.contains("    libpq-dev \\\n") && local.contains("    ca-certificates \\\n"),
+            "Local runtime apt list must be one package per line:\n{local}"
+        );
+        let apt = render_dockerfile(
+            "mytool",
+            &InstallMethod::Apt,
+            "debian:13-slim",
+            "rust:1-slim-trixie",
+            None,
+            &[],
+        );
+        assert!(
+            apt.contains("    git \\\n") && apt.contains("    mytool \\\n"),
+            "Apt image package list must be one package per line:\n{apt}"
         );
     }
 
