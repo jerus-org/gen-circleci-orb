@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - refactor-drop redundant orb-release-binary + verify-orb jobs(pr [#203])
+- refactor-emit apt-get install list one package per line (S7020)(pr [#204])
 
 ### Fixed
 
@@ -738,6 +739,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#207]: https://github.com/jerus-org/gen-circleci-orb/pull/207
 [#208]: https://github.com/jerus-org/gen-circleci-orb/pull/208
 [#202]: https://github.com/jerus-org/gen-circleci-orb/pull/202
+[#204]: https://github.com/jerus-org/gen-circleci-orb/pull/204
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.62...v0.1.0
 [0.0.62]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.0.61...v0.0.62
