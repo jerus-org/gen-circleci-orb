@@ -65,7 +65,12 @@ request:
 - **Commit messages** — follow the
   [Conventional Commits](https://www.conventionalcommits.org/) format
   (`feat:`, `fix:`, `docs:`, `chore:`, `refactor:`, …). These drive changelog
-  generation.
+  generation. Use the **`security:`** type for fixes to security vulnerabilities:
+  `gen-changelog` routes `security` (and `dependency`, and `chore(deps)`) commits to a
+  dedicated **Security** section in `CHANGELOG.md`. For a vulnerability fix, put the
+  advisory identifier (GHSA / RUSTSEC / CVE) in the commit subject **and** in the pull
+  request title so it is recorded in both `CHANGELOG.md` and `PRLOG.md`. See
+  [SECURITY.md](SECURITY.md).
 - **Test placement** — put `#[cfg(test)]` modules at the **end** of the file.
 
 ## Testing policy
