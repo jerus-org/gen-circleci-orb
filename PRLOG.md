@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - ci-re-sync orb self-pin to 0.1.2(pr [#212])
 - docs-add contributing, governance & templates(pr [#211])
 - docs-add security policy & assurance case(pr [#213])
+- docs-add CHANGELOG.md and activate generation(pr [#214])
 
 ## [0.1.2] - 2026-07-20
 
@@ -758,6 +759,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#212]: https://github.com/jerus-org/gen-circleci-orb/pull/212
 [#211]: https://github.com/jerus-org/gen-circleci-orb/pull/211
 [#213]: https://github.com/jerus-org/gen-circleci-orb/pull/213
+[#214]: https://github.com/jerus-org/gen-circleci-orb/pull/214
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.2...HEAD
 [0.1.2]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.0...v0.1.1
