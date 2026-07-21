@@ -5,6 +5,7 @@ Generate a CircleCI orb to provide the facilities offered by a CLI program.
 [![Crates.io](https://img.shields.io/crates/v/gen-circleci-orb.svg)](https://crates.io/crates/gen-circleci-orb)
 [![Documentation](https://docs.rs/gen-circleci-orb/badge.svg)](https://docs.rs/gen-circleci-orb)
 [![License](https://img.shields.io/crates/l/gen-circleci-orb.svg)](https://github.com/jerus-org/gen-circleci-orb#license)
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/13667/badge)](https://www.bestpractices.dev/projects/13667)
 
 ## Overview
 

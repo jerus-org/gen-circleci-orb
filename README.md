@@ -11,10 +11,7 @@ Generate a CircleCI orb to provide the facilities offered by a CLI program.
 [![Crates.io](https://img.shields.io/crates/v/gen-circleci-orb.svg)](https://crates.io/crates/gen-circleci-orb)
 [![Documentation](https://docs.rs/gen-circleci-orb/badge.svg)](https://docs.rs/gen-circleci-orb)
 [![License](https://img.shields.io/crates/l/gen-circleci-orb.svg)](#license)
-<!-- OpenSSF Best Practices badge — added once the project is registered at
-     https://www.bestpractices.dev (see docs/openssf-badge.md):
-[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/<ID>/badge)](https://www.bestpractices.dev/projects/<ID>)
--->
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/13667/badge)](https://www.bestpractices.dev/projects/13667)
 
 ## Overview
 
