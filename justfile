@@ -14,9 +14,9 @@ test: clippy check doc unit-tests
 clear-target:
     cargo clean
 
-# Run cargo clippy on all crates
+# Run cargo clippy on all crates, denying warnings (matches CI enforcement)
 clippy *clippy-args:
-    cargo clippy
+    cargo clippy --all --tests --all-features {{ clippy-args }} -- -D warnings
 
 # Build all code in suitable configurations
 check:
@@ -40,6 +40,12 @@ fmt:
     cargo +stable fmt --all -- --check
     just --fmt --unstable
 
-# Generate coverage reported
+# Generate coverage report with cargo-llvm-cov (the tool used in CI). Uses
+# --all-features so the integration tests run and the spawned-binary coverage
+# is captured (tarpaulin cannot see subprocess coverage and under-reports).
 cov:
-    cargo tarpaulin --output-dir coverage --out lcov
+    cargo llvm-cov --all-features --lcov --output-path coverage/lcov.info
+
+# Print a coverage summary to the terminal
+cov-summary:
+    cargo llvm-cov --all-features --summary-only

@@ -1,10 +1,11 @@
 [advisories]
 db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
-vulnerability = "deny"
-unmaintained = "warn"
+# Vulnerabilities are always denied by cargo-deny. unmaintained/unsound are
+# scope selectors ("all" | "workspace" | "transitive" | "none"); "all" checks
+# every crate in the graph and reports them as warnings.
+unmaintained = "all"
 yanked = "warn"
-notice = "warn"
 ignore = [
     # RUSTSEC-2023-0071: Marvin Attack timing side-channel in rsa. Transitive
     # via pcu -> sigstore; no fixed upstream release. Matches pcu/gen-orb-mcp.
@@ -12,7 +13,10 @@ ignore = [
 ]
 
 [licenses]
-unlicensed = "deny"
+# All licenses are denied unless explicitly allowed. Permissive licenses are
+# allowed globally; weak-copyleft licenses are NOT — they are scoped to the
+# specific transitive crates that carry them via [[licenses.exceptions]] below,
+# so a new copyleft dependency fails the check until consciously reviewed.
 allow = [
     "MIT",
     "Apache-2.0",
@@ -22,7 +26,23 @@ allow = [
     "ISC",
     "Unicode-3.0",
     "Zlib",
+    "BSL-1.0",
+    "CDLA-Permissive-2.0",
 ]
+
+# LGPL-2.0-or-later: the OpenPGP stack used for GPG commit/tag signing (via pcu).
+[[licenses.exceptions]]
+name = "sequoia-openpgp"
+allow = ["LGPL-2.0-or-later"]
+
+[[licenses.exceptions]]
+name = "buffered-reader"
+allow = ["LGPL-2.0-or-later"]
+
+# MPL-2.0 (file-level copyleft): transitive config/dirs helper.
+[[licenses.exceptions]]
+name = "option-ext"
+allow = ["MPL-2.0"]
 
 [bans]
 multiple-versions = "warn"

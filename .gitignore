@@ -1,3 +1,5 @@
 /target
+# Coverage output (cargo-llvm-cov / lcov)
+/coverage
 # Binary copied into orb build context during release; not for version control
 /orb/gen-circleci-orb
