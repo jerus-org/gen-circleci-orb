@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - docs-add roadmap, architecture & root readme(pr [#215])
 - chore-strengthen clippy, llvm-cov, cargo-deny(pr [#216])
 - chore-add third-party license notices(pr [#217])
+- docs-document release signing & fix binstall pubkey(pr [#218])
 
 ## [0.1.2] - 2026-07-20
 
@@ -766,6 +767,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#215]: https://github.com/jerus-org/gen-circleci-orb/pull/215
 [#216]: https://github.com/jerus-org/gen-circleci-orb/pull/216
 [#217]: https://github.com/jerus-org/gen-circleci-orb/pull/217
+[#218]: https://github.com/jerus-org/gen-circleci-orb/pull/218
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.2...HEAD
 [0.1.2]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.0...v0.1.1
