@@ -51,3 +51,13 @@ path = "src/lib.rs"
 pkg-url = "{ repo }/releases/download/gen-circleci-orb-v{ version }/gen-circleci-orb-{ target }.tar.gz"
 pkg-fmt = "tgz"
 bin-dir = "{ bin }{ binary-ext }"
+
+# cargo-binstall signature verification. The pubkey is a placeholder in source:
+# the release pipeline generates an ephemeral minisign/rsign keypair, signs the
+# tarball, and `pcu release inject-pubkey` replaces the `pubkey` value below with
+# that release's public key before the crate is published. Without this section
+# pcu has nothing to replace and the signature is published unverifiable.
+# See docs/RELEASING.md.
+[package.metadata.binstall.signing]
+algorithm = "minisign"
+pubkey = "RWReplacedAtReleaseByPcuInjectPubkey00000000000000000"
