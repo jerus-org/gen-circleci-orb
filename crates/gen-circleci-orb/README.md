@@ -273,6 +273,10 @@ for alternatives including MCP-assisted updates.
 Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or
 [MIT license](LICENSE-MIT) at your option.
 
+Binary distributions bundle third-party Rust crates under their own license terms; the full
+notices are in [THIRD-PARTY-LICENSES.md](THIRD-PARTY-LICENSES.md) (generated with
+[`cargo-about`](https://github.com/EmbarkStudios/cargo-about) — run `just licenses` to refresh).
+
 ## Contributing
 
 See the [Contributing Guide](https://github.com/jerus-org/gen-circleci-orb/blob/main/CONTRIBUTING.md)

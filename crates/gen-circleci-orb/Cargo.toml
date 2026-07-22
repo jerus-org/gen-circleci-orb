@@ -10,6 +10,9 @@ rust-version.workspace = true
 keywords.workspace = true
 categories.workspace = true
 readme = "README.md"
+# License-notice tooling config is kept in-repo but not shipped in the published
+# crate; THIRD-PARTY-LICENSES.md (generated from it) is included by default.
+exclude = ["about.toml", "about.hbs"]
 
 [dependencies]
 clap.workspace = true
