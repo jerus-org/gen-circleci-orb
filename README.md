@@ -54,6 +54,7 @@ architecture guides.
 | [docs/architecture.md](docs/architecture.md) | High-level architecture |
 | [docs/design.md](docs/design.md) | Detailed design document |
 | [docs/assurance-case.md](docs/assurance-case.md) | Security assurance case & threat model |
+| [docs/RELEASING.md](docs/RELEASING.md) | Release signing & how to verify a release |
 | [ROADMAP.md](ROADMAP.md) | Planned direction |
 | [PRLOG.md](PRLOG.md) / [crate CHANGELOG](crates/gen-circleci-orb/CHANGELOG.md) | Release history |
 
