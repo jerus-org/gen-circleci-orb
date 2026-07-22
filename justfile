@@ -49,3 +49,12 @@ cov:
 # Print a coverage summary to the terminal
 cov-summary:
     cargo llvm-cov --all-features --summary-only
+
+# Regenerate the crate's third-party license notices file (cargo-about)
+licenses:
+    cd crates/gen-circleci-orb && cargo about generate about.hbs --output-file THIRD-PARTY-LICENSES.md
+
+# Verify the committed license notices are current (fails if stale)
+licenses-check:
+    cd crates/gen-circleci-orb && cargo about generate about.hbs --output-file THIRD-PARTY-LICENSES.md
+    git diff --exit-code crates/gen-circleci-orb/THIRD-PARTY-LICENSES.md
