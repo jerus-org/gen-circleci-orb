@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - chore-add third-party license notices(pr [#217])
 - docs-document release signing & fix binstall pubkey(pr [#218])
 - docs-add LICENSES dir for badge license detection(pr [#220])
+- docs-add OpenSSF criterion-to-evidence answer sheet(pr [#219])
 
 ## [0.1.2] - 2026-07-20
 
@@ -770,6 +771,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#217]: https://github.com/jerus-org/gen-circleci-orb/pull/217
 [#218]: https://github.com/jerus-org/gen-circleci-orb/pull/218
 [#220]: https://github.com/jerus-org/gen-circleci-orb/pull/220
+[#219]: https://github.com/jerus-org/gen-circleci-orb/pull/219
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.2...HEAD
 [0.1.2]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.0...v0.1.1
