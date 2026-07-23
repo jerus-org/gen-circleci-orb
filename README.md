@@ -55,6 +55,7 @@ architecture guides.
 | [docs/design.md](docs/design.md) | Detailed design document |
 | [docs/assurance-case.md](docs/assurance-case.md) | Security assurance case & threat model |
 | [docs/RELEASING.md](docs/RELEASING.md) | Release signing & how to verify a release |
+| [docs/openssf-badge.md](docs/openssf-badge.md) | OpenSSF Best Practices criterion → evidence mapping |
 | [ROADMAP.md](ROADMAP.md) | Planned direction |
 | [PRLOG.md](PRLOG.md) / [crate CHANGELOG](crates/gen-circleci-orb/CHANGELOG.md) | Release history |
 
