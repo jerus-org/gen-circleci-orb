@@ -43,5 +43,5 @@ git2 = "0.21.0"
 tokio = { version = "1.53.0", features = ["full"] }
 
 # Testing
-trycmd = "1.2.0"
+trycmd = "1.2.1"
 tempfile = "3.27.0"
