@@ -49,6 +49,10 @@ parameters:
     type: string
     description: 'Extra apt package(s) to install in the final Docker image stage (repeatable). Combined with the baseline packages (ca-certificates, git) and sorted alphanumerically. Example: --apt-packages libssl-dev --apt-packages pkg-config'
     default: ''
+  cargo_tool:
+    type: string
+    description: 'Extra cargo tool(s) to install into the executor image (repeatable). Each is a crate name installed via cargo-binstall in the builder stage, with its binary copied into the runtime. Binstall install method only. Example: --cargo-tool cargo-audit --cargo-tool cargo-deny'
+    default: ''
   dry_run:
     type: boolean
     description: Show planned output without writing any files
@@ -118,6 +122,7 @@ steps:
     git_push_subcommand: << parameters.git_push_subcommand >>
     circleci_cli_version: << parameters.circleci_cli_version >>
     apt_packages: << parameters.apt_packages >>
+    cargo_tool: << parameters.cargo_tool >>
     dry_run: << parameters.dry_run >>
     config: << parameters.config >>
     no_record: << parameters.no_record >>

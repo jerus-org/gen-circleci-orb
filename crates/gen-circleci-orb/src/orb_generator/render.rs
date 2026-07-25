@@ -29,6 +29,10 @@ pub struct GenerateOpts {
     /// Extra apt packages to install in the final Docker image stage (sorted together with
     /// the baseline packages: ca-certificates, git).
     pub apt_packages: Vec<String>,
+    /// Extra cargo tools (crate names) to install into the executor image via
+    /// cargo-binstall in the builder stage, with their binaries copied into the
+    /// runtime. Binstall install method only.
+    pub cargo_tools: Vec<String>,
 }
 
 /// Generate all orb artifact strings keyed by their relative output path.
@@ -66,6 +70,7 @@ pub fn generate(
             &opts.builder_image,
             opts.circleci_cli_version.as_deref(),
             &opts.apt_packages,
+            &opts.cargo_tools,
         ),
     );
 
@@ -536,6 +541,7 @@ fn render_dockerfile(
     builder_image: &str,
     circleci_cli_version: Option<&str>,
     apt_packages: &[String],
+    cargo_tools: &[String],
 ) -> String {
     match method {
         InstallMethod::Binstall => {
@@ -580,6 +586,22 @@ fn render_dockerfile(
             );
             out.push_str("         sleep 15; \\\n");
             out.push_str("       done; }\n");
+            // Extra cargo tools the executor orchestrates (cargo_tools): install
+            // them into the builder here, then COPY their binaries into the
+            // runtime below. cargo-binstall fetches prebuilt release binaries (no
+            // source compile); it is itself installed from crates.io (--locked)
+            // rather than via a curl|bash installer, keeping the supply chain on
+            // the same registry as every other dependency. Plain sort — do NOT use
+            // sorted_packages(), which injects the apt baseline (ca-certificates, git).
+            let mut sorted_tools = cargo_tools.to_vec();
+            sorted_tools.sort();
+            if !sorted_tools.is_empty() {
+                out.push_str("RUN cargo install cargo-binstall --locked \\\n");
+                out.push_str(&format!(
+                    "    && cargo binstall --no-confirm {}\n",
+                    sorted_tools.join(" ")
+                ));
+            }
             if let Some(ver) = circleci_cli_version {
                 out.push('\n');
                 out.push_str(&render_cli_installer_stage(ver));
@@ -593,6 +615,15 @@ fn render_dockerfile(
             out.push_str(&format!(
                 "COPY --from=builder /usr/local/cargo/bin/{binary} /usr/local/bin/{binary}\n"
             ));
+            // Each cargo tool's binary is assumed to share its crate name (true
+            // for cargo-audit, cargo-deny, and cargo-* tools generally). They land
+            // on PATH as standalone binaries, so the runtime needs no cargo/Rust
+            // toolchain to invoke them.
+            for tool in &sorted_tools {
+                out.push_str(&format!(
+                    "COPY --from=builder /usr/local/cargo/bin/{tool} /usr/local/bin/{tool}\n"
+                ));
+            }
             if circleci_cli_version.is_some() {
                 out.push_str(
                     "COPY --from=cli-installer /usr/local/bin/circleci /usr/local/bin/circleci\n",
@@ -1505,6 +1536,7 @@ mod tests {
             git_push_subcommands: vec![],
             circleci_cli_version: None,
             apt_packages: vec![],
+            cargo_tools: vec![],
         }
     }
 
@@ -1594,6 +1626,69 @@ mod tests {
         assert!(
             !content.contains("| bash"),
             "must not use curl|bash pattern:\n{content}"
+        );
+    }
+
+    #[test]
+    fn dockerfile_cargo_tools_installed_in_builder_and_copied_to_runtime() {
+        let cli = make_cli("mytool", vec![]);
+        let opts = GenerateOpts {
+            cargo_tools: vec!["cargo-audit".to_string(), "cargo-deny".to_string()],
+            ..default_opts()
+        };
+        let files = generate(&cli, &opts, None);
+        let content = &files[&PathBuf::from("Dockerfile")];
+        assert!(
+            content.contains("cargo install cargo-binstall --locked"),
+            "builder should install cargo-binstall:\n{content}"
+        );
+        assert!(
+            content.contains("cargo binstall --no-confirm cargo-audit cargo-deny"),
+            "builder should binstall the cargo tools:\n{content}"
+        );
+        assert!(
+            content.contains(
+                "COPY --from=builder /usr/local/cargo/bin/cargo-audit /usr/local/bin/cargo-audit"
+            ),
+            "runtime should copy cargo-audit:\n{content}"
+        );
+        assert!(
+            content.contains(
+                "COPY --from=builder /usr/local/cargo/bin/cargo-deny /usr/local/bin/cargo-deny"
+            ),
+            "runtime should copy cargo-deny:\n{content}"
+        );
+        assert!(
+            !content.contains("| bash"),
+            "must not use curl|bash:\n{content}"
+        );
+    }
+
+    #[test]
+    fn dockerfile_no_cargo_tools_omits_binstall_stage() {
+        let cli = make_cli("mytool", vec![]);
+        let content = &generate(&cli, &default_opts(), None)[&PathBuf::from("Dockerfile")];
+        assert!(
+            !content.contains("cargo binstall"),
+            "no cargo_tools should mean no binstall line:\n{content}"
+        );
+        assert!(
+            !content.contains("cargo-audit"),
+            "no cargo_tools should mean no tool references:\n{content}"
+        );
+    }
+
+    #[test]
+    fn dockerfile_cargo_tools_are_sorted() {
+        let cli = make_cli("mytool", vec![]);
+        let opts = GenerateOpts {
+            cargo_tools: vec!["cargo-deny".to_string(), "cargo-audit".to_string()],
+            ..default_opts()
+        };
+        let content = &generate(&cli, &opts, None)[&PathBuf::from("Dockerfile")];
+        assert!(
+            content.contains("cargo binstall --no-confirm cargo-audit cargo-deny"),
+            "tools should be emitted in sorted order:\n{content}"
         );
     }
 
@@ -1727,6 +1822,7 @@ mod tests {
         let files_default = generate(&cli, &default_opts(), None);
         let opts_empty = GenerateOpts {
             apt_packages: vec![],
+            cargo_tools: vec![],
             ..default_opts()
         };
         let files_empty = generate(&cli, &opts_empty, None);
@@ -2743,6 +2839,7 @@ mod tests {
             "rust:1-slim-trixie",
             None,
             &[],
+            &[],
         );
         // builder stage: a self-sufficient native-build toolchain, alphabetical,
         // one package per line (S7020).
@@ -2777,6 +2874,7 @@ mod tests {
             "debian:13-slim",
             "rust:1-slim-trixie",
             None,
+            &[],
             &[],
         );
         assert!(
@@ -2816,6 +2914,7 @@ mod tests {
             "rust:1-slim-trixie",
             None,
             &["extra-pkg".to_string()],
+            &[],
         );
         // builder fixed toolchain: each package on its own continued line.
         for pkg in [
@@ -2861,6 +2960,7 @@ mod tests {
             "rust:1-slim-trixie",
             None,
             &["libpq-dev".to_string()],
+            &[],
         );
         assert!(
             local.contains("    libpq-dev \\\n") && local.contains("    ca-certificates \\\n"),
@@ -2872,6 +2972,7 @@ mod tests {
             "debian:13-slim",
             "rust:1-slim-trixie",
             None,
+            &[],
             &[],
         );
         assert!(
@@ -2891,6 +2992,7 @@ mod tests {
             "debian:13-slim",
             "rust:1-slim-trixie@sha256:deadbeef",
             None,
+            &[],
             &[],
         );
         assert!(
@@ -2917,6 +3019,7 @@ mod tests {
             "rust:1-slim-trixie",
             None,
             &[],
+            &[],
         );
         assert!(
             dockerfile.contains("COPY mytool /usr/local/bin/mytool"),
@@ -2936,6 +3039,7 @@ mod tests {
             "debian:13-slim",
             "rust:1-slim-trixie",
             None,
+            &[],
             &[],
         );
         assert!(
@@ -2957,6 +3061,7 @@ mod tests {
             "rust:1-slim-trixie",
             None,
             &[],
+            &[],
         );
         assert!(
             dockerfile.contains("ca-certificates"),
@@ -2976,6 +3081,7 @@ mod tests {
             "debian:13-slim",
             "rust:1-slim-trixie",
             None,
+            &[],
             &[],
         );
         assert!(
@@ -3001,6 +3107,7 @@ mod tests {
             "rust:1-slim-trixie",
             None,
             &[],
+            &[],
         );
         let copy_pos = dockerfile.find("COPY mytool").expect("COPY not found");
         let user_pos = dockerfile.find("USER circleci").expect("USER not found");
@@ -3018,6 +3125,7 @@ mod tests {
             "debian:13-slim",
             "rust:1-slim-trixie",
             Some("0.1.36202"),
+            &[],
             &[],
         );
         assert!(

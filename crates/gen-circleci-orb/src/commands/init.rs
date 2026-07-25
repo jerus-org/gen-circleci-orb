@@ -353,6 +353,7 @@ pub(crate) fn build_bootstrap_config(
             circleci_cli_version: None,
             install_method: None,
             apt_packages: None,
+            cargo_tools: None,
             home_url: home_url.map(str::to_string),
             source_url: source_url.map(str::to_string),
             git_push_subcommands: if git_push_subcommands.is_empty() {
@@ -757,6 +758,7 @@ impl Init {
             git_push_subcommands: extras.git_push_subcommands.clone(),
             circleci_cli_version: None,
             apt_packages: vec![],
+            cargo_tools: vec![],
             dry_run: self.dry_run,
             config: None,
             // init is a local bootstrap, not a CI run — never auto-record/push.

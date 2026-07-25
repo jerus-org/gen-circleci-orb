@@ -134,6 +134,13 @@ pub struct Generate {
     #[arg(long = "apt-packages")]
     pub apt_packages: Vec<String>,
 
+    /// Extra cargo tool(s) to install into the executor image (repeatable).
+    /// Each is a crate name installed via cargo-binstall in the builder stage,
+    /// with its binary copied into the runtime. Binstall install method only.
+    /// Example: --cargo-tool cargo-audit --cargo-tool cargo-deny
+    #[arg(long = "cargo-tool")]
+    pub cargo_tools: Vec<String>,
+
     /// Show planned output without writing any files.
     #[arg(long)]
     pub dry_run: bool,
@@ -422,6 +429,40 @@ pub(crate) fn resolve_apt_packages(
     pkgs
 }
 
+/// CLI flags take precedence over `[orb].cargo_tools`. Unlike apt packages,
+/// cargo tools carry no MCP/record baseline — the list is exactly what the
+/// consumer asked for.
+pub(crate) fn resolve_cargo_tools(
+    cli: &[String],
+    config: &crate::orb_config::OrbConfig,
+) -> Vec<String> {
+    if !cli.is_empty() {
+        cli.to_vec()
+    } else {
+        config
+            .orb
+            .as_ref()
+            .and_then(|o| o.cargo_tools.clone())
+            .unwrap_or_default()
+    }
+}
+
+/// cargo_tools relies on the Binstall Dockerfile's Rust builder stage (which has
+/// cargo) to fetch and stage the extra tool binaries. The apt/local methods have
+/// no such stage, so reject the combination loudly rather than silently dropping
+/// the tools from the executor.
+pub(crate) fn ensure_cargo_tools_supported(
+    method: &InstallMethod,
+    cargo_tools: &[String],
+) -> Result<()> {
+    if !cargo_tools.is_empty() && !matches!(method, InstallMethod::Binstall) {
+        anyhow::bail!(
+            "cargo_tools is only supported with the `binstall` install method (got {method:?})"
+        );
+    }
+    Ok(())
+}
+
 pub(crate) fn resolve_config_path(explicit: Option<&PathBuf>, output: &Path) -> PathBuf {
     explicit
         .cloned()
@@ -474,9 +515,13 @@ impl Generate {
             .or_else(|| config_url.and_then(|o| o.home_url.clone()))
             .or_else(|| detected_url.clone());
 
+        let install_method = resolve_install_method(self.install_method.as_ref(), &orb_config);
+        let cargo_tools = resolve_cargo_tools(&self.cargo_tools, &orb_config);
+        ensure_cargo_tools_supported(&install_method, &cargo_tools)?;
+
         let opts = orb_generator::GenerateOpts {
             namespaces,
-            install_method: resolve_install_method(self.install_method.as_ref(), &orb_config),
+            install_method,
             base_image: resolve_base_image(self.base_image.as_deref(), &orb_config),
             builder_image: resolve_builder_image(&orb_config),
             home_url,
@@ -492,6 +537,7 @@ impl Generate {
                 &cli_def,
             ),
             apt_packages: resolve_apt_packages(&self.apt_packages, &orb_config),
+            cargo_tools,
         };
 
         let files = orb_generator::generate(&cli_def, &opts, Some(&orb_config));
@@ -1471,6 +1517,72 @@ mod tests {
         use crate::orb_config::OrbConfig;
         let result = resolve_apt_packages(&[], &OrbConfig::default());
         assert!(result.is_empty());
+    }
+
+    // ── resolve_cargo_tools ────────────────────────────────────────────────
+
+    #[test]
+    fn resolve_cargo_tools_uses_cli_when_provided() {
+        use crate::orb_config::OrbConfig;
+        let cli = vec!["cargo-audit".to_string(), "cargo-deny".to_string()];
+        let result = resolve_cargo_tools(&cli, &OrbConfig::default());
+        assert_eq!(result, vec!["cargo-audit", "cargo-deny"]);
+    }
+
+    #[test]
+    fn resolve_cargo_tools_falls_back_to_config() {
+        use crate::orb_config::{OrbConfig, OrbSection};
+        let config = OrbConfig {
+            orb: Some(OrbSection {
+                cargo_tools: Some(vec!["cargo-audit".to_string(), "cargo-deny".to_string()]),
+                ..OrbSection::default()
+            }),
+            ..OrbConfig::default()
+        };
+        let result = resolve_cargo_tools(&[], &config);
+        assert_eq!(result, vec!["cargo-audit", "cargo-deny"]);
+    }
+
+    #[test]
+    fn resolve_cargo_tools_cli_overrides_config() {
+        use crate::orb_config::{OrbConfig, OrbSection};
+        let config = OrbConfig {
+            orb: Some(OrbSection {
+                cargo_tools: Some(vec!["cargo-audit".to_string()]),
+                ..OrbSection::default()
+            }),
+            ..OrbConfig::default()
+        };
+        let result = resolve_cargo_tools(&["cargo-deny".to_string()], &config);
+        assert_eq!(result, vec!["cargo-deny"]);
+    }
+
+    #[test]
+    fn resolve_cargo_tools_defaults_to_empty() {
+        use crate::orb_config::OrbConfig;
+        assert!(resolve_cargo_tools(&[], &OrbConfig::default()).is_empty());
+    }
+
+    // ── ensure_cargo_tools_supported ───────────────────────────────────────
+
+    #[test]
+    fn cargo_tools_allowed_with_binstall() {
+        let tools = vec!["cargo-audit".to_string()];
+        assert!(ensure_cargo_tools_supported(&InstallMethod::Binstall, &tools).is_ok());
+    }
+
+    #[test]
+    fn cargo_tools_rejected_with_apt_or_local() {
+        let tools = vec!["cargo-audit".to_string()];
+        let err = ensure_cargo_tools_supported(&InstallMethod::Apt, &tools).unwrap_err();
+        assert!(err.to_string().contains("binstall"), "got: {err}");
+        assert!(ensure_cargo_tools_supported(&InstallMethod::Local, &tools).is_err());
+    }
+
+    #[test]
+    fn no_cargo_tools_is_fine_with_any_method() {
+        assert!(ensure_cargo_tools_supported(&InstallMethod::Apt, &[]).is_ok());
+        assert!(ensure_cargo_tools_supported(&InstallMethod::Local, &[]).is_ok());
     }
 
     // ── MCP feature auto-provisions the executor image ─────────────────────
