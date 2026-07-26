@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- add cargo_tools to install tools into the executor(pr [#229])
+
 ### Changed
 
 - ci-re-sync orb self-pin to 0.1.2(pr [#212])
@@ -772,6 +776,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#218]: https://github.com/jerus-org/gen-circleci-orb/pull/218
 [#220]: https://github.com/jerus-org/gen-circleci-orb/pull/220
 [#219]: https://github.com/jerus-org/gen-circleci-orb/pull/219
+[#229]: https://github.com/jerus-org/gen-circleci-orb/pull/229
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.2...HEAD
 [0.1.2]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.0...v0.1.1
