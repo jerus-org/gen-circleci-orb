@@ -24,6 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - docs-add LICENSES dir for badge license detection(pr [#220])
 - docs-add OpenSSF criterion-to-evidence answer sheet(pr [#219])
 
+### Fixed
+
+- deps: update pinned containers(pr [#221])
+
 ## [0.1.2] - 2026-07-20
 
 ### Fixed
@@ -777,6 +781,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#220]: https://github.com/jerus-org/gen-circleci-orb/pull/220
 [#219]: https://github.com/jerus-org/gen-circleci-orb/pull/219
 [#229]: https://github.com/jerus-org/gen-circleci-orb/pull/229
+[#221]: https://github.com/jerus-org/gen-circleci-orb/pull/221
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.2...HEAD
 [0.1.2]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.0...v0.1.1
