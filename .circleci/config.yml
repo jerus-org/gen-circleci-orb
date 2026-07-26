@@ -84,7 +84,7 @@ workflows:
       - gen-circleci-orb/build_rust_binary:
           name: build-binary
           package: gen-circleci-orb
-          rust_image: jerusdp/ci-rust:rolling-6mo@sha256:09205391fdc1a899519f539dd4ce080315c60922ebd8d91b08fe9f6a0abefdad
+          rust_image: jerusdp/ci-rust:rolling-6mo@sha256:36aacfbf82036d7ae47c004f2844220a7fe7d9882b13a4bf741af99d7ded97b6
       - gen-circleci-orb/generate:
           name: regenerate-orb
           binary: gen-circleci-orb
