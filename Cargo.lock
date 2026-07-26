@@ -1775,9 +1775,9 @@ dependencies = [
 
 [[package]]
 name = "gen-bsky"
-version = "0.1.31"
+version = "0.1.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7eb27f9963dbc7366ff96bb1be36dbcf574b55098113f6c7cd88e7d73c1ec12f"
+checksum = "936b1cc3ac91362a5924ef8da2a0a6828552152cbaf59133ac9524af19b8a7d0"
 dependencies = [
  "base62",
  "bsky-sdk",
@@ -1821,9 +1821,9 @@ dependencies = [
 
 [[package]]
 name = "gen-linkedin"
-version = "0.1.24"
+version = "0.1.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e5119983574bd571486aae2a9ce0c1265f5d1356ca39e6db5250288b5a150b9e"
+checksum = "55c252ff7bce11df5aff02e96ebc1e9d0aab43ba0c7595b906840f84df526509"
 dependencies = [
  "chrono",
  "log",
@@ -3481,9 +3481,9 @@ dependencies = [
 
 [[package]]
 name = "pcu"
-version = "0.6.28"
+version = "0.6.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6752e824e8b63a6a9199578f118db6044ac183016d60923d5158a5331ff8a3bb"
+checksum = "120aefcff5cc9502382bea7cc4d2e8502fb003d8e843f8a113d5e3156d2ae4f6"
 dependencies = [
  "base62",
  "base64 0.22.1",
@@ -4606,9 +4606,9 @@ dependencies = [
 
 [[package]]
 name = "serde_json"
-version = "1.0.150"
+version = "1.0.151"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e8014e44b4736ed0538adeecded0fce2a272f22dc9578a7eb6b2d9993c74cfb9"
+checksum = "c841b55ecdae098c80dcae9cf767f6f8a0c2cdb3416bbef72181df4d0fe73f14"
 dependencies = [
  "itoa",
  "memchr",
@@ -5394,9 +5394,9 @@ dependencies = [
 
 [[package]]
 name = "tokio"
-version = "1.53.0"
+version = "1.53.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d988bcd52dbe076d3d46903332f58c912b87a2c49b1428419a5845154762ffee"
+checksum = "202caea871b69668250d242070849eb495be178ed697a3e98aebce5bc81a0bed"
 dependencies = [
  "bytes",
  "libc",
