@@ -10,6 +10,7 @@ set -- gen-circleci-orb generate
 [[ -n "${GIT_PUSH_SUBCOMMAND:-}" ]] && set -- "$@" --git-push-subcommand "${GIT_PUSH_SUBCOMMAND}"
 [[ -n "${CIRCLECI_CLI_VERSION:-}" ]] && set -- "$@" --circleci-cli-version "${CIRCLECI_CLI_VERSION}"
 [[ -n "${APT_PACKAGES:-}" ]] && set -- "$@" --apt-packages "${APT_PACKAGES}"
+[[ -n "${CARGO_TOOL:-}" ]] && set -- "$@" --cargo-tool "${CARGO_TOOL}"
 [[ "${DRY_RUN:-false}" = "true" ]] && set -- "$@" --dry-run
 [[ -n "${CONFIG:-}" ]] && set -- "$@" --config "${CONFIG}"
 [[ "${NO_RECORD:-false}" = "true" ]] && set -- "$@" --no-record

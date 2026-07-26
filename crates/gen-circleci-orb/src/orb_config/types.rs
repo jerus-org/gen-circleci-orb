@@ -110,6 +110,14 @@ pub struct OrbSection {
     /// Use for tools that need build dependencies at runtime (e.g. a tool that
     /// compiles code via `cargo` needs libssl-dev + pkg-config).
     pub apt_packages: Option<Vec<String>>,
+    /// Extra cargo tools to install into the executor image (Binstall method
+    /// only). Each entry is a crate name; the generated Dockerfile installs
+    /// `cargo-binstall` in the builder stage, `cargo binstall`s these crates, and
+    /// copies their binaries into the runtime stage. Use for orbs whose executor
+    /// orchestrates other cargo tools (e.g. a security gate needs `cargo-audit`
+    /// and `cargo-deny` on PATH). The installed binaries are available under their
+    /// crate name (e.g. `cargo-audit`).
+    pub cargo_tools: Option<Vec<String>>,
     pub home_url: Option<String>,
     pub source_url: Option<String>,
     /// Subcommand names whose generated jobs include a set_https_remote step.

@@ -31,6 +31,38 @@ builder_image = "rust:1-slim-trixie"   # image for the Dockerfile's binstall bui
 consumers run. Do not confuse them with `[ci].rust_image`, which is the image the *CI build jobs*
 compile in (below).
 
+### `apt_packages` — extra OS packages in the executor
+
+Extra apt packages installed into the generated Dockerfile's **runtime** stage, alongside the
+baseline (`ca-certificates`, `git`) and sorted together. Use for OS-level runtime dependencies of
+the orb's binary (e.g. a tool that shells out to `cargo` needs `libssl-dev` + `pkg-config`).
+
+```toml
+[orb]
+apt_packages = ["libssl-dev", "pkg-config"]
+```
+
+Also settable per-run with the repeatable `--apt-packages` flag (CLI overrides the config value).
+
+### `cargo_tools` — extra cargo tools in the executor
+
+Extra cargo tools to install into the executor image, for orbs whose executor **orchestrates other
+cargo commands** (e.g. a security gate that runs `cargo-audit` and `cargo-deny`). Each entry is a
+crate name; the generated Dockerfile installs `cargo-binstall` in the builder stage (from crates.io,
+not a `curl | bash` installer), `cargo binstall`s the listed crates, and copies their binaries into
+the runtime. The binaries land on `PATH` under their crate name (e.g. `cargo-audit`), so the runtime
+needs no Rust toolchain to invoke them.
+
+```toml
+[orb]
+cargo_tools = ["cargo-audit", "cargo-deny"]
+```
+
+Also settable with the repeatable `--cargo-tool` flag (CLI overrides the config value). Supported
+with the **binstall** install method only — it relies on the Dockerfile's Rust builder stage; using
+it with `apt`/`local` is an error. It assumes each tool's binary shares its crate name (true for
+`cargo-*` tools generally).
+
 ### `git_push_subcommands` — subcommands that push to git
 
 Some tools have a subcommand that pushes to git (committing generated artifacts back, say). List

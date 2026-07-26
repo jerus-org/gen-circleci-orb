@@ -361,6 +361,7 @@ steps:
                 circleci_cli_version: None,
                 install_method: None,
                 apt_packages: None,
+                cargo_tools: None,
                 home_url: None,
                 source_url: None,
                 git_push_subcommands: None,
