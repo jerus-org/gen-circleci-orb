@@ -5,9 +5,20 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.3] - 2026-07-27
 
-Summary: 
+Summary: Added[1], Chore[2], Documentation[3], Fixed[4]
+
+### Added
+
+ - feat: add cargo_tools to install tools into executor
+
+### Fixed
+
+ - fix(deps): update rust crate trycmd to 1.2.1
+ - fix(deps): update rust crate tokio to 1.53.1
+ - fix(deps): update rust crate pcu to 0.6.29
+ - fix(deps): update rust crate clap to 4.6.4
 
 ## [0.1.2] - 2026-07-20
 

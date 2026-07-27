@@ -13,7 +13,7 @@ from the dependency graph with [`cargo-about`](https://github.com/EmbarkStudios/
 
 ## Overview
 
-- **MIT License** — 511 crate(s)
+- **MIT License** — 512 crate(s)
 - **Apache License 2.0** — 19 crate(s)
 - **Unicode License v3** — 19 crate(s)
 - **ISC License** — 8 crate(s)
@@ -1092,7 +1092,7 @@ limitations under the License.
 
 Used by:
 
-- aws-lc-sys 0.42.0
+- aws-lc-sys 0.43.0
 - dunce 1.0.5
 - ossl 1.5.2
 - ryu-js 1.0.3
@@ -1298,7 +1298,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 Used by:
 
-- aws-lc-sys 0.42.0
+- aws-lc-sys 0.43.0
 - curve25519-dalek 4.1.3
 
 ```text
@@ -1356,7 +1356,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 Used by:
 
-- xxhash-rust 0.8.17
+- xxhash-rust 0.8.18
 
 ```text
 Boost Software License - Version 1.0 - August 17th, 2003
@@ -1389,8 +1389,8 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- webpki-root-certs 1.0.8
-- webpki-roots 1.0.8
+- webpki-root-certs 1.0.9
+- webpki-roots 1.0.9
 
 ```text
 # Community Data License Agreement - Permissive - Version 2.0
@@ -1582,8 +1582,8 @@ third-party/chromium/LICENSE.
 
 Used by:
 
-- aws-lc-rs 1.17.1
-- aws-lc-sys 0.42.0
+- aws-lc-rs 1.17.3
+- aws-lc-sys 0.43.0
 
 ```text
 ISC License:
@@ -2400,13 +2400,15 @@ DEALINGS IN THE SOFTWARE.
 Used by:
 
 - backtrace 0.3.76
-- cc 1.2.67
+- cc 1.4.0
 - cfg-if 1.0.4
 - cmake 0.1.58
 - find-msvc-tools 0.1.9
 - git2 0.21.0
 - jobserver 0.1.35
 - js-sys 0.3.103
+- libgit2-sys 0.18.7+1.9.6
+- libssh2-sys 0.3.2
 - oauth2 5.0.0
 - openssl-probe 0.1.6
 - openssl-probe 0.2.1
@@ -2657,7 +2659,7 @@ DEALINGS IN THE SOFTWARE.
 Used by:
 
 - bitflags 2.13.1
-- glob 0.3.3
+- glob 0.3.4
 - log 0.4.33
 - num-bigint-dig 0.8.6
 - num-bigint 0.4.8
@@ -2803,7 +2805,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- hyper 1.10.1
+- hyper 1.11.0
 
 ```text
 Copyright (c) 2014-2026 Sean McArthur
@@ -2862,7 +2864,7 @@ THE SOFTWARE.
 
 Used by:
 
-- either 1.16.0
+- either 1.17.0
 - itertools 0.10.5
 - itertools 0.13.0
 - itertools 0.14.0
@@ -3391,15 +3393,15 @@ THE SOFTWARE.
 
 Used by:
 
-- futures-channel 0.3.32
-- futures-core 0.3.32
-- futures-executor 0.3.32
-- futures-io 0.3.32
-- futures-macro 0.3.32
-- futures-sink 0.3.32
-- futures-task 0.3.32
-- futures-util 0.3.32
-- futures 0.3.32
+- futures-channel 0.3.33
+- futures-core 0.3.33
+- futures-executor 0.3.33
+- futures-io 0.3.33
+- futures-macro 0.3.33
+- futures-sink 0.3.33
+- futures-task 0.3.33
+- futures-util 0.3.33
+- futures 0.3.33
 
 ```text
 Copyright (c) 2016 Alex Crichton
@@ -6538,7 +6540,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- rustls-pki-types 1.15.0
+- rustls-pki-types 1.15.1
 
 ```text
 Copyright (c) 2023 Dirkjan Ochtman <dirkjan@ochtman.nl>
@@ -6809,9 +6811,9 @@ Used by:
 - anstyle 1.0.14
 - clap-verbosity-flag 3.0.4
 - clap-verbosity 2.1.0
-- clap 4.6.2
+- clap 4.6.4
 - clap_builder 4.6.2
-- clap_derive 4.6.1
+- clap_derive 4.6.4
 - clap_lex 1.1.0
 - colorchoice 1.0.5
 - config 0.15.25
@@ -6882,8 +6884,8 @@ SOFTWARE.
 Used by:
 
 - time-core 0.1.9
-- time-macros 0.2.31
-- time 0.3.53
+- time-macros 0.2.32
+- time 0.3.54
 
 ```text
 Copyright (c) Jacob Pratt et al.
@@ -6912,7 +6914,7 @@ SOFTWARE.
 
 Used by:
 
-- libc 0.2.186
+- libc 0.2.189
 
 ```text
 Copyright (c) The Rust Project Developers
@@ -7082,7 +7084,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- zerocopy 0.8.54
+- zerocopy 0.8.55
 
 ```text
 Copyright 2023 The Fuchsia Authors
@@ -7154,9 +7156,9 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- gen-bsky 0.1.31
-- gen-linkedin 0.1.24
-- pcu 0.6.28
+- gen-bsky 0.1.32
+- gen-linkedin 0.1.25
+- pcu 0.6.29
 
 ```text
 Copyright © 2025 Jeremiah Russell
@@ -7215,7 +7217,7 @@ SOFTWARE.
 
 Used by:
 
-- psl 2.1.219
+- psl 2.1.223
 
 ```text
 MIT License
@@ -7480,7 +7482,7 @@ SOFTWARE.
 
 Used by:
 
-- bytemuck 1.25.1
+- bytemuck 1.25.2
 
 ```text
 MIT License
@@ -7562,7 +7564,7 @@ SOFTWARE.
 
 Used by:
 
-- tokio-macros 2.7.0
+- tokio-macros 2.7.1
 
 ```text
 MIT License
@@ -7904,7 +7906,7 @@ SOFTWARE.
 
 Used by:
 
-- kdeets 0.1.31
+- kdeets 0.1.32
 
 ```text
 MIT License
@@ -7997,7 +7999,7 @@ SOFTWARE.
 
 Used by:
 
-- gen-circleci-orb 0.1.2
+- gen-circleci-orb 0.1.3
 
 ```text
 MIT License
@@ -8056,7 +8058,6 @@ Used by:
 - rustls-platform-verifier-android 0.1.1
 - siphasher 1.0.3
 - tinyrand 0.5.0
-- trait-variant 0.1.2
 - typed-path 0.9.3
 - windows-core 0.62.2
 - windows-implement 0.60.2
@@ -8103,8 +8104,8 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- tokio-util 0.7.18
-- tokio 1.53.0
+- tokio-util 0.7.19
+- tokio 1.53.1
 
 ```text
 MIT License
@@ -8141,37 +8142,6 @@ Used by:
 MIT License
 
 Copyright (c) [2021] [Marvin Countryman]
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-```
-
-## MIT License
-
-Used by:
-
-- libssh2-sys 0.3.2
-
-```text
-MIT License
-
-Copyright (c) [year] [fullname]
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -8413,7 +8383,7 @@ Used by:
 - adler2 2.0.1
 - anyhow 1.0.104
 - async-lock 3.4.2
-- async-trait 0.1.89
+- async-trait 0.1.91
 - atomic-waker 1.1.2
 - camino 1.2.4
 - color-eyre 0.6.5
@@ -8425,7 +8395,7 @@ Used by:
 - event-listener-strategy 0.5.4
 - event-listener 5.4.1
 - eyre 0.6.12
-- fastrand 2.4.1
+- fastrand 2.5.0
 - group 0.13.0
 - indenter 0.3.4
 - itoa 1.0.18
@@ -8435,21 +8405,21 @@ Used by:
 - once_cell 1.21.4
 - parking 2.2.1
 - pathdiff 0.2.3
-- pest 2.8.7
-- pest_derive 2.8.7
-- pest_generator 2.8.7
-- pest_meta 2.8.7
+- pest 2.8.8
+- pest_derive 2.8.8
+- pest_generator 2.8.8
+- pest_meta 2.8.8
 - pin-project-internal 1.1.13
 - pin-project-lite 0.2.17
 - pin-project 1.1.13
 - portable-atomic-util 0.2.7
-- portable-atomic 1.13.1
+- portable-atomic 1.14.0
 - prettyplease 0.2.37
-- proc-macro2 1.0.106
+- proc-macro2 1.0.107
 - prost-reflect-build 0.16.1
 - prost-reflect-derive 0.16.1
 - prost-reflect 0.16.5
-- quote 1.0.46
+- quote 1.0.47
 - rustc-stable-hash 0.1.2
 - rustix 1.1.4
 - rustversion 1.0.23
@@ -8459,19 +8429,20 @@ Used by:
 - serde_core 1.0.229
 - serde_derive 1.0.229
 - serde_html_form 0.2.8
-- serde_json 1.0.150
+- serde_json 1.0.151
 - serde_path_to_error 0.1.20
-- serde_repr 0.1.20
+- serde_repr 0.1.21
 - serde_yaml 0.9.34+deprecated
 - simd_cesu8 1.2.0
 - smol_str 0.3.6
 - syn 1.0.109
 - syn 2.0.119
-- syn 3.0.0
+- syn 3.0.3
 - thiserror-impl 1.0.69
 - thiserror-impl 2.0.19
 - thiserror 1.0.69
 - thiserror 2.0.19
+- trait-variant 0.1.3
 - typed-builder-macro 0.18.2
 - typed-builder 0.18.2
 - unicode-ident 1.0.24
@@ -8600,8 +8571,8 @@ SOFTWARE
 
 Used by:
 
-- ctor 1.0.9
-- link-section 0.19.0
+- ctor 1.0.11
+- link-section 0.19.1
 - linktime-proc-macro 0.2.0
 
 ```text
@@ -8848,7 +8819,8 @@ Used by:
 
 - aho-corasick 1.1.4
 - globset 0.4.19
-- jiff 0.2.32
+- jiff-core 0.1.0
+- jiff 0.2.35
 - memchr 2.8.3
 - ucd-trie 0.1.7
 - walkdir 2.5.0
@@ -8915,7 +8887,7 @@ SOFTWARE.
 
 Used by:
 
-- twox-hash 2.1.2
+- twox-hash 2.1.3
 
 ```text
 The MIT License (MIT)
@@ -9106,7 +9078,7 @@ SOFTWARE.
 
 Used by:
 
-- aws-lc-sys 0.42.0
+- aws-lc-sys 0.43.0
 
 ```text
 The MIT License (MIT)
@@ -9650,38 +9622,6 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-```
-
-## MIT License
-
-Used by:
-
-- libgit2-sys 0.18.5+1.9.4
-
-```text
-This software is licensed under the MIT License.
-
-Copyright Fedor Indutny, 2018.
-
-Permission is hereby granted, free of charge, to any person obtaining a
-copy of this software and associated documentation files (the
-"Software"), to deal in the Software without restriction, including
-without limitation the rights to use, copy, modify, merge, publish,
-distribute, sublicense, and/or sell copies of the Software, and to permit
-persons to whom the Software is furnished to do so, subject to the
-following conditions:
-
-The above copyright notice and this permission notice shall be included
-in all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
-OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
-NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
-DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
-OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
-USE OR OTHER DEALINGS IN THE SOFTWARE.
-
 ```
 
 ## Mozilla Public License 2.0
