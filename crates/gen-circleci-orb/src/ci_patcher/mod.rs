@@ -94,9 +94,19 @@ pub fn patch_build(content: &str, opts: &PatchOpts) -> (String, PatchReport) {
     };
     let mut lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
 
-    patch_step0_gen_circleci_orb_orb(content, &mut lines, opts, &mut report);
+    // Order matters: all three insert at the END of the `orbs:` section, so the
+    // call order fixes the resulting layout. The UNMARKED pins (gen-orb-mcp,
+    // orb-tools) must go in before the MANAGED gen-circleci-orb block, because
+    // that is the layout `resync_build` produces — `strip_managed` removes only
+    // the managed block, leaving the unmarked pins in place, and the block is
+    // then re-inserted at the section end (i.e. after them). Inserting the
+    // managed block first here would make `patch_build` (what `init` writes)
+    // differ from `resync_build` (what `update --check` gates on), so every new
+    // consumer repo's first orb PR would fail CI on wiring drift it never
+    // introduced.
     patch_step0b_gen_orb_mcp_orb(content, &mut lines, opts, &mut report);
     patch_step1_orb_tools(content, &mut lines, opts, &mut report);
+    patch_step0_gen_circleci_orb_orb(content, &mut lines, opts, &mut report);
     patch_step2_build_regen_jobs(content, &mut lines, opts, &mut report);
     patch_step3_pack_validate(content, &mut lines, opts, &mut report);
     patch_step5_orb_release_workflow(content, &mut lines, opts, &mut report);
@@ -2071,6 +2081,39 @@ workflows:
         assert!(
             report.insertions.iter().any(|s| s.contains("orb-tools")),
             "report missing orb-tools insertion"
+        );
+    }
+
+    #[test]
+    fn patch_build_output_is_a_fixed_point_of_resync() {
+        // `init` writes patch_build(fresh); CI then gates on `update --check`,
+        // which is resync_build. If the two disagree, EVERY new consumer repo's
+        // first orb PR fails CI on wiring drift it cannot have introduced.
+        let opts = make_opts();
+        let (patched, _) = patch_build(BUILD_FIXTURE, &opts);
+        let (resynced, _) = resync_build(&patched, &opts);
+        assert_eq!(
+            patched, resynced,
+            "patch_build output must be unchanged by resync_build"
+        );
+    }
+
+    #[test]
+    fn unmarked_orb_entries_precede_the_managed_block() {
+        // The canonical layout (what resync produces, since strip_managed leaves
+        // the unmarked entries in place and the managed block is re-inserted at
+        // the end of the orbs section): unmarked orb pins first, managed block
+        // last. patch_build must emit the same order on a fresh config.
+        let (patched, _) = patch_build(BUILD_FIXTURE, &make_opts());
+        let orb_tools_at = patched
+            .find("orb-tools: circleci/orb-tools@")
+            .expect("orb-tools entry missing");
+        let managed_at = patched
+            .find("# >>> gen-circleci-orb")
+            .expect("managed marker missing");
+        assert!(
+            orb_tools_at < managed_at,
+            "orb-tools must be declared before the managed gen-circleci-orb block:\n{patched}"
         );
     }
 
