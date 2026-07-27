@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - chore-bump self-pin to gen-circleci-orb 0.1.3(pr [#235])
 
+### Fixed
+
+- emit unmarked orb pins before the managed block(pr [#234])
+
 ## [0.1.3] - 2026-07-27
 
 ### Added
@@ -803,6 +807,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#231]: https://github.com/jerus-org/gen-circleci-orb/pull/231
 [#232]: https://github.com/jerus-org/gen-circleci-orb/pull/232
 [#235]: https://github.com/jerus-org/gen-circleci-orb/pull/235
+[#234]: https://github.com/jerus-org/gen-circleci-orb/pull/234
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.3...HEAD
 [0.1.3]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.1...v0.1.2
