@@ -33,6 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - deps: update rust crate trycmd to 1.2.1(pr [#225])
 - deps: update dependency gen-orb-mcp to v0.2.2(pr [#230])
 - deps: update dependency toolkit to v7(pr [#231])
+- deps: lock file maintenance(pr [#232])
 
 ## [0.1.2] - 2026-07-20
 
@@ -794,6 +795,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#225]: https://github.com/jerus-org/gen-circleci-orb/pull/225
 [#230]: https://github.com/jerus-org/gen-circleci-orb/pull/230
 [#231]: https://github.com/jerus-org/gen-circleci-orb/pull/231
+[#232]: https://github.com/jerus-org/gen-circleci-orb/pull/232
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.2...HEAD
 [0.1.2]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.0...v0.1.1
