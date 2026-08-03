@@ -362,6 +362,8 @@ pub(crate) fn build_bootstrap_config(
                 Some(git_push_subcommands.to_vec())
             },
             custom_files: None,
+            crate_wait_attempts: None,
+            crate_wait_seconds: None,
         }),
         ci: None, // populated by run() after gathering extras
         orbs: None,

@@ -432,6 +432,26 @@ pub(crate) fn resolve_apt_packages(
 /// CLI flags take precedence over `[orb].cargo_tools`. Unlike apt packages,
 /// cargo tools carry no MCP/record baseline — the list is exactly what the
 /// consumer asked for.
+/// Resolve the crates.io propagation window from `[orb]`, falling back to the
+/// generator default (ten minutes). A consumer tunes this when their release
+/// keeps outrunning the gate, without waiting for a generator release (#236).
+pub(crate) fn resolve_crate_wait(
+    config: &crate::orb_config::OrbConfig,
+) -> crate::orb_generator::render::CrateWait {
+    let default = crate::orb_generator::render::CrateWait::default();
+    let orb = config.orb.as_ref();
+    crate::orb_generator::render::CrateWait {
+        attempts: orb
+            .and_then(|o| o.crate_wait_attempts)
+            .filter(|n| *n > 0)
+            .unwrap_or(default.attempts),
+        seconds: orb
+            .and_then(|o| o.crate_wait_seconds)
+            .filter(|n| *n > 0)
+            .unwrap_or(default.seconds),
+    }
+}
+
 pub(crate) fn resolve_cargo_tools(
     cli: &[String],
     config: &crate::orb_config::OrbConfig,
@@ -538,6 +558,7 @@ impl Generate {
             ),
             apt_packages: resolve_apt_packages(&self.apt_packages, &orb_config),
             cargo_tools,
+            crate_wait: resolve_crate_wait(&orb_config),
         };
 
         let files = orb_generator::generate(&cli_def, &opts, Some(&orb_config));

@@ -131,6 +131,17 @@ pub struct OrbSection {
     /// fully owned by (CLI subcommands ∪ config): anything in the generated dirs
     /// that is neither generated nor listed here is pruned.
     pub custom_files: Option<Vec<String>>,
+    /// How many times the generated Dockerfile retries `cargo install` while
+    /// waiting for crates.io to serve the version being released. Default 40.
+    ///
+    /// The container is built from the crate that was just published, so it
+    /// races the sparse index. When the gate expires the release stalls
+    /// half-published — crate on crates.io, no container, no orb — so raise
+    /// this (or `crate_wait_seconds`) if a release keeps outrunning it. A zero
+    /// is ignored: the gate is not optional.
+    pub crate_wait_attempts: Option<u32>,
+    /// Seconds between those retries. Default 15.
+    pub crate_wait_seconds: Option<u32>,
 }
 
 #[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq)]

@@ -63,6 +63,26 @@ with the **binstall** install method only — it relies on the Dockerfile's Rust
 it with `apt`/`local` is an error. It assumes each tool's binary shares its crate name (true for
 `cargo-*` tools generally).
 
+### `crate_wait_attempts` / `crate_wait_seconds` — the crates.io propagation gate
+
+```toml
+[orb]
+crate_wait_attempts = 40   # default: 40
+crate_wait_seconds = 15    # default: 15  → a ten-minute window
+```
+
+The orb's container is built from the crate that was **just** published, so the build races the
+crates.io sparse index. The generated Dockerfile retries `cargo install <binary> --version
+"${CRATE_VERSION}"` on a bounded loop, dropping cargo's cached index entries between attempts so
+each retry is a real re-query. The bound and the loud failure are deliberate: without the pinned
+version the install would silently resolve the *previous* release and ship a container whose binary
+does not match its own tag.
+
+Only the size of the window is tunable. If the gate expires the release stalls **half-published** —
+the crate is on crates.io, the container was never built, and the orb was never published — and
+recovering means re-running the tag's release workflow by hand. Raise these if a release keeps
+outrunning the window; the default is twice the window that proved too short in practice.
+
 ### `git_push_subcommands` — subcommands that push to git
 
 Some tools have a subcommand that pushes to git (committing generated artifacts back, say). List

@@ -11,8 +11,9 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && { n=0; until cargo install gen-circleci-orb --version "${CRATE_VERSION}" --locked; do \
          n=$((n+1)); \
-         [ "$n" -ge 20 ] && echo "crates.io index never served ${CRATE_VERSION}" >&2 && exit 1; \
+         [ "$n" -ge 40 ] && echo "crates.io index never served ${CRATE_VERSION}" >&2 && exit 1; \
          echo "waiting for crates.io index to propagate ${CRATE_VERSION} (attempt $n)"; \
+         rm -rf "${CARGO_HOME:-/usr/local/cargo}"/registry/index/*/.cache; \
          sleep 15; \
        done; }
 

@@ -33,6 +33,32 @@ pub struct GenerateOpts {
     /// cargo-binstall in the builder stage, with their binaries copied into the
     /// runtime. Binstall install method only.
     pub cargo_tools: Vec<String>,
+    /// How long the generated Dockerfile waits for crates.io to serve the
+    /// version being released.
+    pub crate_wait: CrateWait,
+}
+
+/// The generated Dockerfile's crates.io propagation gate.
+///
+/// The container is built from the crate that was *just* published, so the
+/// build races the sparse index. The gate retries a bounded number of times and
+/// then fails loudly — never silently installing the previous version (#200).
+/// Only the size of the window is tunable: a release that outruns it stalls
+/// half-published, with the crate on crates.io and no container or orb (#236).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CrateWait {
+    pub attempts: u32,
+    pub seconds: u32,
+}
+
+/// Ten minutes: twice the window that proved too short on the 0.1.4 release.
+impl Default for CrateWait {
+    fn default() -> Self {
+        Self {
+            attempts: 40,
+            seconds: 15,
+        }
+    }
 }
 
 /// Generate all orb artifact strings keyed by their relative output path.
@@ -63,15 +89,7 @@ pub fn generate(
     // Dockerfile
     files.insert(
         PathBuf::from("Dockerfile"),
-        render_dockerfile(
-            &cli.binary_name,
-            &opts.install_method,
-            &opts.base_image,
-            &opts.builder_image,
-            opts.circleci_cli_version.as_deref(),
-            &opts.apt_packages,
-            &opts.cargo_tools,
-        ),
+        render_dockerfile(&cli.binary_name, opts),
     );
 
     // src/jobs/<name>.yml for each job_group in config
@@ -534,15 +552,17 @@ fn render_apt_install(pkgs: &[&str]) -> String {
     s
 }
 
-fn render_dockerfile(
-    binary: &str,
-    method: &InstallMethod,
-    base_image: &str,
-    builder_image: &str,
-    circleci_cli_version: Option<&str>,
-    apt_packages: &[String],
-    cargo_tools: &[String],
-) -> String {
+fn render_dockerfile(binary: &str, opts: &GenerateOpts) -> String {
+    let GenerateOpts {
+        install_method: method,
+        base_image,
+        builder_image,
+        apt_packages,
+        cargo_tools,
+        crate_wait,
+        ..
+    } = opts;
+    let circleci_cli_version = opts.circleci_cli_version.as_deref();
     match method {
         InstallMethod::Binstall => {
             let runtime_pkgs = sorted_packages(apt_packages);
@@ -574,17 +594,28 @@ fn render_dockerfile(
             // crates.io propagation gate (cargo-only — the builder image has no
             // curl/wget/python), waiting out sparse-index lag and failing LOUD on
             // timeout instead of silently installing the prior version (#200).
+            //
+            // The window is deliberately generous. A gate that expires while the
+            // crate is published but not yet served leaves the release
+            // half-published — crate on crates.io, no container, no orb — and
+            // recovering means re-running the tag's workflow by hand (#236).
+            let CrateWait { attempts, seconds } = crate_wait;
             out.push_str(&format!(
                 "    && {{ n=0; until cargo install {binary} --version \"${{CRATE_VERSION}}\" --locked; do \\\n"
             ));
             out.push_str("         n=$((n+1)); \\\n");
-            out.push_str(
-                "         [ \"$n\" -ge 20 ] && echo \"crates.io index never served ${CRATE_VERSION}\" >&2 && exit 1; \\\n",
-            );
+            out.push_str(&format!(
+                "         [ \"$n\" -ge {attempts} ] && echo \"crates.io index never served ${{CRATE_VERSION}}\" >&2 && exit 1; \\\n",
+            ));
             out.push_str(
                 "         echo \"waiting for crates.io index to propagate ${CRATE_VERSION} (attempt $n)\"; \\\n",
             );
-            out.push_str("         sleep 15; \\\n");
+            // Drop cargo's cached sparse-index entries so the next attempt is a
+            // real re-query rather than a replay of the lookup that just missed.
+            out.push_str(
+                "         rm -rf \"${CARGO_HOME:-/usr/local/cargo}\"/registry/index/*/.cache; \\\n",
+            );
+            out.push_str(&format!("         sleep {seconds}; \\\n"));
             out.push_str("       done; }\n");
             // Extra cargo tools the executor orchestrates (cargo_tools): install
             // them into the builder here, then COPY their binaries into the
@@ -1537,6 +1568,7 @@ mod tests {
             circleci_cli_version: None,
             apt_packages: vec![],
             cargo_tools: vec![],
+            crate_wait: CrateWait::default(),
         }
     }
 
@@ -2829,17 +2861,72 @@ mod tests {
         );
     }
 
+    /// The retry loop IS the crates.io propagation gate. Five minutes was not
+    /// enough on the 0.1.4 release: the crate had published, the index had not
+    /// caught up, and the release stalled half-published (#236).
+    #[test]
+    fn dockerfile_crate_wait_defaults_to_ten_minutes() {
+        let dockerfile = render_dockerfile("mytool", &default_opts());
+        assert!(
+            dockerfile.contains(r#"[ "$n" -ge 40 ]"#),
+            "default gate must allow 40 attempts:\n{dockerfile}"
+        );
+        assert!(
+            dockerfile.contains("sleep 15"),
+            "default gate must sleep 15s between attempts:\n{dockerfile}"
+        );
+        assert!(
+            dockerfile.contains("crates.io index never served ${CRATE_VERSION}"),
+            "the gate must still fail loudly on timeout:\n{dockerfile}"
+        );
+    }
+
+    /// A consumer can widen the window without waiting for a generator release.
+    #[test]
+    fn dockerfile_crate_wait_is_configurable() {
+        let opts = GenerateOpts {
+            crate_wait: CrateWait {
+                attempts: 60,
+                seconds: 30,
+            },
+            ..default_opts()
+        };
+        let dockerfile = render_dockerfile("mytool", &opts);
+        assert!(
+            dockerfile.contains(r#"[ "$n" -ge 60 ]"#) && dockerfile.contains("sleep 30"),
+            "configured attempts/interval must reach the Dockerfile:\n{dockerfile}"
+        );
+    }
+
+    /// cargo caches sparse-index lookups under $CARGO_HOME. Dropping that cache
+    /// between attempts makes each retry a real re-query, so waiting longer can
+    /// actually help.
+    #[test]
+    fn dockerfile_retry_busts_the_sparse_index_cache() {
+        let dockerfile = render_dockerfile("mytool", &default_opts());
+        let bust = dockerfile
+            .find("registry/index")
+            .unwrap_or_else(|| panic!("no index cache bust:\n{dockerfile}"));
+        let fail = dockerfile
+            .find("crates.io index never served")
+            .expect("gate must fail loudly");
+        assert!(
+            bust > fail,
+            "the cache bust belongs inside the retry body:\n{dockerfile}"
+        );
+    }
+
     #[test]
     fn dockerfile_binstall_builder_packages_sorted() {
         // SonarQube S7018: package lists must be sorted alphanumerically.
         let dockerfile = render_dockerfile(
             "mytool",
-            &InstallMethod::Binstall,
-            "debian:13-slim",
-            "rust:1-slim-trixie",
-            None,
-            &[],
-            &[],
+            &GenerateOpts {
+                install_method: InstallMethod::Binstall,
+                base_image: "debian:13-slim".to_string(),
+                builder_image: "rust:1-slim-trixie".to_string(),
+                ..default_opts()
+            },
         );
         // builder stage: a self-sufficient native-build toolchain, alphabetical,
         // one package per line (S7020).
@@ -2870,12 +2957,12 @@ mod tests {
         // on timeout rather than silently installing the wrong version.
         let dockerfile = render_dockerfile(
             "mytool",
-            &InstallMethod::Binstall,
-            "debian:13-slim",
-            "rust:1-slim-trixie",
-            None,
-            &[],
-            &[],
+            &GenerateOpts {
+                install_method: InstallMethod::Binstall,
+                base_image: "debian:13-slim".to_string(),
+                builder_image: "rust:1-slim-trixie".to_string(),
+                ..default_opts()
+            },
         );
         assert!(
             dockerfile.contains("ARG CRATE_VERSION"),
@@ -2909,12 +2996,13 @@ mod tests {
         // limit. Every apt package must be on its own `\`-continued line.
         let dockerfile = render_dockerfile(
             "mytool",
-            &InstallMethod::Binstall,
-            "debian:13-slim",
-            "rust:1-slim-trixie",
-            None,
-            &["extra-pkg".to_string()],
-            &[],
+            &GenerateOpts {
+                install_method: InstallMethod::Binstall,
+                base_image: "debian:13-slim".to_string(),
+                builder_image: "rust:1-slim-trixie".to_string(),
+                apt_packages: ["extra-pkg".to_string()].to_vec(),
+                ..default_opts()
+            },
         );
         // builder fixed toolchain: each package on its own continued line.
         for pkg in [
@@ -2955,12 +3043,13 @@ mod tests {
         // single-stage Apt image, not just Binstall.
         let local = render_dockerfile(
             "mytool",
-            &InstallMethod::Local,
-            "debian:13-slim",
-            "rust:1-slim-trixie",
-            None,
-            &["libpq-dev".to_string()],
-            &[],
+            &GenerateOpts {
+                install_method: InstallMethod::Local,
+                base_image: "debian:13-slim".to_string(),
+                builder_image: "rust:1-slim-trixie".to_string(),
+                apt_packages: ["libpq-dev".to_string()].to_vec(),
+                ..default_opts()
+            },
         );
         assert!(
             local.contains("    libpq-dev \\\n") && local.contains("    ca-certificates \\\n"),
@@ -2968,12 +3057,12 @@ mod tests {
         );
         let apt = render_dockerfile(
             "mytool",
-            &InstallMethod::Apt,
-            "debian:13-slim",
-            "rust:1-slim-trixie",
-            None,
-            &[],
-            &[],
+            &GenerateOpts {
+                install_method: InstallMethod::Apt,
+                base_image: "debian:13-slim".to_string(),
+                builder_image: "rust:1-slim-trixie".to_string(),
+                ..default_opts()
+            },
         );
         assert!(
             apt.contains("    git \\\n") && apt.contains("    mytool \\\n"),
@@ -2988,12 +3077,12 @@ mod tests {
         // generator no longer hardcodes `rust:1-slim-trixie`).
         let dockerfile = render_dockerfile(
             "mytool",
-            &InstallMethod::Binstall,
-            "debian:13-slim",
-            "rust:1-slim-trixie@sha256:deadbeef",
-            None,
-            &[],
-            &[],
+            &GenerateOpts {
+                install_method: InstallMethod::Binstall,
+                base_image: "debian:13-slim".to_string(),
+                builder_image: "rust:1-slim-trixie@sha256:deadbeef".to_string(),
+                ..default_opts()
+            },
         );
         assert!(
             dockerfile.contains("FROM rust:1-slim-trixie@sha256:deadbeef AS builder"),
@@ -3014,12 +3103,12 @@ mod tests {
     fn dockerfile_local_uses_copy_not_cargo_install() {
         let dockerfile = render_dockerfile(
             "mytool",
-            &InstallMethod::Local,
-            "debian:13-slim",
-            "rust:1-slim-trixie",
-            None,
-            &[],
-            &[],
+            &GenerateOpts {
+                install_method: InstallMethod::Local,
+                base_image: "debian:13-slim".to_string(),
+                builder_image: "rust:1-slim-trixie".to_string(),
+                ..default_opts()
+            },
         );
         assert!(
             dockerfile.contains("COPY mytool /usr/local/bin/mytool"),
@@ -3035,12 +3124,12 @@ mod tests {
     fn dockerfile_local_has_no_rust_builder_stage() {
         let dockerfile = render_dockerfile(
             "mytool",
-            &InstallMethod::Local,
-            "debian:13-slim",
-            "rust:1-slim-trixie",
-            None,
-            &[],
-            &[],
+            &GenerateOpts {
+                install_method: InstallMethod::Local,
+                base_image: "debian:13-slim".to_string(),
+                builder_image: "rust:1-slim-trixie".to_string(),
+                ..default_opts()
+            },
         );
         assert!(
             !dockerfile.contains("FROM rust"),
@@ -3056,12 +3145,12 @@ mod tests {
     fn dockerfile_local_runtime_has_ca_certs_and_git() {
         let dockerfile = render_dockerfile(
             "mytool",
-            &InstallMethod::Local,
-            "debian:13-slim",
-            "rust:1-slim-trixie",
-            None,
-            &[],
-            &[],
+            &GenerateOpts {
+                install_method: InstallMethod::Local,
+                base_image: "debian:13-slim".to_string(),
+                builder_image: "rust:1-slim-trixie".to_string(),
+                ..default_opts()
+            },
         );
         assert!(
             dockerfile.contains("ca-certificates"),
@@ -3077,12 +3166,12 @@ mod tests {
     fn dockerfile_local_has_circleci_user_and_workdir() {
         let dockerfile = render_dockerfile(
             "mytool",
-            &InstallMethod::Local,
-            "debian:13-slim",
-            "rust:1-slim-trixie",
-            None,
-            &[],
-            &[],
+            &GenerateOpts {
+                install_method: InstallMethod::Local,
+                base_image: "debian:13-slim".to_string(),
+                builder_image: "rust:1-slim-trixie".to_string(),
+                ..default_opts()
+            },
         );
         assert!(
             dockerfile.contains("useradd") && dockerfile.contains("circleci"),
@@ -3102,12 +3191,12 @@ mod tests {
     fn dockerfile_local_does_not_run_as_root() {
         let dockerfile = render_dockerfile(
             "mytool",
-            &InstallMethod::Local,
-            "debian:13-slim",
-            "rust:1-slim-trixie",
-            None,
-            &[],
-            &[],
+            &GenerateOpts {
+                install_method: InstallMethod::Local,
+                base_image: "debian:13-slim".to_string(),
+                builder_image: "rust:1-slim-trixie".to_string(),
+                ..default_opts()
+            },
         );
         let copy_pos = dockerfile.find("COPY mytool").expect("COPY not found");
         let user_pos = dockerfile.find("USER circleci").expect("USER not found");
@@ -3121,12 +3210,13 @@ mod tests {
     fn dockerfile_local_with_circleci_cli_includes_installer_stage() {
         let dockerfile = render_dockerfile(
             "mytool",
-            &InstallMethod::Local,
-            "debian:13-slim",
-            "rust:1-slim-trixie",
-            Some("0.1.36202"),
-            &[],
-            &[],
+            &GenerateOpts {
+                install_method: InstallMethod::Local,
+                base_image: "debian:13-slim".to_string(),
+                builder_image: "rust:1-slim-trixie".to_string(),
+                circleci_cli_version: Some("0.1.36202".to_string()),
+                ..default_opts()
+            },
         );
         assert!(
             dockerfile.contains("AS cli-installer"),

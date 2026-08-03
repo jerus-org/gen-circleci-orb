@@ -366,6 +366,8 @@ steps:
                 source_url: None,
                 git_push_subcommands: None,
                 custom_files: None,
+                crate_wait_attempts: None,
+                crate_wait_seconds: None,
             }),
             ci: None,
             orbs: None,
