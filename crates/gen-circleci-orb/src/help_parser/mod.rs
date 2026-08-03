@@ -6,11 +6,24 @@ pub use types::{CliDefinition, ParamType, Parameter, SubCommand};
 use anyhow::{Context, Result};
 use std::process::Command;
 
+/// Caller-supplied parser settings, sourced from `gen-circleci-orb.toml`.
+#[derive(Debug, Default, Clone)]
+pub struct ParseOptions {
+    /// Downgrade the coverage guard from a hard failure to a warning.
+    ///
+    /// The guard fails generation when a declaration in `--help` produced no
+    /// orb parameter, because the alternative — the historical behaviour — is a
+    /// job that silently cannot supply an input the CLI requires (#240/#241/#242).
+    /// Set `[orb] allow_unparsed_help = true` to ship anyway while the parser is
+    /// taught the shape.
+    pub allow_unparsed_help: bool,
+}
+
 /// Execute `<binary> --help` (and recursively `<binary> <sub> --help`) to
 /// build a `CliDefinition` from the program's help text.
-pub fn parse_binary(binary: &str) -> Result<CliDefinition> {
+pub fn parse_binary(binary: &str, opts: &ParseOptions) -> Result<CliDefinition> {
     let top_help = run_help(binary, &[])?;
-    clap::parse_top_level(binary, &top_help)
+    clap::parse_top_level(binary, &top_help, opts)
 }
 
 pub(crate) fn run_help(binary: &str, subcommand: &[&str]) -> Result<String> {

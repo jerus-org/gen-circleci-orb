@@ -91,6 +91,24 @@ is later suppressed (see `generate_job`).
 Authorises hand-authored orb files the generator does not produce so they survive the prune step.
 Covered in the [Advanced Configuration Guide](advanced-configuration.md#escape-hatches-extra_job-and-custom_files).
 
+### `allow_unparsed_help` — generate despite a gap in the parse
+
+```toml
+[orb]
+allow_unparsed_help = true   # default: false
+```
+
+Generation **fails** when the binary's `--help` declares an option or argument that produced no
+orb parameter. The alternative — the behaviour before this guard existed — is a generated job that
+silently cannot supply an input the CLI requires, with `generate` reporting success and
+`update --check` reporting the wiring up to date, because the wiring *is* fine and it is the orb
+content that is wrong.
+
+The error names the declaration it could not turn into a parameter. Prefer fixing the CLI's help
+shape (or reporting the shape so the generator can learn it). Set this to `true` only to keep
+shipping while that happens: the missing input is then logged as a warning instead, and the orb
+goes out with the gap.
+
 ## `[ci]` — release-pipeline wiring
 
 ```toml
