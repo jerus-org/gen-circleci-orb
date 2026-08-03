@@ -19,6 +19,22 @@ pub const DEFAULT_MCP_EARLIEST_VERSION: &str = "0.0.1";
 /// gate stays authoritative; Renovate keeps this default current.
 pub const DEFAULT_GEN_ORB_MCP_ORB_VERSION: &str = "0.1.48";
 
+/// The values `init` cannot do anything without: the binary it introspects and
+/// the five pieces of pipeline wiring it patches into `.circleci/config.yml`.
+///
+/// Each is resolved from the CLI flag, then the existing config, then the
+/// dialogue — so a re-run never asks for what the config already records, and a
+/// first run never has to be told six flags up front (#226).
+#[derive(Debug)]
+pub(crate) struct GatheredCore {
+    pub binary: String,
+    pub build_workflow: String,
+    pub release_workflow: String,
+    pub crate_tag_prefix: String,
+    pub release_after_job: String,
+    pub docker_namespace: String,
+}
+
 /// Values resolved by the interactive dialogue (or non-interactive fallback).
 /// These are used by both `PatchOpts` and the bootstrap config.
 pub(crate) struct GatheredExtras {
@@ -32,8 +48,13 @@ pub(crate) struct GatheredExtras {
     pub record: Option<RecordConfig>,
 }
 
-fn is_non_interactive(dry_run: bool) -> bool {
-    dry_run || std::env::var("CI").is_ok() || !console::Term::stderr().is_term()
+/// True when there is nobody to ask: no terminal, or a CI run.
+///
+/// `--dry-run` is deliberately NOT part of this. A dry run still has to gather
+/// the values before it has anything to preview; suppressing the dialogue made
+/// `init --dry-run` demand six flags it could simply have asked for (#226).
+fn is_non_interactive() -> bool {
+    std::env::var("CI").is_ok() || !console::Term::stderr().is_term()
 }
 
 /// Assemble the `[record]` config from explicit env-var names. Returns `Ok(None)`
@@ -154,8 +175,9 @@ pub(crate) fn detect_git_push_subcommands(cli: &CliDefinition) -> Vec<String> {
 #[derive(Debug, clap::Args)]
 pub struct Init {
     /// Name of the binary to introspect (must be on PATH).
+    /// Falls back to `[orb] binary` in the config; prompted for if neither is set.
     #[arg(long)]
-    pub binary: String,
+    pub binary: Option<String>,
 
     /// CircleCI namespace(s) to publish the orb under as a public orb (repeatable).
     /// Must be set correctly on first init — visibility cannot be changed after the orb is created.
@@ -169,12 +191,14 @@ pub struct Init {
     pub private_orb_namespaces: Vec<String>,
 
     /// Name of the build/validation workflow to patch.
+    /// Falls back to `[ci] build_workflow` in the config; prompted for if neither is set.
     #[arg(long)]
-    pub build_workflow: String,
+    pub build_workflow: Option<String>,
 
     /// Name of the release workflow to patch.
+    /// Falls back to `[ci] release_workflow` in the config; prompted for if neither is set.
     #[arg(long)]
-    pub release_workflow: String,
+    pub release_workflow: Option<String>,
 
     /// Job in the build workflow that regenerate-orb should require.
     #[arg(long)]
@@ -183,15 +207,17 @@ pub struct Init {
     /// Tag prefix used by `toolkit/release_crate` for the crate (e.g. `gen-orb-mcp-v`).
     /// Used to filter the `orb-release:` workflow trigger in config.yml and to normalise
     /// `CIRCLE_TAG` for `orb-tools/publish`.
+    /// Falls back to `[ci] crate_tag_prefix` in the config; prompted for if neither is set.
     #[arg(long)]
-    pub crate_tag_prefix: String,
+    pub crate_tag_prefix: Option<String>,
 
     /// Job in the release workflow after which the generated release jobs
     /// (build-binary-release, pack-orb-release, build-container, ensure-orb-registered)
     /// should be gated. This is the sole mechanism for specifying where the generated
     /// jobs plug into the existing pipeline topology.
+    /// Falls back to `[ci] release_after_job` in the config; prompted for if neither is set.
     #[arg(long)]
-    pub release_after_job: String,
+    pub release_after_job: Option<String>,
 
     /// Output directory for the generated orb source (relative to repo root).
     #[arg(long, default_value = "orb")]
@@ -210,8 +236,9 @@ pub struct Init {
     pub docker_orb_version: String,
 
     /// Docker Hub (or registry) namespace for the built container image.
+    /// Falls back to `[ci] docker_namespace` in the config; prompted for if neither is set.
     #[arg(long)]
-    pub docker_namespace: String,
+    pub docker_namespace: Option<String>,
 
     /// CircleCI context name holding Docker Hub credentials (DOCKER_LOGIN, DOCKER_PASSWORD).
     /// Prompted interactively if not supplied.
@@ -377,7 +404,11 @@ impl Init {
     /// Non-interactive mode assembles from those sources (erroring if enabled but a
     /// name is missing); interactive mode confirms the need then prompts for each
     /// env-var name (no defaults beyond the user's own prior config).
-    fn gather_record(&self, existing: &OrbConfig) -> Result<Option<RecordConfig>> {
+    fn gather_record(
+        &self,
+        existing: &OrbConfig,
+        interactive: bool,
+    ) -> Result<Option<RecordConfig>> {
         let ex = existing.record.as_ref();
         let resolve = |cli: Option<&String>, prev: Option<&str>| -> Option<String> {
             cli.filter(|s| !s.is_empty())
@@ -414,7 +445,7 @@ impl Init {
             ex.map(|r| r.contexts.clone()).unwrap_or_default()
         };
 
-        if is_non_interactive(self.dry_run) {
+        if !interactive {
             let enabled = self.record || ex.map(|r| r.enabled).unwrap_or(false);
             return build_record_config(
                 enabled,
@@ -485,15 +516,140 @@ impl Init {
         )
     }
 
+    /// Resolve the six values `init` cannot proceed without.
+    ///
+    /// Interactive: prompt for each one the CLI and config did not supply,
+    /// offering the config value (or a sensible guess) as the default.
+    /// Non-interactive: fail naming **every** value still missing, so one run
+    /// tells the caller the whole set rather than one flag at a time.
+    pub(crate) fn gather_core(
+        &self,
+        existing: &OrbConfig,
+        interactive: bool,
+    ) -> Result<GatheredCore> {
+        let ci = existing.ci.as_ref();
+        let orb = existing.orb.as_ref();
+
+        let binary = self
+            .binary
+            .clone()
+            .or_else(|| orb.and_then(|o| o.binary.clone()));
+        let build_workflow = self
+            .build_workflow
+            .clone()
+            .or_else(|| ci.and_then(|c| c.build_workflow.clone()));
+        let release_workflow = self
+            .release_workflow
+            .clone()
+            .or_else(|| ci.and_then(|c| c.release_workflow.clone()));
+        let crate_tag_prefix = self
+            .crate_tag_prefix
+            .clone()
+            .or_else(|| ci.and_then(|c| c.crate_tag_prefix.clone()));
+        let release_after_job = self
+            .release_after_job
+            .clone()
+            .or_else(|| ci.and_then(|c| c.release_after_job.clone()));
+        let docker_namespace = self
+            .docker_namespace
+            .clone()
+            .or_else(|| ci.and_then(|c| c.docker_namespace.clone()));
+
+        if !interactive {
+            let missing: Vec<&str> = [
+                (binary.is_none(), "--binary"),
+                (build_workflow.is_none(), "--build-workflow"),
+                (release_workflow.is_none(), "--release-workflow"),
+                (crate_tag_prefix.is_none(), "--crate-tag-prefix"),
+                (release_after_job.is_none(), "--release-after-job"),
+                (docker_namespace.is_none(), "--docker-namespace"),
+            ]
+            .into_iter()
+            .filter_map(|(missing, flag)| missing.then_some(flag))
+            .collect();
+            if !missing.is_empty() {
+                anyhow::bail!(
+                    "init needs these values and there is no terminal to ask \
+                     (running under CI, or output redirected): {}. \
+                     Supply them as flags, or record them in gen-circleci-orb.toml.",
+                    missing.join(", ")
+                );
+            }
+            return Ok(GatheredCore {
+                binary: binary.unwrap_or_default(),
+                build_workflow: build_workflow.unwrap_or_default(),
+                release_workflow: release_workflow.unwrap_or_default(),
+                crate_tag_prefix: crate_tag_prefix.unwrap_or_default(),
+                release_after_job: release_after_job.unwrap_or_default(),
+                docker_namespace: docker_namespace.unwrap_or_default(),
+            });
+        }
+
+        use dialoguer::Input;
+        let ask = |label: &str, current: Option<String>| -> Result<String> {
+            let mut input = Input::<String>::new().with_prompt(label);
+            if let Some(default) = current.filter(|s| !s.is_empty()) {
+                input = input.default(default);
+            }
+            Ok(input.interact_text()?.trim().to_string())
+        };
+        let resolve = |label: &str, value: Option<String>| -> Result<String> {
+            match value.filter(|s| !s.is_empty()) {
+                Some(v) => Ok(v),
+                None => ask(label, None),
+            }
+        };
+
+        let binary = resolve(
+            "Binary to introspect (must be on PATH — its --help drives every generated job)",
+            binary,
+        )?;
+        let build_workflow = resolve(
+            "Build/validation workflow to patch (a workflow name in .circleci/config.yml)",
+            build_workflow,
+        )?;
+        let release_workflow = resolve(
+            "Release workflow to patch (where the orb is published)",
+            release_workflow,
+        )?;
+        let crate_tag_prefix = match crate_tag_prefix.filter(|s| !s.is_empty()) {
+            Some(v) => v,
+            // The convention is `<crate>-v`, and the binary name is the crate
+            // name in every workspace this targets — so offer it, don't impose it.
+            None => ask(
+                "Crate tag prefix used by the release (e.g. my-crate-v)",
+                Some(format!("{binary}-v")),
+            )?,
+        };
+        let release_after_job = resolve(
+            "Job in the release workflow the generated release jobs should follow",
+            release_after_job,
+        )?;
+        let docker_namespace = resolve(
+            "Docker registry namespace for the orb's executor image (e.g. myorg)",
+            docker_namespace,
+        )?;
+
+        Ok(GatheredCore {
+            binary,
+            build_workflow,
+            release_workflow,
+            crate_tag_prefix,
+            release_after_job,
+            docker_namespace,
+        })
+    }
+
     pub(crate) fn gather_extras(
         &self,
         detected: &[String],
         existing: &OrbConfig,
+        interactive: bool,
     ) -> Result<GatheredExtras> {
         // Resolution order: CLI flag > existing config > auto-detected / hardcoded default.
         let existing_ci = existing.ci.as_ref();
         let existing_orb = existing.orb.as_ref();
-        let record = self.gather_record(existing)?;
+        let record = self.gather_record(existing, interactive)?;
 
         let effective_push = if !self.git_push_subcommands.is_empty() {
             self.git_push_subcommands.clone()
@@ -504,7 +660,7 @@ impl Init {
                 .unwrap_or_else(|| detected.to_vec())
         };
 
-        if is_non_interactive(self.dry_run) {
+        if !interactive {
             return Ok(GatheredExtras {
                 home_url: self
                     .home_url
@@ -703,8 +859,12 @@ impl Init {
     /// prompt per subcommand, defaulting to reserved so the user confirms/overrides
     /// in the initial scaffold. Non-interactive (CI/dry-run): reserve all (the safe
     /// default), so the scaffold still records the choice explicitly.
-    fn resolve_interactive(&self, present: &[String]) -> Result<Vec<(String, bool)>> {
-        if is_non_interactive(self.dry_run) {
+    fn resolve_interactive(
+        &self,
+        present: &[String],
+        interactive: bool,
+    ) -> Result<Vec<(String, bool)>> {
+        if !interactive {
             return Ok(present.iter().map(|n| (n.clone(), true)).collect());
         }
         present
@@ -722,10 +882,18 @@ impl Init {
     }
 
     pub fn run(&self) -> Result<()> {
+        let interactive = !is_non_interactive();
+
+        // The binary is itself one of the gathered values, so the config is read
+        // and the dialogue run before there is anything to introspect.
+        let config_path = std::path::Path::new("gen-circleci-orb.toml");
+        let existing_config = crate::orb_config::load_config(config_path)?;
+        let core = self.gather_core(&existing_config, interactive)?;
+
         // Parse binary early: detect push-capable subcommands (for dialogue default)
         // and subcommands with a required orb_path param (for config defaults).
         let (detected_push, detected_orb_path, present_interactive) =
-            match crate::help_parser::parse_binary(&self.binary) {
+            match crate::help_parser::parse_binary(&core.binary) {
                 Ok(cli) => (
                     detect_git_push_subcommands(&cli),
                     detect_orb_path_subcommands(&cli),
@@ -734,9 +902,7 @@ impl Init {
                 Err(_) => (vec![], vec![], vec![]),
             };
 
-        let config_path = std::path::Path::new("gen-circleci-orb.toml");
-        let existing_config = crate::orb_config::load_config(config_path)?;
-        let extras = self.gather_extras(&detected_push, &existing_config)?;
+        let extras = self.gather_extras(&detected_push, &existing_config, interactive)?;
         let namespaces: Vec<String> = self
             .public_orb_namespaces
             .iter()
@@ -747,7 +913,7 @@ impl Init {
         // Step 1: generate orb source files
         tracing::info!("Generating orb source into ./{}", self.orb_dir);
         let gen = Generate {
-            binary: Some(self.binary.clone()),
+            binary: Some(core.binary.clone()),
             namespaces: namespaces.clone(),
             output: PathBuf::from("."),
             orb_dir: Some(self.orb_dir.clone()),
@@ -770,18 +936,18 @@ impl Init {
 
         // Step 2: patch CI configs
         let opts = ci_patcher::PatchOpts {
-            binary: self.binary.clone(),
+            binary: core.binary.clone(),
             // Advanced knob — not gathered at init; set `[orb] rust_image` in the
             // toml when the workspace needs a clang-equipped build image.
             rust_image: String::new(),
             namespaces,
-            docker_namespace: self.docker_namespace.clone(),
+            docker_namespace: core.docker_namespace.clone(),
             orb_dir: self.orb_dir.clone(),
-            build_workflow: self.build_workflow.clone(),
-            release_workflow: self.release_workflow.clone(),
+            build_workflow: core.build_workflow.clone(),
+            release_workflow: core.release_workflow.clone(),
             requires_job: self.requires_job.clone(),
-            crate_tag_prefix: self.crate_tag_prefix.clone(),
-            release_after_job: self.release_after_job.clone(),
+            crate_tag_prefix: core.crate_tag_prefix.clone(),
+            release_after_job: core.release_after_job.clone(),
             orb_tools_version: self.orb_tools_version.clone(),
             docker_orb_version: self.docker_orb_version.clone(),
             docker_context: extras.docker_context.clone(),
@@ -811,24 +977,24 @@ impl Init {
 
         // Step 3: write bootstrap gen-circleci-orb.toml
         let config_path = std::path::Path::new("gen-circleci-orb.toml");
-        let interactive = self.resolve_interactive(&present_interactive)?;
+        let reserved = self.resolve_interactive(&present_interactive, interactive)?;
         let mut bootstrap = build_bootstrap_config(
-            &self.binary,
+            &core.binary,
             opts.namespaces.as_slice(),
             &self.orb_dir,
             extras.home_url.as_deref(),
             extras.source_url.as_deref(),
             &extras.git_push_subcommands,
-            &interactive,
+            &reserved,
         );
         populate_orb_path_defaults(&mut bootstrap, &detected_orb_path);
         bootstrap.ci = Some(CiSection {
-            build_workflow: Some(self.build_workflow.clone()),
-            release_workflow: Some(self.release_workflow.clone()),
+            build_workflow: Some(core.build_workflow.clone()),
+            release_workflow: Some(core.release_workflow.clone()),
             requires_job: self.requires_job.clone(),
-            release_after_job: Some(self.release_after_job.clone()),
-            crate_tag_prefix: Some(self.crate_tag_prefix.clone()),
-            docker_namespace: Some(self.docker_namespace.clone()),
+            release_after_job: Some(core.release_after_job.clone()),
+            crate_tag_prefix: Some(core.crate_tag_prefix.clone()),
+            docker_namespace: Some(core.docker_namespace.clone()),
             docker_context: Some(extras.docker_context.clone()),
             orb_context: Some(extras.orb_context.clone()),
             mcp: Some(self.mcp),
@@ -979,19 +1145,19 @@ mod tests {
         // Init must expose --git-push-subcommands so the caller can name subcommands
         // (e.g. "save") that need a set_https_remote step in their generated job.
         let init = Init {
-            binary: "mytool".to_string(),
+            binary: Some("mytool".to_string()),
             public_orb_namespaces: vec!["my-org".to_string()],
             private_orb_namespaces: vec![],
-            build_workflow: "validation".to_string(),
-            release_workflow: "orb-release".to_string(),
+            build_workflow: Some("validation".to_string()),
+            release_workflow: Some("orb-release".to_string()),
             requires_job: None,
-            crate_tag_prefix: "mytool-v".to_string(),
-            release_after_job: "publish-orb".to_string(),
+            crate_tag_prefix: Some("mytool-v".to_string()),
+            release_after_job: Some("publish-orb".to_string()),
             orb_dir: "orb".to_string(),
             ci_dir: std::path::PathBuf::from(".circleci"),
             orb_tools_version: "12.3.3".to_string(),
             docker_orb_version: "3.0.1".to_string(),
-            docker_namespace: "my-docker-ns".to_string(),
+            docker_namespace: Some("my-docker-ns".to_string()),
             docker_context: None,
             orb_context: None,
             gen_circleci_orb_version: "0.0.1".to_string(),
@@ -1056,14 +1222,17 @@ mod tests {
     #[test]
     fn init_run_writes_ci_section_to_config() {
         let init = make_init(true);
-        let extras = init.gather_extras(&[], &OrbConfig::default()).unwrap();
+        let extras = init
+            .gather_extras(&[], &OrbConfig::default(), false)
+            .unwrap();
+        let core = init.gather_core(&OrbConfig::default(), false).unwrap();
         let ci = CiSection {
-            build_workflow: Some(init.build_workflow.clone()),
-            release_workflow: Some(init.release_workflow.clone()),
+            build_workflow: Some(core.build_workflow.clone()),
+            release_workflow: Some(core.release_workflow.clone()),
             requires_job: init.requires_job.clone(),
-            release_after_job: Some(init.release_after_job.clone()),
-            crate_tag_prefix: Some(init.crate_tag_prefix.clone()),
-            docker_namespace: Some(init.docker_namespace.clone()),
+            release_after_job: Some(core.release_after_job.clone()),
+            crate_tag_prefix: Some(core.crate_tag_prefix.clone()),
+            docker_namespace: Some(core.docker_namespace.clone()),
             docker_context: Some(extras.docker_context.clone()),
             orb_context: Some(extras.orb_context.clone()),
             mcp: Some(init.mcp),
@@ -1296,7 +1465,7 @@ mod tests {
     fn gather_extras_uses_detected_when_cli_empty() {
         let init = make_init(true); // dry_run = true → non-interactive
         let extras = init
-            .gather_extras(&["save".to_string()], &OrbConfig::default())
+            .gather_extras(&["save".to_string()], &OrbConfig::default(), false)
             .unwrap();
         assert_eq!(
             extras.git_push_subcommands,
@@ -1313,7 +1482,7 @@ mod tests {
             ..make_init(true)
         };
         let extras = init
-            .gather_extras(&["save".to_string()], &OrbConfig::default())
+            .gather_extras(&["save".to_string()], &OrbConfig::default(), false)
             .unwrap();
         assert_eq!(
             extras.git_push_subcommands,
@@ -1326,19 +1495,19 @@ mod tests {
 
     fn make_init(dry_run: bool) -> Init {
         Init {
-            binary: "mytool".to_string(),
+            binary: Some("mytool".to_string()),
             public_orb_namespaces: vec!["my-org".to_string()],
             private_orb_namespaces: vec![],
-            build_workflow: "validation".to_string(),
-            release_workflow: "orb-release".to_string(),
+            build_workflow: Some("validation".to_string()),
+            release_workflow: Some("orb-release".to_string()),
             requires_job: None,
-            crate_tag_prefix: "mytool-v".to_string(),
-            release_after_job: "publish-orb".to_string(),
+            crate_tag_prefix: Some("mytool-v".to_string()),
+            release_after_job: Some("publish-orb".to_string()),
             orb_dir: "orb".to_string(),
             ci_dir: std::path::PathBuf::from(".circleci"),
             orb_tools_version: "12.3.3".to_string(),
             docker_orb_version: "3.0.1".to_string(),
-            docker_namespace: "my-docker-ns".to_string(),
+            docker_namespace: Some("my-docker-ns".to_string()),
             docker_context: None,
             orb_context: None,
             gen_circleci_orb_version: "0.0.1".to_string(),
@@ -1358,6 +1527,110 @@ mod tests {
             record_push_ssh_fingerprint: None,
             record_contexts: vec![],
         }
+    }
+
+    // ── gather_core: the values init cannot run without (#226) ─────────────
+
+    #[test]
+    fn gather_core_uses_cli_values() {
+        let init = make_init(false);
+        let core = init.gather_core(&OrbConfig::default(), false).unwrap();
+        assert_eq!(core.binary, "mytool");
+        assert_eq!(core.build_workflow, "validation");
+        assert_eq!(core.release_workflow, "orb-release");
+        assert_eq!(core.crate_tag_prefix, "mytool-v");
+        assert_eq!(core.release_after_job, "publish-orb");
+        assert_eq!(core.docker_namespace, "my-docker-ns");
+    }
+
+    /// Re-running `init` must not mean re-typing what the config already holds.
+    #[test]
+    fn gather_core_falls_back_to_existing_config() {
+        let existing = OrbConfig {
+            orb: Some(OrbSection {
+                binary: Some("configured-tool".to_string()),
+                ..OrbSection::default()
+            }),
+            ci: Some(CiSection {
+                build_workflow: Some("cfg-build".to_string()),
+                release_workflow: Some("cfg-release".to_string()),
+                crate_tag_prefix: Some("cfg-v".to_string()),
+                release_after_job: Some("cfg-after".to_string()),
+                docker_namespace: Some("cfg-ns".to_string()),
+                ..CiSection::default()
+            }),
+            ..OrbConfig::default()
+        };
+        let init = Init {
+            binary: None,
+            build_workflow: None,
+            release_workflow: None,
+            crate_tag_prefix: None,
+            release_after_job: None,
+            docker_namespace: None,
+            ..make_init(false)
+        };
+        let core = init.gather_core(&existing, false).unwrap();
+        assert_eq!(core.binary, "configured-tool");
+        assert_eq!(core.build_workflow, "cfg-build");
+        assert_eq!(core.release_workflow, "cfg-release");
+        assert_eq!(core.crate_tag_prefix, "cfg-v");
+        assert_eq!(core.release_after_job, "cfg-after");
+        assert_eq!(core.docker_namespace, "cfg-ns");
+    }
+
+    #[test]
+    fn gather_core_cli_wins_over_config() {
+        let existing = OrbConfig {
+            orb: Some(OrbSection {
+                binary: Some("configured-tool".to_string()),
+                ..OrbSection::default()
+            }),
+            ..OrbConfig::default()
+        };
+        let core = make_init(false).gather_core(&existing, false).unwrap();
+        assert_eq!(core.binary, "mytool");
+    }
+
+    /// With nothing to prompt with, the error names EVERY missing value — not
+    /// clap's usage dump, and not just the first one.
+    #[test]
+    fn gather_core_non_interactive_lists_every_missing_value() {
+        let init = Init {
+            binary: None,
+            build_workflow: None,
+            release_workflow: None,
+            crate_tag_prefix: None,
+            release_after_job: None,
+            docker_namespace: None,
+            ..make_init(false)
+        };
+        let err = init
+            .gather_core(&OrbConfig::default(), false)
+            .expect_err("nothing to resolve from, and no terminal to ask");
+        let msg = err.to_string();
+        for flag in [
+            "--binary",
+            "--build-workflow",
+            "--release-workflow",
+            "--crate-tag-prefix",
+            "--release-after-job",
+            "--docker-namespace",
+        ] {
+            assert!(msg.contains(flag), "error must name {flag}, got: {msg}");
+        }
+    }
+
+    /// `--dry-run` is a preview, not a reason to skip the dialogue: the values
+    /// have to come from somewhere before there is anything to preview (#226).
+    #[test]
+    fn dry_run_alone_does_not_suppress_the_dialogue() {
+        // is_non_interactive() consults the terminal and $CI only; --dry-run is
+        // no longer part of the decision.
+        std::env::set_var("CI", "true");
+        let non_interactive = is_non_interactive();
+        std::env::remove_var("CI");
+        assert!(non_interactive, "$CI must still force non-interactive");
     }
 
     // ── build_record_config ─────────────────────────────────────────────────
@@ -1426,7 +1699,9 @@ mod tests {
     #[test]
     fn gather_extras_non_interactive_uses_hardcoded_defaults() {
         let init = make_init(true); // dry_run=true → non-interactive
-        let extras = init.gather_extras(&[], &OrbConfig::default()).unwrap();
+        let extras = init
+            .gather_extras(&[], &OrbConfig::default(), false)
+            .unwrap();
         assert_eq!(extras.docker_context, DEFAULT_DOCKER_CONTEXT);
         assert_eq!(extras.orb_context, DEFAULT_ORB_CONTEXT);
         assert_eq!(extras.mcp_context, vec![DEFAULT_MCP_CONTEXT.to_string()]);
@@ -1449,7 +1724,9 @@ mod tests {
             dry_run: true,
             ..make_init(true)
         };
-        let extras = init.gather_extras(&[], &OrbConfig::default()).unwrap();
+        let extras = init
+            .gather_extras(&[], &OrbConfig::default(), false)
+            .unwrap();
         assert_eq!(extras.docker_context, "my-docker");
         assert_eq!(extras.orb_context, "my-orb-ctx");
         assert_eq!(extras.mcp_context, vec!["my-mcp-ctx".to_string()]);
@@ -1467,7 +1744,9 @@ mod tests {
         // When $CI is set the dialogue must be skipped even without --dry-run
         std::env::set_var("CI", "true");
         let init = make_init(false);
-        let extras = init.gather_extras(&[], &OrbConfig::default()).unwrap();
+        let extras = init
+            .gather_extras(&[], &OrbConfig::default(), false)
+            .unwrap();
         std::env::remove_var("CI");
         assert_eq!(extras.docker_context, DEFAULT_DOCKER_CONTEXT);
     }
@@ -1481,7 +1760,9 @@ mod tests {
             dry_run: true,
             ..make_init(true)
         };
-        let extras = init.gather_extras(&[], &OrbConfig::default()).unwrap();
+        let extras = init
+            .gather_extras(&[], &OrbConfig::default(), false)
+            .unwrap();
         assert_eq!(extras.docker_context, "explicit-docker");
     }
 
@@ -1492,7 +1773,9 @@ mod tests {
             dry_run: true,
             ..make_init(true)
         };
-        let extras = init.gather_extras(&[], &OrbConfig::default()).unwrap();
+        let extras = init
+            .gather_extras(&[], &OrbConfig::default(), false)
+            .unwrap();
         assert_eq!(extras.orb_context, "explicit-orb");
     }
 
@@ -1504,7 +1787,9 @@ mod tests {
             dry_run: true,
             ..make_init(true)
         };
-        let extras = init.gather_extras(&[], &OrbConfig::default()).unwrap();
+        let extras = init
+            .gather_extras(&[], &OrbConfig::default(), false)
+            .unwrap();
         assert_eq!(extras.mcp_context, vec!["ctx-a", "ctx-b"]);
     }
 
@@ -1516,7 +1801,9 @@ mod tests {
             dry_run: true,
             ..make_init(true)
         };
-        let extras = init.gather_extras(&[], &OrbConfig::default()).unwrap();
+        let extras = init
+            .gather_extras(&[], &OrbConfig::default(), false)
+            .unwrap();
         assert_eq!(extras.mcp_earliest_version, "3.0.0");
     }
 
@@ -1529,7 +1816,7 @@ mod tests {
         };
         // detected list is different — CLI must win without prompting
         let extras = init
-            .gather_extras(&["save".to_string()], &OrbConfig::default())
+            .gather_extras(&["save".to_string()], &OrbConfig::default(), false)
             .unwrap();
         assert_eq!(extras.git_push_subcommands, vec!["deploy"]);
     }
@@ -1541,7 +1828,9 @@ mod tests {
             dry_run: true,
             ..make_init(true)
         };
-        let extras = init.gather_extras(&[], &OrbConfig::default()).unwrap();
+        let extras = init
+            .gather_extras(&[], &OrbConfig::default(), false)
+            .unwrap();
         assert_eq!(extras.home_url.as_deref(), Some("https://example.com/home"));
     }
 
@@ -1552,7 +1841,9 @@ mod tests {
             dry_run: true,
             ..make_init(true)
         };
-        let extras = init.gather_extras(&[], &OrbConfig::default()).unwrap();
+        let extras = init
+            .gather_extras(&[], &OrbConfig::default(), false)
+            .unwrap();
         assert_eq!(
             extras.source_url.as_deref(),
             Some("https://example.com/src")
@@ -1584,7 +1875,9 @@ mod tests {
     #[test]
     fn gather_extras_falls_back_to_existing_docker_context() {
         let init = make_init(true); // dry_run → non-interactive
-        let extras = init.gather_extras(&[], &make_existing_config()).unwrap();
+        let extras = init
+            .gather_extras(&[], &make_existing_config(), false)
+            .unwrap();
         assert_eq!(
             extras.docker_context, "existing-docker",
             "should use [ci].docker_context from existing config when CLI flag not set"
@@ -1594,7 +1887,9 @@ mod tests {
     #[test]
     fn gather_extras_falls_back_to_existing_orb_context() {
         let init = make_init(true);
-        let extras = init.gather_extras(&[], &make_existing_config()).unwrap();
+        let extras = init
+            .gather_extras(&[], &make_existing_config(), false)
+            .unwrap();
         assert_eq!(extras.orb_context, "existing-orb");
     }
 
@@ -1605,21 +1900,27 @@ mod tests {
             dry_run: true,
             ..make_init(true)
         };
-        let extras = init.gather_extras(&[], &make_existing_config()).unwrap();
+        let extras = init
+            .gather_extras(&[], &make_existing_config(), false)
+            .unwrap();
         assert_eq!(extras.mcp_context, vec!["existing-mcp"]);
     }
 
     #[test]
     fn gather_extras_falls_back_to_existing_mcp_earliest_version() {
         let init = make_init(true);
-        let extras = init.gather_extras(&[], &make_existing_config()).unwrap();
+        let extras = init
+            .gather_extras(&[], &make_existing_config(), false)
+            .unwrap();
         assert_eq!(extras.mcp_earliest_version, "9.9.9");
     }
 
     #[test]
     fn gather_extras_falls_back_to_existing_home_url() {
         let init = make_init(true);
-        let extras = init.gather_extras(&[], &make_existing_config()).unwrap();
+        let extras = init
+            .gather_extras(&[], &make_existing_config(), false)
+            .unwrap();
         assert_eq!(
             extras.home_url.as_deref(),
             Some("https://existing-home.example.com")
@@ -1629,7 +1930,9 @@ mod tests {
     #[test]
     fn gather_extras_falls_back_to_existing_source_url() {
         let init = make_init(true);
-        let extras = init.gather_extras(&[], &make_existing_config()).unwrap();
+        let extras = init
+            .gather_extras(&[], &make_existing_config(), false)
+            .unwrap();
         assert_eq!(
             extras.source_url.as_deref(),
             Some("https://existing-src.example.com")
@@ -1640,7 +1943,9 @@ mod tests {
     fn gather_extras_falls_back_to_existing_git_push_subcommands() {
         let init = make_init(true);
         // No CLI flag, no detected — should fall back to existing config
-        let extras = init.gather_extras(&[], &make_existing_config()).unwrap();
+        let extras = init
+            .gather_extras(&[], &make_existing_config(), false)
+            .unwrap();
         assert_eq!(extras.git_push_subcommands, vec!["existing-push"]);
     }
 
@@ -1652,7 +1957,9 @@ mod tests {
             dry_run: true,
             ..make_init(true)
         };
-        let extras = init.gather_extras(&[], &make_existing_config()).unwrap();
+        let extras = init
+            .gather_extras(&[], &make_existing_config(), false)
+            .unwrap();
         assert_eq!(extras.docker_context, "cli-docker");
         assert_eq!(extras.orb_context, "cli-orb");
     }
@@ -1662,7 +1969,7 @@ mod tests {
         let init = make_init(true);
         let existing = OrbConfig::default(); // no git_push_subcommands in config
         let extras = init
-            .gather_extras(&["detected-push".to_string()], &existing)
+            .gather_extras(&["detected-push".to_string()], &existing, false)
             .unwrap();
         assert_eq!(extras.git_push_subcommands, vec!["detected-push"]);
     }
@@ -1675,7 +1982,7 @@ mod tests {
         let ci_was = std::env::var("CI").ok();
         std::env::remove_var("CI");
         let is_tty = console::Term::stderr().is_term();
-        let result = is_non_interactive(false);
+        let result = is_non_interactive();
         if let Some(val) = ci_was {
             std::env::set_var("CI", val);
         }
@@ -1683,7 +1990,7 @@ mod tests {
             assert!(
                 !result,
                 "is_non_interactive must be false when stderr IS a terminal \
-                 (and neither dry_run nor $CI is set)"
+                 and $CI is not set"
             );
         } else {
             assert!(
