@@ -1,19 +1,23 @@
 use std::collections::HashSet;
 
-use super::run_help;
 use super::types::{CliDefinition, ParamType, Parameter, SubCommand};
+use super::{run_help, ParseOptions};
 use anyhow::Result;
 
 /// Parse the top-level `--help` output for `binary` and recursively fetch
 /// help for each discovered subcommand.
-pub fn parse_top_level(binary: &str, help_text: &str) -> Result<CliDefinition> {
+pub fn parse_top_level(
+    binary: &str,
+    help_text: &str,
+    opts: &ParseOptions,
+) -> Result<CliDefinition> {
     let description = extract_description(help_text);
     let sub_names = extract_subcommand_names(help_text);
 
     let mut subcommands = Vec::new();
     for name in sub_names {
         let sub_help = run_help(binary, &[&name])?;
-        let sub = parse_subcommand(&name, &sub_help, binary)?;
+        let sub = parse_subcommand(&name, &sub_help, binary, opts)?;
         subcommands.push(sub);
     }
 
@@ -37,7 +41,12 @@ fn normalize_binary_name(binary: &str) -> String {
         .to_string()
 }
 
-fn parse_subcommand(name: &str, help_text: &str, binary: &str) -> Result<SubCommand> {
+fn parse_subcommand(
+    name: &str,
+    help_text: &str,
+    binary: &str,
+    opts: &ParseOptions,
+) -> Result<SubCommand> {
     let description = extract_description(help_text);
     let child_names = extract_subcommand_names(help_text);
     let is_leaf = child_names.is_empty();
@@ -45,12 +54,14 @@ fn parse_subcommand(name: &str, help_text: &str, binary: &str) -> Result<SubComm
     let mut subcommands = Vec::new();
     for child_name in &child_names {
         let child_help = run_help(binary, &[name, child_name])?;
-        let child = parse_subcommand(child_name, &child_help, binary)?;
+        let child = parse_subcommand(child_name, &child_help, binary, opts)?;
         subcommands.push(child);
     }
 
     let parameters = if is_leaf {
-        parse_parameters(help_text)
+        let parsed = parse_parameters_detailed(help_text);
+        check_coverage(name, &parsed.unparsed, opts)?;
+        parsed.parameters
     } else {
         Vec::new()
     };
@@ -150,11 +161,94 @@ fn extract_required_flags(text: &str) -> HashSet<String> {
         .collect()
 }
 
+/// Outcome of parsing one command's help text.
+pub struct ParsedHelp {
+    pub parameters: Vec<Parameter>,
+    /// Declaration lines that produced no parameter. Non-empty means the
+    /// generated orb would silently be missing an input the CLI accepts.
+    pub unparsed: Vec<String>,
+}
+
+/// True for a line that declares an option: `-f`, `-f, --force`, `--force`.
+///
+/// Deliberately requires a letter immediately after the dashes so that a
+/// `Possible values:` continuation line (`- binary: ...` — dash, then a space) is
+/// not mistaken for a new option. Description continuation lines never start
+/// this way, so a line matching this always begins a new declaration no matter
+/// how deeply clap indented it (#240).
+fn is_option_decl(trimmed: &str) -> bool {
+    let rest = trimmed
+        .strip_prefix("--")
+        .or_else(|| trimmed.strip_prefix('-'));
+    rest.is_some_and(|r| r.starts_with(|c: char| c.is_ascii_alphabetic()))
+}
+
+/// True for the clap built-ins `-h/--help` and `-V/--version`, which are
+/// deliberately excluded from the generated orb.
+///
+/// The built-in `--version` has no `<VALUE>` metavar; an application flag also
+/// named `--version` that accepts a value must NOT be excluded — the metavar
+/// tells them apart.
+fn is_builtin_decl(trimmed: &str) -> bool {
+    if trimmed.contains("--help") {
+        return true;
+    }
+    if let Some(pos) = trimmed.find("--version") {
+        let after = trimmed[pos + "--version".len()..].trim_start();
+        return !after.starts_with('<') && !after.starts_with('[');
+    }
+    false
+}
+
+/// Declarations with no matching parameter, in help-text order.
+fn find_unparsed(decls: &[(usize, String)], produced: &HashSet<usize>) -> Vec<String> {
+    decls
+        .iter()
+        .filter(|(idx, _)| !produced.contains(idx))
+        .map(|(_, text)| text.clone())
+        .collect()
+}
+
+/// Fail generation when `--help` declared something the parser could not turn
+/// into a parameter, unless the consumer opted out.
+fn check_coverage(subcommand: &str, unparsed: &[String], opts: &ParseOptions) -> Result<()> {
+    if unparsed.is_empty() {
+        return Ok(());
+    }
+    let listed = unparsed
+        .iter()
+        .map(|d| format!("  {d}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if opts.allow_unparsed_help {
+        tracing::warn!(
+            "`{subcommand} --help` declares input that produced no orb parameter \
+             (allowed by `[orb] allow_unparsed_help`):\n{listed}"
+        );
+        return Ok(());
+    }
+    anyhow::bail!(
+        "`{subcommand} --help` declares input that produced no orb parameter, so the \
+         generated job could not supply it:\n{listed}\n\
+         Fix the CLI\'s help shape, or set `[orb] allow_unparsed_help = true` in \
+         gen-circleci-orb.toml to generate anyway."
+    )
+}
+
 /// Parse the `Options:` / `Arguments:` sections to build `Parameter` list.
 pub fn parse_parameters(text: &str) -> Vec<Parameter> {
+    parse_parameters_detailed(text).parameters
+}
+
+/// Parse the `Options:` / `Arguments:` sections, also reporting any declaration
+/// that produced no parameter (see [`ParsedHelp::unparsed`]).
+pub fn parse_parameters_detailed(text: &str) -> ParsedHelp {
     let required_flags = extract_required_flags(text);
     let lines: Vec<&str> = text.lines().collect();
     let mut params = Vec::new();
+    // Every declaration line seen, and the subset that yielded a parameter.
+    let mut decls: Vec<(usize, String)> = Vec::new();
+    let mut produced: HashSet<usize> = HashSet::new();
     let mut i = 0;
 
     while i < lines.len() {
@@ -167,35 +261,24 @@ pub fn parse_parameters(text: &str) -> Vec<Parameter> {
             continue;
         }
 
-        // Only process lines that look like flags (start with - after trimming)
-        if !trimmed.starts_with('-') {
+        // Only process lines that declare an option
+        if !is_option_decl(trimmed) {
             i += 1;
             continue;
         }
 
-        // Skip -h/--help built-in and the clap -V/--version built-in.
-        // The clap built-in --version has no <VALUE> metavar; application flags
-        // also named --version that accept a value (e.g. --version <VERSION>) must
-        // NOT be excluded — check for a metavar to tell them apart.
-        if trimmed.contains("--help") {
+        // Skip the clap built-ins: they are not consumers' inputs.
+        if is_builtin_decl(trimmed) {
             i += 1;
             continue;
         }
-        if let Some(pos) = trimmed.find("--version") {
-            let after = trimmed[pos + "--version".len()..].trim_start();
-            if !after.starts_with('<') && !after.starts_with('[') {
-                i += 1;
-                continue;
-            }
-        }
+        decls.push((i, trimmed.to_string()));
 
-        // Determine indentation of this flag line so we can collect its
-        // full description block, which may contain blank separator lines.
-        let flag_indent = leading_spaces(line);
-
-        // Collect the full option block using indentation: gather all lines
-        // until we hit a non-blank line that is at flag_indent or less AND
-        // starts a new flag or section header.
+        // Collect the full option block, which may contain blank separator
+        // lines and wrapped description lines. It ends at the next declaration
+        // or section header — NOT at an indentation boundary: clap aligns
+        // long-only options deeper than short-flagged ones, so an indent-based
+        // rule made a short-flagged option swallow the options after it (#240).
         let mut block_lines: Vec<&str> = vec![trimmed];
         let mut j = i + 1;
         while j < lines.len() {
@@ -212,27 +295,17 @@ pub fn parse_parameters(text: &str) -> Vec<Parameter> {
                         break;
                     }
                     Some((_, peek_line)) => {
-                        let peek_indent = leading_spaces(peek_line);
                         let peek_trimmed = peek_line.trim();
-                        // If the next non-blank line is indented MORE than the flag
-                        // it belongs to this block; otherwise the block is done.
-                        if peek_indent > flag_indent
-                            && !peek_trimmed.starts_with('-')
-                            && !is_top_level_section(peek_line)
-                        {
-                            block_lines.push(next_trimmed); // include the blank
-                            j += 1;
-                        } else {
+                        if is_option_decl(peek_trimmed) || is_top_level_section(peek_line) {
                             j += 1;
                             break;
                         }
+                        block_lines.push(next_trimmed); // include the blank
+                        j += 1;
                     }
                 }
             } else {
-                let indent = leading_spaces(next);
-                if indent <= flag_indent
-                    && (next_trimmed.starts_with('-') || is_top_level_section(next))
-                {
+                if is_option_decl(next_trimmed) || is_top_level_section(next) {
                     break;
                 }
                 block_lines.push(next_trimmed);
@@ -247,11 +320,17 @@ pub fn parse_parameters(text: &str) -> Vec<Parameter> {
 
         if let Some(param) = parse_option_block(&block, possible_values, &required_flags) {
             params.push(param);
+            produced.insert(i);
         }
 
         i = j;
     }
-    params
+
+    let unparsed = find_unparsed(&decls, &produced);
+    ParsedHelp {
+        parameters: params,
+        unparsed,
+    }
 }
 
 fn leading_spaces(line: &str) -> usize {
@@ -429,8 +508,14 @@ fn extract_param_description(block: &str) -> String {
     // Description text may contain lowercase angle-bracket references like
     // `<output>/<orb-dir>/` — these must NOT truncate the description.
     // Strategy: find the flag declaration (--flag [<UPPER_METAVAR>]) and take
-    // everything after it as the candidate description.
-    let re_decl = regex::Regex::new(r"--[a-zA-Z][a-zA-Z0-9-]*(?:\s+<[A-Z][A-Z0-9_]*>)?").unwrap();
+    // everything after it as the candidate description. A repeatable option is
+    // rendered `--verbose...` / `--include <PATH>...` — the marker belongs to the
+    // declaration, so absorb it rather than leaving it to open the description
+    // (#240).
+    let re_decl = regex::Regex::new(
+        r"--[a-zA-Z][a-zA-Z0-9-]*(?:\.\.\.)?(?:\s+<[A-Z][A-Z0-9_]*>(?:\.\.\.)?)?",
+    )
+    .unwrap();
     let candidate = if let Some(m) = re_decl.find(block) {
         block[m.end()..].trim().to_string()
     } else if let Some(pos) = block.find("  ") {
@@ -892,5 +977,184 @@ Options:
     #[test]
     fn normalize_binary_name_nested_relative_path() {
         assert_eq!(normalize_binary_name("../../some/path/mytool"), "mytool");
+    }
+
+    // ── mixed-indent option blocks (#240) ──────────────────────────────────
+
+    /// clap's compact help aligns long-only options DEEPER than options that
+    /// also carry a short form.  Terminating a block on indentation alone made
+    /// a short-flagged option swallow every long-only option after it, so those
+    /// produced no parameter at all — silently.
+    #[test]
+    fn long_only_option_after_short_flagged_option_is_not_swallowed() {
+        let help = r#"Re-verify a past release
+
+Usage: jci-audit verify [OPTIONS] --release-version <VERSION>
+
+Options:
+  -v, --verbose...                 Increase logging verbosity
+      --release-version <VERSION>  The released version to verify (e.g. "1.2.0")
+      --advisory-db <ADVISORY_DB>  Advisory-db root; cargo-deny's checkout is moved to the recorded commit beneath it
+  -q, --quiet...                   Decrease logging verbosity
+      --deny-warnings              Fail if the tools report any warning
+  -h, --help                       Print help
+"#;
+        let names: Vec<String> = parse_parameters(help)
+            .iter()
+            .map(|p| p.long_name.clone())
+            .collect();
+        for expected in [
+            "verbose",
+            "release_version",
+            "advisory_db",
+            "quiet",
+            "deny_warnings",
+        ] {
+            assert!(
+                names.iter().any(|n| n == expected),
+                "expected parameter `{expected}`, got: {names:?}"
+            );
+        }
+    }
+
+    /// The repeat marker on `--verbose...` must be treated as part of the flag
+    /// token, not as the start of the description.
+    #[test]
+    fn repeat_marker_does_not_leak_into_description() {
+        let help = r#"Do something
+
+Usage: tool cmd [OPTIONS]
+
+Options:
+  -v, --verbose...  Increase logging verbosity
+  -h, --help        Print help
+"#;
+        let params = parse_parameters(help);
+        let verbose = params.iter().find(|p| p.long_name == "verbose").unwrap();
+        assert_eq!(verbose.description, "Increase logging verbosity");
+        assert_eq!(verbose.param_type, ParamType::Boolean);
+    }
+
+    /// A repeatable option that DOES take a value keeps its metavar handling.
+    #[test]
+    fn repeat_marker_after_metavar_does_not_leak_into_description() {
+        let help = r#"Do something
+
+Usage: tool cmd [OPTIONS]
+
+Options:
+  -I, --include <PATH>...  Directory to search
+  -h, --help               Print help
+"#;
+        let params = parse_parameters(help);
+        let include = params.iter().find(|p| p.long_name == "include").unwrap();
+        assert_eq!(include.description, "Directory to search");
+        assert_eq!(include.param_type, ParamType::String);
+    }
+
+    // ── coverage guard ─────────────────────────────────────────────────────
+
+    /// The guard reports every declaration line that produced no parameter.
+    #[test]
+    fn unparsed_reports_declaration_that_yielded_no_parameter() {
+        let decls = vec![
+            (5usize, "      --alpha <A>  The alpha".to_string()),
+            (6usize, "      --beta <B>   The beta".to_string()),
+        ];
+        let produced: HashSet<usize> = [5usize].into_iter().collect();
+        let unparsed = find_unparsed(&decls, &produced);
+        assert_eq!(unparsed.len(), 1, "one declaration produced no parameter");
+        assert!(
+            unparsed[0].contains("--beta"),
+            "guard must name the offending declaration, got: {unparsed:?}"
+        );
+    }
+
+    /// Ordinary help text is fully covered — the guard must not false-positive
+    /// on the clap built-ins or on `Possible values:` continuation lines.
+    #[test]
+    fn unparsed_is_empty_for_fully_parsed_help() {
+        let help = r#"Generate something
+
+Usage: tool generate [OPTIONS] --orb-path <ORB_PATH>
+
+Options:
+  -p, --orb-path <ORB_PATH>
+          Path to the orb YAML file
+
+  -f, --format <FORMAT>
+          Output format
+
+          [default: source]
+
+          Possible values:
+          - binary: Compile to native binary
+          - source: Generate Rust source code
+
+      --force
+          Overwrite existing files
+
+  -h, --help
+          Print help
+
+  -V, --version
+          Print version
+"#;
+        let parsed = parse_parameters_detailed(help);
+        assert!(
+            parsed.unparsed.is_empty(),
+            "fully parseable help must report nothing unparsed, got: {:?}",
+            parsed.unparsed
+        );
+        assert_eq!(parsed.parameters.len(), 3);
+    }
+
+    /// A short-only option produces no parameter today (#241).  The guard's job
+    /// is to make that visible instead of letting generation report success.
+    #[test]
+    fn unparsed_reports_short_only_option() {
+        let help = r#"Do something
+
+Usage: tool cmd [OPTIONS]
+
+Options:
+  -f          Force the operation
+  -h, --help  Print help
+"#;
+        let parsed = parse_parameters_detailed(help);
+        assert_eq!(
+            parsed.unparsed.len(),
+            1,
+            "short-only option must be reported, got: {:?}",
+            parsed.unparsed
+        );
+        assert!(parsed.unparsed[0].contains("-f"));
+    }
+
+    /// `parse_subcommand` fails loudly when a declaration produced no
+    /// parameter, and the escape hatch downgrades that to a warning.
+    #[test]
+    fn subcommand_parse_fails_on_unparsed_declaration() {
+        let help = r#"Do something
+
+Usage: tool cmd [OPTIONS]
+
+Options:
+  -f          Force the operation
+  -h, --help  Print help
+"#;
+        let err = parse_subcommand("cmd", help, "tool", &ParseOptions::default())
+            .expect_err("unparsed declaration must fail generation");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("-f") && msg.contains("allow_unparsed_help"),
+            "error must name the declaration and the escape hatch, got: {msg}"
+        );
+
+        let opts = ParseOptions {
+            allow_unparsed_help: true,
+        };
+        parse_subcommand("cmd", help, "tool", &opts)
+            .expect("allow_unparsed_help must downgrade the failure to a warning");
     }
 }

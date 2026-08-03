@@ -270,6 +270,19 @@ pub(crate) fn resolve_namespaces(
 }
 
 /// Resolve orb_dir: CLI value takes precedence, then `[orb].orb_dir` in config, then "orb".
+/// Build the help-parser settings the config controls.
+pub(crate) fn parse_options(
+    config: &crate::orb_config::OrbConfig,
+) -> crate::help_parser::ParseOptions {
+    crate::help_parser::ParseOptions {
+        allow_unparsed_help: config
+            .orb
+            .as_ref()
+            .and_then(|o| o.allow_unparsed_help)
+            .unwrap_or(false),
+    }
+}
+
 pub(crate) fn resolve_orb_dir(cli: Option<&str>, config: &crate::orb_config::OrbConfig) -> String {
     cli.filter(|s| !s.is_empty())
         .map(str::to_string)
@@ -483,7 +496,7 @@ impl Generate {
         check_orb_dir(&orb_root)?;
 
         tracing::info!("Parsing {} --help", binary);
-        let cli_def = help_parser::parse_binary(&binary)?;
+        let cli_def = help_parser::parse_binary(&binary, &parse_options(&orb_config))?;
 
         tracing::info!("Discovered {} subcommand(s)", cli_def.subcommands.len());
 

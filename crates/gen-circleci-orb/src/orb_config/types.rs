@@ -131,6 +131,14 @@ pub struct OrbSection {
     /// fully owned by (CLI subcommands ∪ config): anything in the generated dirs
     /// that is neither generated nor listed here is pruned.
     pub custom_files: Option<Vec<String>>,
+    /// Generate even when the binary's `--help` declares an option or argument
+    /// the parser could not turn into an orb parameter.
+    ///
+    /// Generation fails on such a declaration by default: the alternative is a
+    /// job that silently cannot supply an input the CLI requires (#240/#241/#242).
+    /// Set this to `true` to ship in spite of the gap — the missing input is
+    /// then logged as a warning — while the generator is taught the shape.
+    pub allow_unparsed_help: Option<bool>,
 }
 
 #[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq)]
