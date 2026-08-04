@@ -151,6 +151,14 @@ pub struct SubcommandConfig {
     /// `config` are interactive by default; set `false` to expose them in CI.
     pub interactive: Option<bool>,
     pub param: Option<IndexMap<String, ParamOverride>>,
+    /// Names for the subcommand's short-only options (`-f` with no `--force`),
+    /// keyed by the short flag: `[subcommand.check.short_param] f = "force"`.
+    ///
+    /// A short-only option has no long form to name its orb parameter after.
+    /// The generator derives one from the first word of the description where
+    /// that works; set an entry here to choose the name, or to supply one where
+    /// nothing usable can be derived (generation fails until you do).
+    pub short_param: Option<IndexMap<String, String>>,
     /// Curated display name for the command's `run` step. When unset, the
     /// generator falls back to the command's short about (the first sentence
     /// of its `--help`), then to the bare subcommand name.

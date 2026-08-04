@@ -1,9 +1,10 @@
 pub mod clap;
 pub mod types;
 
-pub use types::{CliDefinition, ParamType, Parameter, SubCommand};
+pub use types::{CliDefinition, ParamKind, ParamType, Parameter, SubCommand};
 
 use anyhow::{Context, Result};
+use std::collections::HashMap;
 use std::process::Command;
 
 /// Caller-supplied parser settings, sourced from `gen-circleci-orb.toml`.
@@ -17,6 +18,13 @@ pub struct ParseOptions {
     /// Set `[orb] allow_unparsed_help = true` to ship anyway while the parser is
     /// taught the shape.
     pub allow_unparsed_help: bool,
+    /// Names for short-only options, keyed by subcommand then by short flag,
+    /// from `[subcommand.<name>.short_param]`.
+    ///
+    /// A `-f` with no long form has nothing to name its orb parameter after.
+    /// The parser derives one from the description where it can; this is how a
+    /// consumer overrides that, or supplies a name where none can be derived.
+    pub short_param_names: HashMap<String, HashMap<char, String>>,
 }
 
 /// Execute `<binary> --help` (and recursively `<binary> <sub> --help`) to

@@ -91,6 +91,22 @@ is later suppressed (see `generate_job`).
 Authorises hand-authored orb files the generator does not produce so they survive the prune step.
 Covered in the [Advanced Configuration Guide](advanced-configuration.md#escape-hatches-extra_job-and-custom_files).
 
+### `short_param` — name a short-only option
+
+```toml
+[subcommand.check.short_param]
+f = "force"          # the CLI's `-f`, exposed to the orb as the `force` parameter
+n = "repeat_count"
+```
+
+An option with a long form names its orb parameter after it (`--advisory-db` → `advisory_db`).
+An option with **only** a short form (`-f`) has nothing to name after, so the generator takes the
+first word of its description (`-f  Force the operation` → `force`). Where that word names nothing
+useful — `-n  How many times` → `how` — generation fails and asks for a name here. Set an entry to
+override a derived name too.
+
+The option is still passed to the CLI by its short flag; only the orb parameter is named.
+
 ### `allow_unparsed_help` — generate despite a gap in the parse
 
 ```toml
@@ -155,6 +171,25 @@ signing_key_env = "MY_SIGN_KEY"
 push_ssh_fingerprint = "SHA256:…"  # a public key hash, not a secret
 contexts = ["my-release-context"]
 ```
+
+## How CLI inputs become orb parameters
+
+Every option and argument in the binary's `--help` becomes an orb parameter:
+
+| In `--help` | Orb parameter | Passed to the CLI as |
+|---|---|---|
+| `--advisory-db <PATH>` | `advisory_db` | `--advisory-db "$ADVISORY_DB"` |
+| `-p, --orb-path <PATH>` | `orb_path` | `--orb-path "$ORB_PATH"` |
+| `-f` (no long form) | named by [`short_param`](#short_param--name-a-short-only-option) or the description | `-f` |
+| `<VERSION>` under `Arguments:` | `version` | appended bare, after every option |
+| `[TARGET]` under `Arguments:` | `target` | appended only when set |
+
+Positionals are appended **after** all options, in the order clap lists them — a positional emitted
+between an option and its value would be read as that value. A variadic positional (`<PATHS>...`)
+becomes a single string parameter; pass multiple values as one space-separated string.
+
+A required input (one the `Usage:` line lists outside `[...]`) generates a parameter with no
+default, so CircleCI rejects a workflow that omits it.
 
 ## Tuning what gets generated
 
