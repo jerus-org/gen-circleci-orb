@@ -1,5 +1,6 @@
 use anyhow::Result;
 use clap::ValueEnum;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::{help_parser, orb_config, orb_generator, output_writer};
@@ -269,20 +270,46 @@ pub(crate) fn resolve_namespaces(
         })
 }
 
-/// Resolve orb_dir: CLI value takes precedence, then `[orb].orb_dir` in config, then "orb".
 /// Build the help-parser settings the config controls.
 pub(crate) fn parse_options(
     config: &crate::orb_config::OrbConfig,
 ) -> crate::help_parser::ParseOptions {
+    // `[subcommand.<name>.short_param]` is keyed by the short flag; a key that
+    // is not a single character cannot match any flag, so it is dropped here
+    // rather than silently shadowing a derived name.
+    let short_param_names = config
+        .subcommand
+        .as_ref()
+        .map(|subs| {
+            subs.iter()
+                .filter_map(|(name, sc)| {
+                    let names: HashMap<char, String> = sc
+                        .short_param
+                        .as_ref()?
+                        .iter()
+                        .filter_map(|(flag, param)| {
+                            let mut chars = flag.chars();
+                            let c = chars.next()?;
+                            chars.next().is_none().then(|| (c, param.clone()))
+                        })
+                        .collect();
+                    (!names.is_empty()).then(|| (name.clone(), names))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
     crate::help_parser::ParseOptions {
         allow_unparsed_help: config
             .orb
             .as_ref()
             .and_then(|o| o.allow_unparsed_help)
             .unwrap_or(false),
+        short_param_names,
     }
 }
 
+/// Resolve orb_dir: CLI value takes precedence, then `[orb].orb_dir` in config, then "orb".
 pub(crate) fn resolve_orb_dir(cli: Option<&str>, config: &crate::orb_config::OrbConfig) -> String {
     cli.filter(|s| !s.is_empty())
         .map(str::to_string)

@@ -339,6 +339,7 @@ steps:
                 interactive: None,
                 param: None,
                 label: None,
+                short_param: None,
             },
         );
         subcommands.insert(
@@ -348,6 +349,7 @@ steps:
                 interactive: None,
                 param: Some(params),
                 label: None,
+                short_param: None,
             },
         );
 

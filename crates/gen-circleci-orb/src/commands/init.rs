@@ -1120,6 +1120,7 @@ mod tests {
             default: None,
             required,
             description: "Path to orb YAML".to_string(),
+            ..Default::default()
         };
         let sub = SubCommand {
             name: sub_name.to_string(),
@@ -1229,6 +1230,7 @@ mod tests {
             default: Some("true".to_string()),
             required: false,
             description: "Push after committing".to_string(),
+            ..Default::default()
         };
         let sub = SubCommand {
             name: "save".to_string(),
@@ -1256,6 +1258,7 @@ mod tests {
             default: None,
             required: false,
             description: "GPG sign".to_string(),
+            ..Default::default()
         };
         let sub = SubCommand {
             name: "commit".to_string(),
@@ -1283,6 +1286,7 @@ mod tests {
             default: Some("./dist".to_string()),
             required: false,
             description: "Output dir".to_string(),
+            ..Default::default()
         };
         let sub = SubCommand {
             name: "generate".to_string(),
