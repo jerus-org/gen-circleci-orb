@@ -138,10 +138,43 @@ pub fn extract_subcommand_names(text: &str) -> Vec<String> {
 /// Parse the Usage line to find flags listed outside any `[...]` group.
 /// Those flags are truly required (clap will reject invocations that omit them).
 fn extract_required_flags(text: &str) -> HashSet<String> {
-    let usage_line = match text.lines().find(|l| l.trim().starts_with("Usage:")) {
-        Some(l) => l.to_string(),
-        None => return HashSet::new(),
+    let Some(cleaned) = usage_line_without_optional_groups(text) else {
+        return HashSet::new();
     };
+
+    // Every --flag remaining after bracket removal is required.
+    let re_flags = regex::Regex::new(r"--([a-zA-Z][a-zA-Z0-9-]*)").unwrap();
+    re_flags
+        .captures_iter(&cleaned)
+        .map(|cap| cap[1].to_string())
+        .collect()
+}
+
+/// Parse the Usage line for short flags listed outside any `[...]` group.
+///
+/// An option with a long form is found by [`extract_required_flags`]; this is
+/// the same signal for one that has only a short form, so a required `-f <VAL>`
+/// generates a parameter CircleCI insists on rather than one the script quietly
+/// omits.
+fn extract_required_shorts(text: &str) -> HashSet<char> {
+    let Some(cleaned) = usage_line_without_optional_groups(text) else {
+        return HashSet::new();
+    };
+    // `--long` also matches a naive `-x` pattern, so require the dash to open
+    // the token and to be followed by exactly one letter.
+    let re = regex::Regex::new(r"(?:^|\s)-([a-zA-Z])(?:\s|$)").unwrap();
+    re.captures_iter(&cleaned)
+        .filter_map(|cap| cap[1].chars().next())
+        .collect()
+}
+
+/// The `Usage:` line with every `[...]` group removed, so what remains is
+/// exactly what clap requires. `None` when the help text has no usage line.
+fn usage_line_without_optional_groups(text: &str) -> Option<String> {
+    let usage_line = text
+        .lines()
+        .find(|l| l.trim().starts_with("Usage:"))?
+        .to_string();
 
     // Remove all [...] groups (optional items) iteratively to handle nesting.
     let re_brackets = regex::Regex::new(r"\[[^\[\]]*\]").unwrap();
@@ -153,13 +186,7 @@ fn extract_required_flags(text: &str) -> HashSet<String> {
         }
         cleaned = next;
     }
-
-    // Every --flag remaining after bracket removal is required.
-    let re_flags = regex::Regex::new(r"--([a-zA-Z][a-zA-Z0-9-]*)").unwrap();
-    re_flags
-        .captures_iter(&cleaned)
-        .map(|cap| cap[1].to_string())
-        .collect()
+    Some(cleaned)
 }
 
 /// Parse the Usage line for positionals listed outside any `[...]` group,
@@ -169,20 +196,9 @@ fn extract_required_flags(text: &str) -> HashSet<String> {
 /// bracket-stripping that finds required flags also removes — so whatever
 /// `<NAME>` survives is required.
 fn extract_required_positionals(text: &str) -> HashSet<String> {
-    let usage_line = match text.lines().find(|l| l.trim().starts_with("Usage:")) {
-        Some(l) => l.to_string(),
-        None => return HashSet::new(),
+    let Some(cleaned) = usage_line_without_optional_groups(text) else {
+        return HashSet::new();
     };
-
-    let re_brackets = regex::Regex::new(r"\[[^\[\]]*\]").unwrap();
-    let mut cleaned = usage_line;
-    loop {
-        let next = re_brackets.replace_all(&cleaned, "").to_string();
-        if next == cleaned {
-            break;
-        }
-        cleaned = next;
-    }
 
     let re_positional = regex::Regex::new(r"<([A-Za-z][A-Za-z0-9_-]*)>").unwrap();
     re_positional
@@ -258,6 +274,18 @@ const UNUSABLE_NAME_WORDS: &[&str] = &[
     "or", "for", "of", "to", "in", "on", "at", "by", "with", "is", "are", "be", "do", "does",
 ];
 
+/// A parameter name must be usable as a shell variable, because that is what it
+/// becomes: the generated script reads the value from `${NAME}`. A name opening
+/// with a digit would render `${60}` — a positional-parameter read, not a
+/// variable — so the script would be silently wrong rather than fail to
+/// generate.
+fn is_usable_param_name(name: &str) -> bool {
+    name.len() >= 2
+        && name.starts_with(|c: char| c.is_ascii_alphabetic())
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        && !UNUSABLE_NAME_WORDS.contains(&name)
+}
+
 /// Name a short-only option: the consumer's chosen name, else the first word of
 /// its description. `None` when neither yields something usable.
 fn resolve_short_only_name(
@@ -265,12 +293,15 @@ fn resolve_short_only_name(
     description: &str,
     configured: Option<&HashMap<char, String>>,
 ) -> Option<String> {
+    // The configured name is held to the same rule as a derived one — it ends up
+    // in the same shell variable.
     if let Some(name) = configured
         .and_then(|m| m.get(&short))
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
     {
-        return Some(Parameter::normalize_name(&name.to_lowercase()));
+        let name = Parameter::normalize_name(&name.to_lowercase());
+        return is_usable_param_name(&name).then_some(name);
     }
     let first: String = description
         .split_whitespace()
@@ -280,10 +311,7 @@ fn resolve_short_only_name(
         .filter(|c| c.is_ascii_alphanumeric())
         .collect::<String>()
         .to_lowercase();
-    if first.len() < 2 || UNUSABLE_NAME_WORDS.contains(&first.as_str()) {
-        return None;
-    }
-    Some(first)
+    is_usable_param_name(&first).then_some(first)
 }
 
 /// Declarations with no matching parameter, in help-text order.
@@ -347,8 +375,11 @@ pub fn parse_parameters(text: &str) -> Vec<Parameter> {
 /// that produced no parameter (see [`ParsedHelp::unparsed`]) and ones that
 /// cannot be named (see [`ParsedHelp::errors`]).
 pub fn parse_parameters_detailed(text: &str, subcommand: &str, opts: &ParseOptions) -> ParsedHelp {
-    let required_flags = extract_required_flags(text);
-    let required_positionals = extract_required_positionals(text);
+    let required = RequiredInputs {
+        flags: extract_required_flags(text),
+        shorts: extract_required_shorts(text),
+        positionals: extract_required_positionals(text),
+    };
     let short_names = opts.short_param_names.get(subcommand);
     let lines: Vec<&str> = text.lines().collect();
     let mut params = Vec::new();
@@ -359,88 +390,33 @@ pub fn parse_parameters_detailed(text: &str, subcommand: &str, opts: &ParseOptio
     let mut i = 0;
 
     while i < lines.len() {
-        let line = lines[i];
-        let trimmed = line.trim();
+        let trimmed = lines[i].trim();
 
-        // Detect section headers; skip lines that declare nothing
-        if is_top_level_section(line) || trimmed.is_empty() {
+        if !is_decl(trimmed) || is_top_level_section(lines[i]) {
             i += 1;
             continue;
         }
-
-        if !is_decl(trimmed) {
-            i += 1;
-            continue;
-        }
-
         // Skip the clap built-ins: they are not consumers' inputs.
         if is_builtin_decl(trimmed) {
             i += 1;
             continue;
         }
+
         decls.push((i, trimmed.to_string()));
-
-        // Collect the full option block, which may contain blank separator
-        // lines and wrapped description lines. It ends at the next declaration
-        // or section header — NOT at an indentation boundary: clap aligns
-        // long-only options deeper than short-flagged ones, so an indent-based
-        // rule made a short-flagged option swallow the options after it (#240).
-        let mut block_lines: Vec<&str> = vec![trimmed];
-        let mut j = i + 1;
-        while j < lines.len() {
-            let next = lines[j];
-            let next_trimmed = next.trim();
-
-            if next_trimmed.is_empty() {
-                // Blank lines within the block are fine — peek ahead to decide
-                // whether the block continues
-                let peek = peek_next_non_blank(lines.as_slice(), j + 1);
-                match peek {
-                    None => {
-                        j += 1;
-                        break;
-                    }
-                    Some((_, peek_line)) => {
-                        let peek_trimmed = peek_line.trim();
-                        if is_decl(peek_trimmed) || is_top_level_section(peek_line) {
-                            j += 1;
-                            break;
-                        }
-                        block_lines.push(next_trimmed); // include the blank
-                        j += 1;
-                    }
-                }
-            } else {
-                if is_decl(next_trimmed) || is_top_level_section(next) {
-                    break;
-                }
-                block_lines.push(next_trimmed);
-                j += 1;
-            }
-        }
-
-        let block = block_lines.join(" ");
-
-        // Extract possible values from within the block text
+        let (block, next) = collect_block(&lines, i);
         let possible_values = extract_possible_values_from_block(&block);
 
         let parsed = if is_positional_decl(trimmed) {
-            parse_positional_block(&block, possible_values, &required_positionals)
+            parse_positional_block(&block, possible_values, &required.positionals)
         } else {
-            parse_option_block(
-                &block,
-                possible_values,
-                &required_flags,
-                short_names,
-                &mut errors,
-            )
+            parse_option_block(&block, possible_values, &required, short_names, &mut errors)
         };
         if let Some(param) = parsed {
             params.push(param);
             produced.insert(i);
         }
 
-        i = j;
+        i = next;
     }
 
     errors.extend(name_collisions(&params));
@@ -450,6 +426,49 @@ pub fn parse_parameters_detailed(text: &str, subcommand: &str, opts: &ParseOptio
         unparsed,
         errors,
     }
+}
+
+/// Gather one declaration's full block, starting at `start`, and report the
+/// line the caller should resume from.
+///
+/// The block runs to the next declaration or section header — NOT to an
+/// indentation boundary: clap aligns long-only options deeper than
+/// short-flagged ones, so an indent-based rule let a short-flagged option
+/// swallow the options after it (#240). Blank separator lines and wrapped
+/// description lines belong to the block.
+fn collect_block(lines: &[&str], start: usize) -> (String, usize) {
+    let mut block_lines: Vec<&str> = vec![lines[start].trim()];
+    let mut j = start + 1;
+
+    while j < lines.len() {
+        let next_trimmed = lines[j].trim();
+
+        if next_trimmed.is_empty() {
+            // A blank line only ends the block if what follows starts a new one.
+            match peek_next_non_blank(lines, j + 1) {
+                Some((_, peek)) if !ends_block(peek) => {
+                    block_lines.push(next_trimmed); // include the blank
+                    j += 1;
+                }
+                _ => {
+                    j += 1;
+                    break;
+                }
+            }
+        } else if ends_block(lines[j]) {
+            break;
+        } else {
+            block_lines.push(next_trimmed);
+            j += 1;
+        }
+    }
+
+    (block_lines.join(" "), j)
+}
+
+/// True when `line` opens something new, so the block before it is complete.
+fn ends_block(line: &str) -> bool {
+    is_decl(line.trim()) || is_top_level_section(line)
 }
 
 /// Report parameters that resolved to the same orb parameter name — only one of
@@ -514,6 +533,14 @@ fn extract_possible_values_from_block(block: &str) -> Vec<String> {
     Vec::new()
 }
 
+/// What the `Usage:` line lists outside any `[...]` group — i.e. what clap
+/// rejects an invocation for omitting.
+pub(crate) struct RequiredInputs {
+    pub flags: HashSet<String>,
+    pub shorts: HashSet<char>,
+    pub positionals: HashSet<String>,
+}
+
 /// Parse a single collected option block string into a `Parameter`.
 ///
 /// An option with no long form is named from `short_names` or from its
@@ -522,13 +549,20 @@ fn extract_possible_values_from_block(block: &str) -> Vec<String> {
 fn parse_option_block(
     block: &str,
     possible_values: Vec<String>,
-    required_flags: &HashSet<String>,
+    required: &RequiredInputs,
     short_names: Option<&HashMap<char, String>>,
     errors: &mut Vec<String>,
 ) -> Option<Parameter> {
     let short = extract_short_flag(block);
     let Some(long_flag) = extract_long_flag(block) else {
-        return parse_short_only_block(block, possible_values, short, short_names, errors);
+        return parse_short_only_block(
+            block,
+            possible_values,
+            short,
+            required,
+            short_names,
+            errors,
+        );
     };
 
     // Determine if boolean: no <VALUE> metavar after the flag
@@ -544,7 +578,7 @@ fn parse_option_block(
 
     let default = extract_default(block);
     // A flag is required only if the Usage line lists it outside any [...] group.
-    let required = !is_boolean && required_flags.contains(&long_flag);
+    let required = !is_boolean && required.flags.contains(&long_flag);
 
     // Description: everything after the flags portion
     let description = extract_param_description(block);
@@ -567,6 +601,7 @@ fn parse_short_only_block(
     block: &str,
     possible_values: Vec<String>,
     short: Option<char>,
+    required: &RequiredInputs,
     short_names: Option<&HashMap<char, String>>,
     errors: &mut Vec<String>,
 ) -> Option<Parameter> {
@@ -598,10 +633,9 @@ fn parse_short_only_block(
         kind: ParamKind::ShortOnly,
         param_type,
         default: extract_default(block),
-        // clap lists a required short-only option in the Usage line as `-f <VAL>`;
-        // it is only reachable there via the metavar, so treat it as optional and
-        // let the consumer supply it. An empty value is simply not passed.
-        required: false,
+        // Required on the same signal as every other input: listed in the Usage
+        // line outside any `[...]` group.
+        required: !is_boolean && required.shorts.contains(&short),
         description,
     })
 }
@@ -1600,6 +1634,100 @@ Options:
             "error must name the flag and the config key, got: {}",
             parsed.errors[0]
         );
+    }
+
+    /// A description opening with a number derives a name that is not a legal
+    /// shell identifier: the generated script would reference `${60}`, which is
+    /// a positional-parameter read, not a variable — silently broken output of
+    /// exactly the kind this parser exists to prevent.
+    #[test]
+    fn short_only_option_named_from_a_number_is_an_error() {
+        let help = r#"Do something
+
+Usage: tool cmd [OPTIONS]
+
+Options:
+  -t <SECONDS>  60 second timeout applied to the operation
+  -h, --help    Print help
+"#;
+        let parsed = parse_parameters_detailed(help, "cmd", &ParseOptions::default());
+        assert!(
+            parsed.parameters.iter().all(|p| p.long_name != "60"),
+            "a name starting with a digit must never reach the orb: {:?}",
+            parsed.parameters
+        );
+        assert_eq!(parsed.errors.len(), 1, "got: {:?}", parsed.errors);
+        assert!(parsed.errors[0].contains("-t") && parsed.errors[0].contains("short_param"));
+    }
+
+    /// The consumer's own name is held to the same rule — it ends up in a shell
+    /// variable just the same.
+    #[test]
+    fn configured_short_only_name_must_be_a_usable_identifier() {
+        let help = r#"Do something
+
+Usage: tool cmd [OPTIONS]
+
+Options:
+  -t <SECONDS>  Timeout
+  -h, --help    Print help
+"#;
+        let opts = ParseOptions {
+            short_param_names: [(
+                "cmd".to_string(),
+                [('t', "60".to_string())].into_iter().collect(),
+            )]
+            .into_iter()
+            .collect(),
+            ..ParseOptions::default()
+        };
+        let parsed = parse_parameters_detailed(help, "cmd", &opts);
+        assert_eq!(parsed.errors.len(), 1, "got: {:?}", parsed.errors);
+        assert!(parsed.errors[0].contains("-t"));
+    }
+
+    /// A short-only option the Usage line lists outside `[...]` is required, and
+    /// must generate a parameter CircleCI insists on — like every other required
+    /// input here.
+    #[test]
+    fn required_short_only_option_is_required() {
+        let help = r#"Do something
+
+Usage: tool cmd [OPTIONS] -f <FILE>
+
+Options:
+  -f <FILE>   File to process
+  -n <COUNT>  Repeat count
+  -h, --help  Print help
+"#;
+        let opts = ParseOptions {
+            short_param_names: [(
+                "cmd".to_string(),
+                [('f', "file".to_string()), ('n', "repeat_count".to_string())]
+                    .into_iter()
+                    .collect(),
+            )]
+            .into_iter()
+            .collect(),
+            ..ParseOptions::default()
+        };
+        let parsed = parse_parameters_detailed(help, "cmd", &opts);
+        assert!(parsed.errors.is_empty(), "got: {:?}", parsed.errors);
+        let file = parsed
+            .parameters
+            .iter()
+            .find(|p| p.long_name == "file")
+            .unwrap();
+        assert!(
+            file.required,
+            "`-f <FILE>` outside [...] in the Usage line is required"
+        );
+        let count = parsed
+            .parameters
+            .iter()
+            .find(|p| p.long_name == "repeat_count")
+            .unwrap();
+        assert!(!count.required, "`-n` only in [OPTIONS] is not required");
     }
 
     /// A description with no usable first word cannot name anything.
