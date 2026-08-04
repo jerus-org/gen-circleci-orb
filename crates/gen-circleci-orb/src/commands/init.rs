@@ -389,6 +389,7 @@ pub(crate) fn build_bootstrap_config(
                 Some(git_push_subcommands.to_vec())
             },
             custom_files: None,
+            allow_unparsed_help: None,
         }),
         ci: None, // populated by run() after gathering extras
         orbs: None,
@@ -884,8 +885,10 @@ impl Init {
     pub fn run(&self) -> Result<()> {
         let interactive = !is_non_interactive();
 
-        // The binary is itself one of the gathered values, so the config is read
-        // and the dialogue run before there is anything to introspect.
+        // The config is read first: it carries the parser settings (e.g.
+        // allow_unparsed_help) AND the fallbacks for the values gathered below —
+        // one of which is the binary there is no point introspecting until it is
+        // resolved.
         let config_path = std::path::Path::new("gen-circleci-orb.toml");
         let existing_config = crate::orb_config::load_config(config_path)?;
         let core = self.gather_core(&existing_config, interactive)?;
@@ -893,7 +896,10 @@ impl Init {
         // Parse binary early: detect push-capable subcommands (for dialogue default)
         // and subcommands with a required orb_path param (for config defaults).
         let (detected_push, detected_orb_path, present_interactive) =
-            match crate::help_parser::parse_binary(&core.binary) {
+            match crate::help_parser::parse_binary(
+                &core.binary,
+                &crate::commands::generate::parse_options(&existing_config),
+            ) {
                 Ok(cli) => (
                     detect_git_push_subcommands(&cli),
                     detect_orb_path_subcommands(&cli),

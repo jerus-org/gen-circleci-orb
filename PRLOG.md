@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - deps: update dependency gen-circleci-orb to v0.1.4(pr [#238])
 - deps: lock file maintenance(pr [#237])
 - deps: update rust crate pcu to 0.6.30(pr [#239])
+- stop option blocks swallowing later options(pr [#243])
 
 ## [0.1.4] - 2026-07-27
 
@@ -819,6 +820,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#238]: https://github.com/jerus-org/gen-circleci-orb/pull/238
 [#237]: https://github.com/jerus-org/gen-circleci-orb/pull/237
 [#239]: https://github.com/jerus-org/gen-circleci-orb/pull/239
+[#243]: https://github.com/jerus-org/gen-circleci-orb/pull/243
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.4...HEAD
 [0.1.4]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.2...v0.1.3
