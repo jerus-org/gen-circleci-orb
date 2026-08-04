@@ -362,6 +362,7 @@ pub(crate) fn build_bootstrap_config(
                 Some(git_push_subcommands.to_vec())
             },
             custom_files: None,
+            allow_unparsed_help: None,
             crate_wait_attempts: None,
             crate_wait_seconds: None,
         }),
@@ -724,10 +725,18 @@ impl Init {
     }
 
     pub fn run(&self) -> Result<()> {
+        // The config carries parser settings (e.g. allow_unparsed_help), so it is
+        // loaded before the binary is introspected.
+        let config_path = std::path::Path::new("gen-circleci-orb.toml");
+        let existing_config = crate::orb_config::load_config(config_path)?;
+
         // Parse binary early: detect push-capable subcommands (for dialogue default)
         // and subcommands with a required orb_path param (for config defaults).
         let (detected_push, detected_orb_path, present_interactive) =
-            match crate::help_parser::parse_binary(&self.binary) {
+            match crate::help_parser::parse_binary(
+                &self.binary,
+                &crate::commands::generate::parse_options(&existing_config),
+            ) {
                 Ok(cli) => (
                     detect_git_push_subcommands(&cli),
                     detect_orb_path_subcommands(&cli),
@@ -735,9 +744,6 @@ impl Init {
                 ),
                 Err(_) => (vec![], vec![], vec![]),
             };
-
-        let config_path = std::path::Path::new("gen-circleci-orb.toml");
-        let existing_config = crate::orb_config::load_config(config_path)?;
         let extras = self.gather_extras(&detected_push, &existing_config)?;
         let namespaces: Vec<String> = self
             .public_orb_namespaces
