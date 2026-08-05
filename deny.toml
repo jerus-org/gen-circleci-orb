@@ -7,9 +7,6 @@ db-urls = ["https://github.com/rustsec/advisory-db"]
 unmaintained = "all"
 yanked = "warn"
 ignore = [
-    # RUSTSEC-2023-0071: Marvin Attack timing side-channel in rsa. Transitive
-    # via pcu -> sigstore; no fixed upstream release. Matches pcu/gen-orb-mcp.
-    "RUSTSEC-2023-0071",
 ]
 
 [licenses]
@@ -30,15 +27,6 @@ allow = [
     "CDLA-Permissive-2.0",
 ]
 
-# LGPL-2.0-or-later: the OpenPGP stack used for GPG commit/tag signing (via pcu).
-[[licenses.exceptions]]
-name = "sequoia-openpgp"
-allow = ["LGPL-2.0-or-later"]
-
-[[licenses.exceptions]]
-name = "buffered-reader"
-allow = ["LGPL-2.0-or-later"]
-
 # MPL-2.0 (file-level copyleft): transitive config/dirs helper.
 [[licenses.exceptions]]
 name = "option-ext"
@@ -47,6 +35,19 @@ allow = ["MPL-2.0"]
 [bans]
 multiple-versions = "warn"
 wildcards = "allow"
+# `rsa` has an unfixed timing side-channel (RUSTSEC-2023-0071) and reaches this
+# graph only through pcu's default `attest` feature (openidconnect + sigstore),
+# which this crate does not use — it depends on pcu for git and GPG only (pcu
+# shells out to the `gpg` CLI, so signing is unaffected).
+#
+# The dependency is gone rather than suppressed. This ban states the intent and
+# fails `just audit` locally; note that CI does NOT run cargo-deny today (the
+# security job runs `cargo audit -D warnings` only), so the CI-side guarantee
+# comes from `.cargo/audit.toml` no longer ignoring RUSTSEC-2023-0071 — a
+# returning `rsa` fails the audit there. Do not restore that ignore on the
+# grounds that this ban covers it; it does not. Adopting jci-audit at 0.1.0
+# will run both tools in CI and make the ban enforced there too (#260).
+deny = [{ name = "rsa" }]
 
 [sources]
 unknown-registry = "warn"

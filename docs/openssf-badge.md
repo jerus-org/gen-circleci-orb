@@ -91,7 +91,7 @@ Repository paths are relative to the repo root; the primary crate is `crates/gen
 | crypto_random | Met | No custom key/nonce generation; delegated to Sigstore/rsign (secure RNG) |
 | delivery_mitm | Met | Distribution over HTTPS (crates.io, GitHub); git over HTTPS |
 | delivery_unsigned | Met | Releases are signed (GPG tags, SLSA/Sigstore, minisign); see `docs/RELEASING.md` |
-| vulnerabilities_fixed_60_days | Met | `cargo audit`/`cargo deny` clean; only `RUSTSEC-2023-0071` ignored (transitive `rsa` timing side-channel, no upstream fix, not medium+ exploitable here) |
+| vulnerabilities_fixed_60_days | Met | `cargo audit`/`cargo deny` clean; no advisories suppressed — the ignore lists in `.cargo/audit.toml` and `deny.toml` are empty. The one former suppression (`RUSTSEC-2023-0071`, transitive `rsa`) was removed by dropping the dependency rather than the advisory |
 | vulnerabilities_critical_fixed | Met | No known critical vulnerabilities outstanding |
 | no_leaked_credentials | Met | Secrets come from CI env/contexts; none in the repo (`docs/assurance-case.md`) |
 

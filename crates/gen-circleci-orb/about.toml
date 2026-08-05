@@ -1,7 +1,9 @@
 # cargo-about configuration for generating THIRD-PARTY-LICENSES.md.
-# The accepted list mirrors the license policy in deny.toml: permissive
-# licenses plus the weak-copyleft licenses carried by specific transitive
-# dependencies (LGPL-2.0-or-later via the OpenPGP/GPG-signing stack, MPL-2.0).
+# cargo-about does NOT read deny.toml, so this list states the same policy a
+# second time and the two can drift apart in silence. Keep them in step: this
+# is permissive licences plus MPL-2.0, carried by one transitive helper.
+# LGPL-2.0-or-later was dropped when pcu's `attest` feature was gated off and
+# the OpenPGP stack (sequoia-openpgp, buffered-reader) left the graph with it.
 accepted = [
     "MIT",
     "Apache-2.0",
@@ -13,7 +15,6 @@ accepted = [
     "Zlib",
     "BSL-1.0",
     "CDLA-Permissive-2.0",
-    "LGPL-2.0-or-later",
     "MPL-2.0",
 ]
 
