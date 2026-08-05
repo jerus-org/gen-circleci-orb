@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - docs-escape [orb] and metavars in doc comments(pr [#259])
+- chore-depend on pcu without its attest feature(pr [#261])
 
 ### Fixed
 
@@ -837,6 +838,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#245]: https://github.com/jerus-org/gen-circleci-orb/pull/245
 [#246]: https://github.com/jerus-org/gen-circleci-orb/pull/246
 [#259]: https://github.com/jerus-org/gen-circleci-orb/pull/259
+[#261]: https://github.com/jerus-org/gen-circleci-orb/pull/261
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.4...HEAD
 [0.1.4]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.2...v0.1.3
