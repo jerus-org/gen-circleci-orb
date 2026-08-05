@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - generate parameters for positionals and short-only options(pr [#244])
 
+### Changed
+
+- docs-escape [orb] and metavars in doc comments(pr [#259])
+
 ### Fixed
 
 - deps: update dependency gen-circleci-orb to v0.1.4(pr [#238])
@@ -832,6 +836,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#247]: https://github.com/jerus-org/gen-circleci-orb/pull/247
 [#245]: https://github.com/jerus-org/gen-circleci-orb/pull/245
 [#246]: https://github.com/jerus-org/gen-circleci-orb/pull/246
+[#259]: https://github.com/jerus-org/gen-circleci-orb/pull/259
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.4...HEAD
 [0.1.4]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.2...v0.1.3
