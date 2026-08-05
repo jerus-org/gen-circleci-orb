@@ -19,15 +19,16 @@ cargo install gen-circleci-orb
 
 `init` is the entry point. It captures your setup once into a `gen-circleci-orb.toml`, runs
 `generate`, and patches your CI — you do not run `generate` first. It is interactive: run it
-with just the binary and it prompts for the required values it doesn't have (workflow names,
-namespaces, tag prefix, contexts), each pre-filled with a sensible default.
+with no flags at all and it prompts for every value it doesn't already have (the binary,
+workflow names, tag prefix, docker namespace, contexts), each pre-filled with a sensible
+default where one exists.
 
 ```bash
-gen-circleci-orb init --binary my-tool
+gen-circleci-orb init
 ```
 
-Passing a flag skips its prompt, so the same command is fully scriptable (and non-interactive
-under `--dry-run` or without a TTY) by supplying everything up front:
+Passing a flag skips its prompt, so the same command is fully scriptable by supplying
+everything up front:
 
 ```bash
 gen-circleci-orb init \
@@ -65,8 +66,13 @@ This:
 Preview what would change without writing anything:
 
 ```bash
-gen-circleci-orb init --binary my-tool ... --dry-run
+gen-circleci-orb init --dry-run
 ```
+
+`--dry-run` previews; it does not skip the dialogue. The values still have to be gathered
+before there is anything to preview, so it prompts for whatever the flags and config do not
+supply. Where there is no terminal to ask — under CI, or with output redirected — `init`
+fails naming every value it still needs, rather than prompting into the void.
 
 ## Regenerate with `generate`
 

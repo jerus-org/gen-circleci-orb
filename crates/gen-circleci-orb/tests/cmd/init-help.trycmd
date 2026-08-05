@@ -1,0 +1,73 @@
+```
+$ gen-circleci-orb init --help
+Wire orb generation into an existing repo's CI configuration
+
+Usage: gen-circleci-orb init [OPTIONS]
+
+Options:
+      --binary <BINARY>
+          Name of the binary to introspect (must be on PATH). Falls back to `[orb] binary` in the config; prompted for if neither is set
+      --public-orb-namespace <PUBLIC_ORB_NAMESPACES>
+          CircleCI namespace(s) to publish the orb under as a public orb (repeatable). Must be set correctly on first init — visibility cannot be changed after the orb is created
+      --private-orb-namespace <PRIVATE_ORB_NAMESPACES>
+          CircleCI namespace(s) to publish the orb under as a private orb (repeatable). Each listed namespace gets `--private` in its `circleci orb create` command. Must be set correctly on first init — visibility cannot be changed after the orb is created
+      --build-workflow <BUILD_WORKFLOW>
+          Name of the build/validation workflow to patch. Falls back to `[ci] build_workflow` in the config; prompted for if neither is set
+      --release-workflow <RELEASE_WORKFLOW>
+          Name of the release workflow to patch. Falls back to `[ci] release_workflow` in the config; prompted for if neither is set
+      --requires-job <REQUIRES_JOB>
+          Job in the build workflow that regenerate-orb should require
+      --crate-tag-prefix <CRATE_TAG_PREFIX>
+          Tag prefix used by `toolkit/release_crate` for the crate (e.g. `gen-orb-mcp-v`). Used to filter the `orb-release:` workflow trigger in config.yml and to normalise `CIRCLE_TAG` for `orb-tools/publish`. Falls back to `[ci] crate_tag_prefix` in the config; prompted for if neither is set
+      --release-after-job <RELEASE_AFTER_JOB>
+          Job in the release workflow after which the generated release jobs (build-binary-release, pack-orb-release, build-container, ensure-orb-registered) should be gated. This is the sole mechanism for specifying where the generated jobs plug into the existing pipeline topology. Falls back to `[ci] release_after_job` in the config; prompted for if neither is set
+      --orb-dir <ORB_DIR>
+          Output directory for the generated orb source (relative to repo root) [default: orb]
+      --ci-dir <CI_DIR>
+          Path to the .circleci/ directory [default: .circleci]
+      --orb-tools-version <ORB_TOOLS_VERSION>
+          circleci/orb-tools version to pin in generated CI [default: 12.3.3]
+      --docker-orb-version <DOCKER_ORB_VERSION>
+          circleci/docker orb version to pin in generated CI [default: 3.0.1]
+      --docker-namespace <DOCKER_NAMESPACE>
+          Docker Hub (or registry) namespace for the built container image. Falls back to `[ci] docker_namespace` in the config; prompted for if neither is set
+      --docker-context <DOCKER_CONTEXT>
+          CircleCI context name holding Docker Hub credentials (DOCKER_LOGIN, DOCKER_PASSWORD). Prompted interactively if not supplied
+      --orb-context <ORB_CONTEXT>
+          CircleCI context name holding orb publishing credentials (CIRCLECI_CLI_TOKEN). Prompted interactively if not supplied
+      --gen-circleci-orb-version <GEN_CIRCLECI_ORB_VERSION>
+          Version of the jerus-org/gen-circleci-orb orb to pin in generated CI. Defaults to the version of this binary (orb and crate are released together) [default: [..]]
+      --mcp
+          Wire in gen-orb-mcp MCP server generation + publish after orb publish
+      --mcp-earliest-version <MCP_EARLIEST_VERSION>
+          Earliest orb version to include when priming prior-version snapshots. Passed to gen-circleci-orb/build_mcp_server as `earliest_version`. Only used when --mcp is enabled. Prompted interactively if not supplied
+      --mcp-context <MCP_CONTEXT>
+          CircleCI context name(s) for MCP server build + publish + save steps (repeatable or comma-separated). Needs: GITHUB_TOKEN (GitHub App token, contents:write + bypass branch protection), BOT_GPG_KEY, BOT_TRUST, BOT_USER_NAME, BOT_USER_EMAIL, BOT_SIGN_KEY. Only used when --mcp is enabled. Prompted interactively if not supplied
+      --git-push-subcommands <GIT_PUSH_SUBCOMMANDS>
+          Subcommand names whose generated jobs should include a `set_https_remote` step (repeatable). Use for subcommands that push to git (e.g. `save`)
+      --home-url <HOME_URL>
+          Home URL for the orb (shown in the CircleCI registry)
+      --source-url <SOURCE_URL>
+          Source URL for the orb (shown in the CircleCI registry)
+      --record
+          Enable auto-record: after `generate`, the regenerate-orb CI job commits the regenerated orb source back (GPG-signed) and pushes it, so the published orb always reflects the CLI. When set, the `--record-*-env` flags name the environment variables that hold the GPG signing material at runtime (no defaults — they must be supplied). Prompted interactively if not set
+      --record-gpg-key-env <RECORD_GPG_KEY_ENV>
+          Name of the env var holding the base64-encoded GPG private key (auto-record)
+      --record-gpg-trust-env <RECORD_GPG_TRUST_ENV>
+          Name of the env var holding the GPG ownertrust export (auto-record)
+      --record-user-name-env <RECORD_USER_NAME_ENV>
+          Name of the env var holding the committer name (auto-record)
+      --record-user-email-env <RECORD_USER_EMAIL_ENV>
+          Name of the env var holding the committer email (auto-record)
+      --record-signing-key-env <RECORD_SIGNING_KEY_ENV>
+          Name of the env var holding the GPG signing key id (auto-record)
+      --record-push-ssh-fingerprint <RECORD_PUSH_SSH_FINGERPRINT>
+          SSH key fingerprint (a public-key hash, not a secret) for the end-of-workflow push job (auto-record). Optional: when set, the push job loads this write key and drops the read-only checkout key; empty falls back to ambient credentials. A value, not an env-var name — add_ssh_keys resolves fingerprints at config-compile time and cannot read env vars
+      --record-context <RECORD_CONTEXTS>
+          CircleCI context(s) that supply the auto-record env-var values (GPG signing material), repeatable or comma-separated. The record CI job attaches these
+      --dry-run
+          Show planned changes without modifying any files
+  -h, --help
+          Print help
+
+```

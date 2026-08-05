@@ -9,6 +9,18 @@ pub use types::{
 use anyhow::Result;
 use std::path::Path;
 
+/// Treat an empty string as absent.
+///
+/// A config key present but blank (`binary = ""`) is a value the user has not
+/// supplied, not a value they chose. Resolution paths that check only for
+/// absence otherwise accept it and carry `""` into whatever they configure —
+/// so every such path runs its candidates through this.
+pub fn non_empty(value: Option<String>) -> Option<String> {
+    value
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
 pub fn load_config(path: &Path) -> Result<OrbConfig> {
     if !path.exists() {
         return Ok(OrbConfig::default());
