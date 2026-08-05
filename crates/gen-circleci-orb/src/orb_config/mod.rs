@@ -336,41 +336,27 @@ steps:
             "help".to_string(),
             SubcommandConfig {
                 generate_job: Some(false),
-                interactive: None,
-                param: None,
-                label: None,
-                short_param: None,
+                ..SubcommandConfig::default()
             },
         );
         subcommands.insert(
             "generate".to_string(),
             SubcommandConfig {
-                generate_job: None,
-                interactive: None,
                 param: Some(params),
-                label: None,
-                short_param: None,
+                ..SubcommandConfig::default()
             },
         );
 
+        // Only the fields this round-trip is about are named; the rest come from
+        // Default, so adding a field to OrbSection does not churn this test. The
+        // values are arbitrary fixtures — the assertion is that whatever goes in
+        // comes back out, not that these particular strings are meaningful.
         let original = OrbConfig {
             orb: Some(OrbSection {
-                binary: Some("gen-orb-mcp".to_string()),
-                namespaces: Some(vec!["jerus-org".to_string()]),
+                binary: Some("mytool".to_string()),
+                namespaces: Some(vec!["my-org".to_string()]),
                 orb_dir: Some("orb".to_string()),
-                base_image: None,
-                builder_image: None,
-                circleci_cli_version: None,
-                install_method: None,
-                apt_packages: None,
-                cargo_tools: None,
-                home_url: None,
-                source_url: None,
-                git_push_subcommands: None,
-                custom_files: None,
-                allow_unparsed_help: None,
-                crate_wait_attempts: None,
-                crate_wait_seconds: None,
+                ..OrbSection::default()
             }),
             ci: None,
             orbs: None,

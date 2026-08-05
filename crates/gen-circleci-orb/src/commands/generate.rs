@@ -1700,21 +1700,45 @@ mod tests {
         );
     }
 
-    /// One side being set must not reset the other to its default.
+    /// The two settings resolve independently. Configuring one and leaving the
+    /// other unset must give: the configured value for the one, the default for
+    /// the other — and in particular must not drag the configured one back to
+    /// its default. Checked both ways round.
     #[test]
     fn resolve_crate_wait_settings_are_independent() {
         use crate::orb_config::{OrbConfig, OrbSection};
         use crate::orb_generator::render::CrateWait;
-        let config = OrbConfig {
+        let default = CrateWait::default();
+
+        // seconds configured, attempts left unset
+        let seconds_only = OrbConfig {
             orb: Some(OrbSection {
                 crate_wait_seconds: Some(30),
                 ..OrbSection::default()
             }),
             ..OrbConfig::default()
         };
-        let wait = resolve_crate_wait(&config);
-        assert_eq!(wait.attempts, CrateWait::default().attempts);
-        assert_eq!(wait.seconds, 30);
+        let wait = resolve_crate_wait(&seconds_only);
+        assert_eq!(wait.seconds, 30, "the configured value must survive");
+        assert_eq!(
+            wait.attempts, default.attempts,
+            "the unset setting must take its default"
+        );
+
+        // attempts configured, seconds left unset
+        let attempts_only = OrbConfig {
+            orb: Some(OrbSection {
+                crate_wait_attempts: Some(60),
+                ..OrbSection::default()
+            }),
+            ..OrbConfig::default()
+        };
+        let wait = resolve_crate_wait(&attempts_only);
+        assert_eq!(wait.attempts, 60, "the configured value must survive");
+        assert_eq!(
+            wait.seconds, default.seconds,
+            "the unset setting must take its default"
+        );
     }
 
     // ── ensure_cargo_tools_supported ───────────────────────────────────────
