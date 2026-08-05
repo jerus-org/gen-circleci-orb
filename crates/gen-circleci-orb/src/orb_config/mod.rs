@@ -2,7 +2,8 @@ mod types;
 
 pub use types::{
     CiSection, ExtraJob, JobGroup, JobGroupParam, JobGroupStep, OrbConfig, OrbSection,
-    ParamOverride, RecordConfig, SubcommandConfig,
+    ParamOverride, RecordConfig, SubcommandConfig, DEFAULT_CRATE_WAIT_ATTEMPTS,
+    DEFAULT_CRATE_WAIT_SECONDS, MAX_CRATE_WAIT_ATTEMPTS,
 };
 
 use anyhow::Result;
@@ -336,39 +337,27 @@ steps:
             "help".to_string(),
             SubcommandConfig {
                 generate_job: Some(false),
-                interactive: None,
-                param: None,
-                label: None,
-                short_param: None,
+                ..SubcommandConfig::default()
             },
         );
         subcommands.insert(
             "generate".to_string(),
             SubcommandConfig {
-                generate_job: None,
-                interactive: None,
                 param: Some(params),
-                label: None,
-                short_param: None,
+                ..SubcommandConfig::default()
             },
         );
 
+        // Only the fields this round-trip is about are named; the rest come from
+        // Default, so adding a field to OrbSection does not churn this test. The
+        // values are arbitrary fixtures — the assertion is that whatever goes in
+        // comes back out, not that these particular strings are meaningful.
         let original = OrbConfig {
             orb: Some(OrbSection {
-                binary: Some("gen-orb-mcp".to_string()),
-                namespaces: Some(vec!["jerus-org".to_string()]),
+                binary: Some("mytool".to_string()),
+                namespaces: Some(vec!["my-org".to_string()]),
                 orb_dir: Some("orb".to_string()),
-                base_image: None,
-                builder_image: None,
-                circleci_cli_version: None,
-                install_method: None,
-                apt_packages: None,
-                cargo_tools: None,
-                home_url: None,
-                source_url: None,
-                git_push_subcommands: None,
-                custom_files: None,
-                allow_unparsed_help: None,
+                ..OrbSection::default()
             }),
             ci: None,
             orbs: None,
@@ -387,5 +376,52 @@ steps:
         save_config(&path, &original).unwrap();
         let loaded = load_config(&path).unwrap();
         assert_eq!(original, loaded);
+    }
+
+    // ── crate-wait defaults live in the struct ─────────────────────────────
+
+    /// The defaults are the struct's, not the type's: `u32::default()` is 0,
+    /// which as an attempt count would mean "never wait".
+    #[test]
+    fn orb_section_default_carries_the_crate_wait_defaults() {
+        use crate::orb_config::{DEFAULT_CRATE_WAIT_ATTEMPTS, DEFAULT_CRATE_WAIT_SECONDS};
+        let section = OrbSection::default();
+        assert_eq!(section.crate_wait_attempts, DEFAULT_CRATE_WAIT_ATTEMPTS);
+        assert_eq!(section.crate_wait_seconds, DEFAULT_CRATE_WAIT_SECONDS);
+    }
+
+    /// A config written before these settings existed must still load, taking
+    /// the defaults rather than zeroes.
+    #[test]
+    fn config_without_crate_wait_keys_loads_the_defaults() {
+        use crate::orb_config::{DEFAULT_CRATE_WAIT_ATTEMPTS, DEFAULT_CRATE_WAIT_SECONDS};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gen-circleci-orb.toml");
+        std::fs::write(&path, "[orb]\nbinary = \"mytool\"\n").unwrap();
+        let orb = load_config(&path).unwrap().orb.unwrap();
+        assert_eq!(orb.crate_wait_attempts, DEFAULT_CRATE_WAIT_ATTEMPTS);
+        assert_eq!(orb.crate_wait_seconds, DEFAULT_CRATE_WAIT_SECONDS);
+    }
+
+    /// Saving writes the values out, so the config documents the knobs and the
+    /// value in force — the scaffolding a consumer edits rather than discovers.
+    #[test]
+    fn saved_config_spells_out_the_crate_wait_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gen-circleci-orb.toml");
+        let config = OrbConfig {
+            orb: Some(OrbSection {
+                binary: Some("mytool".to_string()),
+                ..OrbSection::default()
+            }),
+            ..OrbConfig::default()
+        };
+        save_config(&path, &config).unwrap();
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            written.contains("crate_wait_attempts = 40")
+                && written.contains("crate_wait_seconds = 15"),
+            "the written config must show the defaults in force:\n{written}"
+        );
     }
 }

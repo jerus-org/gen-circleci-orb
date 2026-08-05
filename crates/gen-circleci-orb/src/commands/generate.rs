@@ -469,6 +469,35 @@ pub(crate) fn resolve_apt_packages(
     pkgs
 }
 
+/// Resolve the crates.io propagation window from `[orb]`.
+///
+/// There is no CLI flag: this is a property of the project's release, not of a
+/// single run. The config always carries a value — `[orb]` defaults supply one
+/// when the file omits the key — so this only has to keep that value sane:
+/// floored at 1, and capped at [`MAX_CRATE_WAIT_ATTEMPTS`], since a window long
+/// enough to outlast the CI job timeout is a hang rather than a window (#236).
+pub(crate) fn resolve_crate_wait(
+    config: &crate::orb_config::OrbConfig,
+) -> orb_generator::render::CrateWait {
+    use crate::orb_config::MAX_CRATE_WAIT_ATTEMPTS;
+    use orb_generator::render::CrateWait;
+    let section = config.orb.clone().unwrap_or_default();
+
+    if section.crate_wait_attempts > MAX_CRATE_WAIT_ATTEMPTS {
+        tracing::warn!(
+            "[orb] crate_wait_attempts = {} exceeds the {MAX_CRATE_WAIT_ATTEMPTS} \
+             maximum; using {MAX_CRATE_WAIT_ATTEMPTS}",
+            section.crate_wait_attempts
+        );
+    }
+    CrateWait {
+        attempts: section
+            .crate_wait_attempts
+            .clamp(1, MAX_CRATE_WAIT_ATTEMPTS),
+        seconds: section.crate_wait_seconds.max(1),
+    }
+}
+
 /// CLI flags take precedence over `[orb].cargo_tools`. Unlike apt packages,
 /// cargo tools carry no MCP/record baseline — the list is exactly what the
 /// consumer asked for.
@@ -578,6 +607,7 @@ impl Generate {
             ),
             apt_packages: resolve_apt_packages(&self.apt_packages, &orb_config),
             cargo_tools,
+            crate_wait: resolve_crate_wait(&orb_config),
         };
 
         let files = orb_generator::generate(&cli_def, &opts, Some(&orb_config));
@@ -1601,6 +1631,114 @@ mod tests {
     fn resolve_cargo_tools_defaults_to_empty() {
         use crate::orb_config::OrbConfig;
         assert!(resolve_cargo_tools(&[], &OrbConfig::default()).is_empty());
+    }
+
+    // ── resolve_crate_wait ─────────────────────────────────────────────────
+
+    #[test]
+    fn resolve_crate_wait_defaults_when_unset() {
+        use crate::orb_config::OrbConfig;
+        use crate::orb_generator::render::CrateWait;
+        assert_eq!(
+            resolve_crate_wait(&OrbConfig::default()),
+            CrateWait::default()
+        );
+    }
+
+    #[test]
+    fn resolve_crate_wait_uses_config_values() {
+        use crate::orb_config::{OrbConfig, OrbSection};
+        let config = OrbConfig {
+            orb: Some(OrbSection {
+                crate_wait_attempts: 60,
+                crate_wait_seconds: 30,
+                ..OrbSection::default()
+            }),
+            ..OrbConfig::default()
+        };
+        let wait = resolve_crate_wait(&config);
+        assert_eq!(wait.attempts, 60);
+        assert_eq!(wait.seconds, 30);
+    }
+
+    /// Zero attempts is not a gate at all, and zero seconds is a busy-loop.
+    /// Both are floored at one rather than silently replaced by the default:
+    /// the value is now written in the consumer's config, so it is a stated
+    /// choice rather than an absent one.
+    #[test]
+    fn resolve_crate_wait_floors_zero_at_one() {
+        use crate::orb_config::{OrbConfig, OrbSection};
+        let config = OrbConfig {
+            orb: Some(OrbSection {
+                crate_wait_attempts: 0,
+                crate_wait_seconds: 0,
+                ..OrbSection::default()
+            }),
+            ..OrbConfig::default()
+        };
+        let wait = resolve_crate_wait(&config);
+        assert_eq!(wait.attempts, 1);
+        assert_eq!(wait.seconds, 1);
+    }
+
+    /// A value big enough to outlast the CircleCI job timeout is not a window,
+    /// it is a hang. Clamp it and say so.
+    #[test]
+    fn resolve_crate_wait_clamps_absurd_attempts() {
+        use crate::orb_config::MAX_CRATE_WAIT_ATTEMPTS;
+        use crate::orb_config::{OrbConfig, OrbSection};
+        let config = OrbConfig {
+            orb: Some(OrbSection {
+                crate_wait_attempts: 100_000,
+                ..OrbSection::default()
+            }),
+            ..OrbConfig::default()
+        };
+        assert_eq!(
+            resolve_crate_wait(&config).attempts,
+            MAX_CRATE_WAIT_ATTEMPTS
+        );
+    }
+
+    /// The two settings resolve independently. Configuring one and leaving the
+    /// other unset must give: the configured value for the one, the default for
+    /// the other — and in particular must not drag the configured one back to
+    /// its default. Checked both ways round.
+    #[test]
+    fn resolve_crate_wait_settings_are_independent() {
+        use crate::orb_config::{OrbConfig, OrbSection};
+        use crate::orb_generator::render::CrateWait;
+        let default = CrateWait::default();
+
+        // seconds configured, attempts left unset
+        let seconds_only = OrbConfig {
+            orb: Some(OrbSection {
+                crate_wait_seconds: 30,
+                ..OrbSection::default()
+            }),
+            ..OrbConfig::default()
+        };
+        let wait = resolve_crate_wait(&seconds_only);
+        assert_eq!(wait.seconds, 30, "the configured value must survive");
+        assert_eq!(
+            wait.attempts, default.attempts,
+            "the unset setting must take its default"
+        );
+
+        // attempts configured, seconds left unset
+        let attempts_only = OrbConfig {
+            orb: Some(OrbSection {
+                crate_wait_attempts: 60,
+                ..OrbSection::default()
+            }),
+            ..OrbConfig::default()
+        };
+        let wait = resolve_crate_wait(&attempts_only);
+        assert_eq!(wait.attempts, 60, "the configured value must survive");
+        assert_eq!(
+            wait.seconds, default.seconds,
+            "the unset setting must take its default"
+        );
     }
 
     // ── ensure_cargo_tools_supported ───────────────────────────────────────
