@@ -233,13 +233,10 @@ pub(crate) fn resolve_binary(
     cli: Option<&str>,
     config: &crate::orb_config::OrbConfig,
 ) -> Result<String> {
-    if let Some(b) = cli.filter(|s| !s.is_empty()) {
-        return Ok(b.to_string());
-    }
-    config
-        .orb
-        .as_ref()
-        .and_then(|o| o.binary.clone())
+    // A blank value is missing, from either source — `[orb] binary = ""` must
+    // not resolve to an empty binary name.
+    orb_config::non_empty(cli.map(str::to_string))
+        .or_else(|| orb_config::non_empty(config.orb.as_ref().and_then(|o| o.binary.clone())))
         .ok_or_else(|| {
             anyhow::anyhow!(
                 "binary name is required — pass --binary <NAME> or add `binary = \"<name>\"` \
@@ -1205,6 +1202,37 @@ mod tests {
         let config = OrbConfig::default();
         let binary = resolve_binary(Some("mytool"), &config).unwrap();
         assert_eq!(binary, "mytool");
+    }
+
+    /// `[orb] binary = ""` is a key the user has not filled in, not a binary
+    /// named "". It must fail the same way an absent key does.
+    #[test]
+    fn resolve_binary_rejects_empty_values() {
+        use crate::orb_config::{OrbConfig, OrbSection};
+        let blank_config = OrbConfig {
+            orb: Some(OrbSection {
+                binary: Some(String::new()),
+                ..OrbSection::default()
+            }),
+            ..OrbConfig::default()
+        };
+        assert!(
+            resolve_binary(None, &blank_config).is_err(),
+            "an empty configured binary must not resolve"
+        );
+        assert!(
+            resolve_binary(Some(""), &OrbConfig::default()).is_err(),
+            "an empty --binary must not resolve"
+        );
+        // A blank flag still falls back to a real configured value.
+        let config = OrbConfig {
+            orb: Some(OrbSection {
+                binary: Some("mytool".to_string()),
+                ..OrbSection::default()
+            }),
+            ..OrbConfig::default()
+        };
+        assert_eq!(resolve_binary(Some(""), &config).unwrap(), "mytool");
     }
 
     #[test]

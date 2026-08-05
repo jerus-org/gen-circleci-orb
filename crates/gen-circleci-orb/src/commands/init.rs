@@ -6,7 +6,7 @@ use crate::{
     ci_patcher,
     commands::generate::Generate,
     help_parser::types::CliDefinition,
-    orb_config::{CiSection, OrbConfig, OrbSection, RecordConfig, SubcommandConfig},
+    orb_config::{non_empty, CiSection, OrbConfig, OrbSection, RecordConfig, SubcommandConfig},
 };
 
 pub const DEFAULT_DOCKER_ORB_VERSION: &str = "3.0.1";
@@ -524,30 +524,32 @@ impl Init {
         let ci = existing.ci.as_ref();
         let orb = existing.orb.as_ref();
 
-        let binary = self
-            .binary
-            .clone()
-            .or_else(|| orb.and_then(|o| o.binary.clone()));
-        let build_workflow = self
-            .build_workflow
-            .clone()
-            .or_else(|| ci.and_then(|c| c.build_workflow.clone()));
-        let release_workflow = self
-            .release_workflow
-            .clone()
-            .or_else(|| ci.and_then(|c| c.release_workflow.clone()));
-        let crate_tag_prefix = self
-            .crate_tag_prefix
-            .clone()
-            .or_else(|| ci.and_then(|c| c.crate_tag_prefix.clone()));
-        let release_after_job = self
-            .release_after_job
-            .clone()
-            .or_else(|| ci.and_then(|c| c.release_after_job.clone()));
-        let docker_namespace = self
-            .docker_namespace
-            .clone()
-            .or_else(|| ci.and_then(|c| c.docker_namespace.clone()));
+        // Filter once, here, so the interactive and non-interactive branches
+        // agree on what "missing" means: a blank value is missing in both.
+        let pick = |flag: Option<String>, configured: Option<String>| -> Option<String> {
+            non_empty(flag).or_else(|| non_empty(configured))
+        };
+        let binary = pick(self.binary.clone(), orb.and_then(|o| o.binary.clone()));
+        let build_workflow = pick(
+            self.build_workflow.clone(),
+            ci.and_then(|c| c.build_workflow.clone()),
+        );
+        let release_workflow = pick(
+            self.release_workflow.clone(),
+            ci.and_then(|c| c.release_workflow.clone()),
+        );
+        let crate_tag_prefix = pick(
+            self.crate_tag_prefix.clone(),
+            ci.and_then(|c| c.crate_tag_prefix.clone()),
+        );
+        let release_after_job = pick(
+            self.release_after_job.clone(),
+            ci.and_then(|c| c.release_after_job.clone()),
+        );
+        let docker_namespace = pick(
+            self.docker_namespace.clone(),
+            ci.and_then(|c| c.docker_namespace.clone()),
+        );
 
         if !interactive {
             let missing: Vec<&str> = [
@@ -564,7 +566,7 @@ impl Init {
             if !missing.is_empty() {
                 anyhow::bail!(
                     "init needs these values and there is no terminal to ask \
-                     (running under CI, or output redirected): {}. \
+                     (running under CI, or with stderr redirected): {}. \
                      Supply them as flags, or record them in gen-circleci-orb.toml.",
                     missing.join(", ")
                 );
@@ -587,8 +589,9 @@ impl Init {
             }
             Ok(input.interact_text()?.trim().to_string())
         };
+        // The candidates are already non-empty or None (see `pick` above).
         let resolve = |label: &str, value: Option<String>| -> Result<String> {
-            match value.filter(|s| !s.is_empty()) {
+            match value {
                 Some(v) => Ok(v),
                 None => ask(label, None),
             }
@@ -606,7 +609,7 @@ impl Init {
             "Release workflow to patch (where the orb is published)",
             release_workflow,
         )?;
-        let crate_tag_prefix = match crate_tag_prefix.filter(|s| !s.is_empty()) {
+        let crate_tag_prefix = match crate_tag_prefix {
             Some(v) => v,
             // The convention is `<crate>-v`, and the binary name is the crate
             // name in every workspace this targets — so offer it, don't impose it.
@@ -898,7 +901,14 @@ impl Init {
                     detect_orb_path_subcommands(&cli),
                     present_default_interactive(&cli),
                 ),
-                Err(_) => (vec![], vec![], vec![]),
+                Err(e) => {
+                    // Not fatal here — `generate` re-runs the parse a moment later
+                    // and fails properly. But the binary may have just been typed
+                    // at a prompt, so say why it could not be read, rather than
+                    // letting it surface one step downstream as a generate error.
+                    tracing::warn!("could not introspect `{}`: {e:#}", core.binary);
+                    (vec![], vec![], vec![])
+                }
             };
 
         let extras = self.gather_extras(&detected_push, &existing_config, interactive)?;
@@ -1595,6 +1605,65 @@ mod tests {
         assert_eq!(core.binary, "mytool");
     }
 
+    /// An empty value is not a value. The interactive path already filtered
+    /// them out; the non-interactive guard tested only for absence, so a config
+    /// carrying `binary = ""` walked straight through it and init proceeded to
+    /// write empty strings into the CI config it patches.
+    #[test]
+    fn gather_core_treats_empty_values_as_missing() {
+        let existing = OrbConfig {
+            orb: Some(OrbSection {
+                binary: Some(String::new()),
+                ..OrbSection::default()
+            }),
+            ci: Some(CiSection {
+                build_workflow: Some(String::new()),
+                release_workflow: Some(String::new()),
+                crate_tag_prefix: Some(String::new()),
+                release_after_job: Some(String::new()),
+                docker_namespace: Some(String::new()),
+                ..CiSection::default()
+            }),
+            ..OrbConfig::default()
+        };
+        let init = Init {
+            binary: None,
+            build_workflow: None,
+            release_workflow: None,
+            crate_tag_prefix: None,
+            release_after_job: None,
+            docker_namespace: None,
+            ..make_init(false)
+        };
+        let err = init
+            .gather_core(&existing, false)
+            .expect_err("empty values must be treated as missing");
+        let msg = err.to_string();
+        for flag in [
+            "--binary",
+            "--build-workflow",
+            "--release-workflow",
+            "--crate-tag-prefix",
+            "--release-after-job",
+            "--docker-namespace",
+        ] {
+            assert!(msg.contains(flag), "error must name {flag}, got: {msg}");
+        }
+    }
+
+    /// An empty flag value is no better than an empty config value.
+    #[test]
+    fn gather_core_treats_empty_cli_values_as_missing() {
+        let init = Init {
+            binary: Some(String::new()),
+            ..make_init(false)
+        };
+        let err = init
+            .gather_core(&OrbConfig::default(), false)
+            .expect_err("an empty --binary must be treated as missing");
+        assert!(err.to_string().contains("--binary"));
+    }
+
     /// With nothing to prompt with, the error names EVERY missing value — not
     /// clap's usage dump, and not just the first one.
     #[test]
@@ -1622,18 +1691,6 @@ mod tests {
         ] {
             assert!(msg.contains(flag), "error must name {flag}, got: {msg}");
         }
-    }
-
-    /// `--dry-run` is a preview, not a reason to skip the dialogue: the values
-    /// have to come from somewhere before there is anything to preview (#226).
-    #[test]
-    fn dry_run_alone_does_not_suppress_the_dialogue() {
-        // is_non_interactive() consults the terminal and $CI only; --dry-run is
-        // no longer part of the decision.
-        std::env::set_var("CI", "true");
-        let non_interactive = is_non_interactive();
-        std::env::remove_var("CI");
-        assert!(non_interactive, "$CI must still force non-interactive");
     }
 
     // ── build_record_config ─────────────────────────────────────────────────
@@ -1742,16 +1799,31 @@ mod tests {
         assert_eq!(extras.git_push_subcommands, vec!["save"]);
     }
 
+    /// `$CI` is process-global, so the tests that set it cannot run alongside
+    /// the ones that read it. Rust runs tests in parallel by default: without
+    /// this, one test removing `$CI` can flip another's reading of it.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// A poisoned lock only means some other test panicked while holding it —
+    /// the data is `()`, so there is nothing to protect against.
+    fn lock_env() -> std::sync::MutexGuard<'static, ()> {
+        ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     #[test]
-    fn gather_extras_ci_env_var_is_non_interactive() {
-        // When $CI is set the dialogue must be skipped even without --dry-run
+    fn ci_env_var_forces_non_interactive() {
+        let _guard = lock_env();
+        let was = std::env::var("CI").ok();
         std::env::set_var("CI", "true");
-        let init = make_init(false);
-        let extras = init
-            .gather_extras(&[], &OrbConfig::default(), false)
-            .unwrap();
-        std::env::remove_var("CI");
-        assert_eq!(extras.docker_context, DEFAULT_DOCKER_CONTEXT);
+        let result = is_non_interactive();
+        match was {
+            Some(v) => std::env::set_var("CI", v),
+            None => std::env::remove_var("CI"),
+        }
+        assert!(
+            result,
+            "$CI set must force non-interactive, whatever the terminal says"
+        );
     }
 
     // ── gather_extras: skip prompts when field is explicitly set ───────────
@@ -1982,6 +2054,7 @@ mod tests {
         // Verify that is_non_interactive() correctly responds to the TTY state
         // of the current process. CI environments may allocate a PTY; local
         // subprocess runs (e.g. cargo test piped) do not.
+        let _guard = lock_env();
         let ci_was = std::env::var("CI").ok();
         std::env::remove_var("CI");
         let is_tty = console::Term::stderr().is_term();
