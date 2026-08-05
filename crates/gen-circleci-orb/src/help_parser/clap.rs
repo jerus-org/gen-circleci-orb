@@ -1,6 +1,6 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
-use super::types::{CliDefinition, ParamType, Parameter, SubCommand};
+use super::types::{CliDefinition, ParamKind, ParamType, Parameter, SubCommand};
 use super::{run_help, ParseOptions};
 use anyhow::Result;
 
@@ -59,7 +59,8 @@ fn parse_subcommand(
     }
 
     let parameters = if is_leaf {
-        let parsed = parse_parameters_detailed(help_text);
+        let parsed = parse_parameters_detailed(help_text, name, opts);
+        check_naming(name, &parsed.errors)?;
         check_coverage(name, &parsed.unparsed, opts)?;
         parsed.parameters
     } else {
@@ -137,10 +138,43 @@ pub fn extract_subcommand_names(text: &str) -> Vec<String> {
 /// Parse the Usage line to find flags listed outside any `[...]` group.
 /// Those flags are truly required (clap will reject invocations that omit them).
 fn extract_required_flags(text: &str) -> HashSet<String> {
-    let usage_line = match text.lines().find(|l| l.trim().starts_with("Usage:")) {
-        Some(l) => l.to_string(),
-        None => return HashSet::new(),
+    let Some(cleaned) = usage_line_without_optional_groups(text) else {
+        return HashSet::new();
     };
+
+    // Every --flag remaining after bracket removal is required.
+    let re_flags = regex::Regex::new(r"--([a-zA-Z][a-zA-Z0-9-]*)").unwrap();
+    re_flags
+        .captures_iter(&cleaned)
+        .map(|cap| cap[1].to_string())
+        .collect()
+}
+
+/// Parse the Usage line for short flags listed outside any `[...]` group.
+///
+/// An option with a long form is found by [`extract_required_flags`]; this is
+/// the same signal for one that has only a short form, so a required `-f <VAL>`
+/// generates a parameter CircleCI insists on rather than one the script quietly
+/// omits.
+fn extract_required_shorts(text: &str) -> HashSet<char> {
+    let Some(cleaned) = usage_line_without_optional_groups(text) else {
+        return HashSet::new();
+    };
+    // `--long` also matches a naive `-x` pattern, so require the dash to open
+    // the token and to be followed by exactly one letter.
+    let re = regex::Regex::new(r"(?:^|\s)-([a-zA-Z])(?:\s|$)").unwrap();
+    re.captures_iter(&cleaned)
+        .filter_map(|cap| cap[1].chars().next())
+        .collect()
+}
+
+/// The `Usage:` line with every `[...]` group removed, so what remains is
+/// exactly what clap requires. `None` when the help text has no usage line.
+fn usage_line_without_optional_groups(text: &str) -> Option<String> {
+    let usage_line = text
+        .lines()
+        .find(|l| l.trim().starts_with("Usage:"))?
+        .to_string();
 
     // Remove all [...] groups (optional items) iteratively to handle nesting.
     let re_brackets = regex::Regex::new(r"\[[^\[\]]*\]").unwrap();
@@ -152,13 +186,30 @@ fn extract_required_flags(text: &str) -> HashSet<String> {
         }
         cleaned = next;
     }
+    Some(cleaned)
+}
 
-    // Every --flag remaining after bracket removal is required.
-    let re_flags = regex::Regex::new(r"--([a-zA-Z][a-zA-Z0-9-]*)").unwrap();
-    re_flags
+/// Parse the Usage line for positionals listed outside any `[...]` group,
+/// returning their normalised parameter names.
+///
+/// clap renders an optional positional as `[TARGET]`, which the same
+/// bracket-stripping that finds required flags also removes — so whatever
+/// `<NAME>` survives is required.
+fn extract_required_positionals(text: &str) -> HashSet<String> {
+    let Some(cleaned) = usage_line_without_optional_groups(text) else {
+        return HashSet::new();
+    };
+
+    let re_positional = regex::Regex::new(r"<([A-Za-z][A-Za-z0-9_-]*)>").unwrap();
+    re_positional
         .captures_iter(&cleaned)
-        .map(|cap| cap[1].to_string())
+        .map(|cap| normalize_metavar(&cap[1]))
         .collect()
+}
+
+/// `<ADVISORY_DB>` / `[TARGET]` → `advisory_db` / `target`.
+fn normalize_metavar(metavar: &str) -> String {
+    Parameter::normalize_name(&metavar.trim().to_lowercase())
 }
 
 /// Outcome of parsing one command's help text.
@@ -167,6 +218,11 @@ pub struct ParsedHelp {
     /// Declaration lines that produced no parameter. Non-empty means the
     /// generated orb would silently be missing an input the CLI accepts.
     pub unparsed: Vec<String>,
+    /// Declarations the parser understood but cannot name safely — a short-only
+    /// option with no derivable name, or two inputs claiming the same name.
+    /// Unlike [`ParsedHelp::unparsed`] these are not waved through by
+    /// `allow_unparsed_help`: the fix is to name the parameter, not to drop it.
+    pub errors: Vec<String>,
 }
 
 /// True for a line that declares an option: `-f`, `-f, --force`, `--force`.
@@ -200,6 +256,64 @@ fn is_builtin_decl(trimmed: &str) -> bool {
     false
 }
 
+/// True for a line that declares a positional argument: `<VERSION>` (required)
+/// or `[TARGET]` (optional), as rendered under `Arguments:`.
+fn is_positional_decl(trimmed: &str) -> bool {
+    let re = regex::Regex::new(r"^[<\[][A-Za-z][A-Za-z0-9_-]*[>\]]").unwrap();
+    re.is_match(trimmed)
+}
+
+/// True for any line that opens a new declaration block, of either kind.
+fn is_decl(trimmed: &str) -> bool {
+    is_option_decl(trimmed) || is_positional_decl(trimmed)
+}
+
+/// Words that name nothing on their own, so cannot seed a parameter name.
+const UNUSABLE_NAME_WORDS: &[&str] = &[
+    "a", "an", "the", "this", "that", "these", "those", "how", "when", "if", "whether", "and",
+    "or", "for", "of", "to", "in", "on", "at", "by", "with", "is", "are", "be", "do", "does",
+];
+
+/// A parameter name must be usable as a shell variable, because that is what it
+/// becomes: the generated script reads the value from `${NAME}`. A name opening
+/// with a digit would render `${60}` — a positional-parameter read, not a
+/// variable — so the script would be silently wrong rather than fail to
+/// generate.
+fn is_usable_param_name(name: &str) -> bool {
+    name.len() >= 2
+        && name.starts_with(|c: char| c.is_ascii_alphabetic())
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        && !UNUSABLE_NAME_WORDS.contains(&name)
+}
+
+/// Name a short-only option: the consumer's chosen name, else the first word of
+/// its description. `None` when neither yields something usable.
+fn resolve_short_only_name(
+    short: char,
+    description: &str,
+    configured: Option<&HashMap<char, String>>,
+) -> Option<String> {
+    // The configured name is held to the same rule as a derived one — it ends up
+    // in the same shell variable.
+    if let Some(name) = configured
+        .and_then(|m| m.get(&short))
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    {
+        let name = Parameter::normalize_name(&name.to_lowercase());
+        return is_usable_param_name(&name).then_some(name);
+    }
+    let first: String = description
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .collect::<String>()
+        .to_lowercase();
+    is_usable_param_name(&first).then_some(first)
+}
+
 /// Declarations with no matching parameter, in help-text order.
 fn find_unparsed(decls: &[(usize, String)], produced: &HashSet<usize>) -> Vec<String> {
     decls
@@ -207,6 +321,23 @@ fn find_unparsed(decls: &[(usize, String)], produced: &HashSet<usize>) -> Vec<St
         .filter(|(idx, _)| !produced.contains(idx))
         .map(|(_, text)| text.clone())
         .collect()
+}
+
+/// Fail generation when an input cannot be named safely.
+///
+/// Deliberately NOT covered by `allow_unparsed_help`: the parser understood
+/// these declarations, so the fix is to name the parameter (in config or in the
+/// CLI), not to let the orb go out without the input.
+fn check_naming(subcommand: &str, errors: &[String]) -> Result<()> {
+    if errors.is_empty() {
+        return Ok(());
+    }
+    let listed = errors
+        .iter()
+        .map(|e| format!("  {e}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    anyhow::bail!("`{subcommand} --help` declares input that cannot be named:\n{listed}")
 }
 
 /// Fail generation when `--help` declared something the parser could not turn
@@ -237,100 +368,125 @@ fn check_coverage(subcommand: &str, unparsed: &[String], opts: &ParseOptions) ->
 
 /// Parse the `Options:` / `Arguments:` sections to build `Parameter` list.
 pub fn parse_parameters(text: &str) -> Vec<Parameter> {
-    parse_parameters_detailed(text).parameters
+    parse_parameters_detailed(text, "", &ParseOptions::default()).parameters
 }
 
-/// Parse the `Options:` / `Arguments:` sections, also reporting any declaration
-/// that produced no parameter (see [`ParsedHelp::unparsed`]).
-pub fn parse_parameters_detailed(text: &str) -> ParsedHelp {
-    let required_flags = extract_required_flags(text);
+/// Parse the `Options:` / `Arguments:` sections, also reporting declarations
+/// that produced no parameter (see [`ParsedHelp::unparsed`]) and ones that
+/// cannot be named (see [`ParsedHelp::errors`]).
+pub fn parse_parameters_detailed(text: &str, subcommand: &str, opts: &ParseOptions) -> ParsedHelp {
+    let required = RequiredInputs {
+        flags: extract_required_flags(text),
+        shorts: extract_required_shorts(text),
+        positionals: extract_required_positionals(text),
+    };
+    let short_names = opts.short_param_names.get(subcommand);
     let lines: Vec<&str> = text.lines().collect();
     let mut params = Vec::new();
     // Every declaration line seen, and the subset that yielded a parameter.
     let mut decls: Vec<(usize, String)> = Vec::new();
     let mut produced: HashSet<usize> = HashSet::new();
+    let mut errors: Vec<String> = Vec::new();
     let mut i = 0;
 
     while i < lines.len() {
-        let line = lines[i];
-        let trimmed = line.trim();
+        let trimmed = lines[i].trim();
 
-        // Detect section headers; skip non-option lines
-        if is_top_level_section(line) || trimmed.is_empty() {
+        if !is_decl(trimmed) || is_top_level_section(lines[i]) {
             i += 1;
             continue;
         }
-
-        // Only process lines that declare an option
-        if !is_option_decl(trimmed) {
-            i += 1;
-            continue;
-        }
-
         // Skip the clap built-ins: they are not consumers' inputs.
         if is_builtin_decl(trimmed) {
             i += 1;
             continue;
         }
+
         decls.push((i, trimmed.to_string()));
-
-        // Collect the full option block, which may contain blank separator
-        // lines and wrapped description lines. It ends at the next declaration
-        // or section header — NOT at an indentation boundary: clap aligns
-        // long-only options deeper than short-flagged ones, so an indent-based
-        // rule made a short-flagged option swallow the options after it (#240).
-        let mut block_lines: Vec<&str> = vec![trimmed];
-        let mut j = i + 1;
-        while j < lines.len() {
-            let next = lines[j];
-            let next_trimmed = next.trim();
-
-            if next_trimmed.is_empty() {
-                // Blank lines within the block are fine — peek ahead to decide
-                // whether the block continues
-                let peek = peek_next_non_blank(lines.as_slice(), j + 1);
-                match peek {
-                    None => {
-                        j += 1;
-                        break;
-                    }
-                    Some((_, peek_line)) => {
-                        let peek_trimmed = peek_line.trim();
-                        if is_option_decl(peek_trimmed) || is_top_level_section(peek_line) {
-                            j += 1;
-                            break;
-                        }
-                        block_lines.push(next_trimmed); // include the blank
-                        j += 1;
-                    }
-                }
-            } else {
-                if is_option_decl(next_trimmed) || is_top_level_section(next) {
-                    break;
-                }
-                block_lines.push(next_trimmed);
-                j += 1;
-            }
-        }
-
-        let block = block_lines.join(" ");
-
-        // Extract possible values from within the block text
+        let (block, next) = collect_block(&lines, i);
         let possible_values = extract_possible_values_from_block(&block);
 
-        if let Some(param) = parse_option_block(&block, possible_values, &required_flags) {
+        let parsed = if is_positional_decl(trimmed) {
+            parse_positional_block(&block, possible_values, &required.positionals)
+        } else {
+            parse_option_block(&block, possible_values, &required, short_names, &mut errors)
+        };
+        if let Some(param) = parsed {
             params.push(param);
             produced.insert(i);
         }
 
-        i = j;
+        i = next;
     }
 
+    errors.extend(name_collisions(&params));
     let unparsed = find_unparsed(&decls, &produced);
     ParsedHelp {
         parameters: params,
         unparsed,
+        errors,
     }
+}
+
+/// Gather one declaration's full block, starting at `start`, and report the
+/// line the caller should resume from.
+///
+/// The block runs to the next declaration or section header — NOT to an
+/// indentation boundary: clap aligns long-only options deeper than
+/// short-flagged ones, so an indent-based rule let a short-flagged option
+/// swallow the options after it (#240). Blank separator lines and wrapped
+/// description lines belong to the block.
+fn collect_block(lines: &[&str], start: usize) -> (String, usize) {
+    let mut block_lines: Vec<&str> = vec![lines[start].trim()];
+    let mut j = start + 1;
+
+    while j < lines.len() {
+        let next_trimmed = lines[j].trim();
+
+        if next_trimmed.is_empty() {
+            // A blank line only ends the block if what follows starts a new one.
+            match peek_next_non_blank(lines, j + 1) {
+                Some((_, peek)) if !ends_block(peek) => {
+                    block_lines.push(next_trimmed); // include the blank
+                    j += 1;
+                }
+                _ => {
+                    j += 1;
+                    break;
+                }
+            }
+        } else if ends_block(lines[j]) {
+            break;
+        } else {
+            block_lines.push(next_trimmed);
+            j += 1;
+        }
+    }
+
+    (block_lines.join(" "), j)
+}
+
+/// True when `line` opens something new, so the block before it is complete.
+fn ends_block(line: &str) -> bool {
+    is_decl(line.trim()) || is_top_level_section(line)
+}
+
+/// Report parameters that resolved to the same orb parameter name — only one of
+/// them would survive into the generated orb.
+fn name_collisions(params: &[Parameter]) -> Vec<String> {
+    let mut seen: HashSet<&str> = HashSet::new();
+    let mut clashes: Vec<String> = Vec::new();
+    for p in params {
+        if !seen.insert(p.long_name.as_str()) && !clashes.iter().any(|c| c.contains(&p.long_name)) {
+            clashes.push(format!(
+                "two inputs both resolve to the parameter name `{}` — rename one, \
+                 or set `[subcommand.<name>.short_param]` to name a short-only option \
+                 differently",
+                p.long_name
+            ));
+        }
+    }
+    clashes
 }
 
 fn leading_spaces(line: &str) -> usize {
@@ -377,15 +533,37 @@ fn extract_possible_values_from_block(block: &str) -> Vec<String> {
     Vec::new()
 }
 
+/// What the `Usage:` line lists outside any `[...]` group — i.e. what clap
+/// rejects an invocation for omitting.
+pub(crate) struct RequiredInputs {
+    pub flags: HashSet<String>,
+    pub shorts: HashSet<char>,
+    pub positionals: HashSet<String>,
+}
+
 /// Parse a single collected option block string into a `Parameter`.
+///
+/// An option with no long form is named from `short_names` or from its
+/// description; when neither yields a usable name the block produces no
+/// parameter and the reason is pushed to `errors` (#241).
 fn parse_option_block(
     block: &str,
     possible_values: Vec<String>,
-    required_flags: &HashSet<String>,
+    required: &RequiredInputs,
+    short_names: Option<&HashMap<char, String>>,
+    errors: &mut Vec<String>,
 ) -> Option<Parameter> {
-    // Extract long flag: look for --word
-    let long_flag = extract_long_flag(block)?;
     let short = extract_short_flag(block);
+    let Some(long_flag) = extract_long_flag(block) else {
+        return parse_short_only_block(
+            block,
+            possible_values,
+            short,
+            required,
+            short_names,
+            errors,
+        );
+    };
 
     // Determine if boolean: no <VALUE> metavar after the flag
     let is_boolean = !has_value_metavar(block, &long_flag);
@@ -400,7 +578,7 @@ fn parse_option_block(
 
     let default = extract_default(block);
     // A flag is required only if the Usage line lists it outside any [...] group.
-    let required = !is_boolean && required_flags.contains(&long_flag);
+    let required = !is_boolean && required.flags.contains(&long_flag);
 
     // Description: everything after the flags portion
     let description = extract_param_description(block);
@@ -410,11 +588,120 @@ fn parse_option_block(
     Some(Parameter {
         long_name,
         short,
+        kind: ParamKind::Long,
         param_type,
         default,
         required,
         description,
     })
+}
+
+/// Build the parameter for an option that has only a short form (`-f`).
+fn parse_short_only_block(
+    block: &str,
+    possible_values: Vec<String>,
+    short: Option<char>,
+    required: &RequiredInputs,
+    short_names: Option<&HashMap<char, String>>,
+    errors: &mut Vec<String>,
+) -> Option<Parameter> {
+    let short = short?;
+    let description = extract_short_only_description(block);
+    let Some(long_name) = resolve_short_only_name(short, &description, short_names) else {
+        errors.push(format!(
+            "`-{short}` has no long form and no name can be derived from its \
+             description ({description:?}) — name it with \
+             `[subcommand.<name>.short_param] {short} = \"some_name\"` in \
+             gen-circleci-orb.toml"
+        ));
+        return None;
+    };
+
+    // A short-only option takes a value when a metavar follows it.
+    let is_boolean = !has_short_value_metavar(block, short);
+    let param_type = if !possible_values.is_empty() {
+        ParamType::Enum(possible_values)
+    } else if is_boolean {
+        ParamType::Boolean
+    } else {
+        ParamType::String
+    };
+
+    Some(Parameter {
+        long_name,
+        short: Some(short),
+        kind: ParamKind::ShortOnly,
+        param_type,
+        default: extract_default(block),
+        // Required on the same signal as every other input: listed in the Usage
+        // line outside any `[...]` group.
+        required: !is_boolean && required.shorts.contains(&short),
+        description,
+    })
+}
+
+/// Parse a `<VERSION>` / `[TARGET]` block from the `Arguments:` section (#242).
+fn parse_positional_block(
+    block: &str,
+    possible_values: Vec<String>,
+    required_positionals: &HashSet<String>,
+) -> Option<Parameter> {
+    let re = regex::Regex::new(r"^[<\[]([A-Za-z][A-Za-z0-9_-]*)[>\]](\.\.\.)?").ok()?;
+    let cap = re.captures(block.trim())?;
+    let long_name = normalize_metavar(&cap[1]);
+
+    let param_type = if possible_values.is_empty() {
+        ParamType::String
+    } else {
+        ParamType::Enum(possible_values)
+    };
+
+    let description = extract_positional_description(block);
+    let default = extract_default(block);
+    // `<NAME>` is required unless the Usage line brackets it; a default makes it
+    // optional whatever the brackets say.
+    let required = default.is_none() && required_positionals.contains(&long_name);
+
+    Some(Parameter {
+        long_name,
+        short: None,
+        kind: ParamKind::Positional,
+        param_type,
+        default,
+        required,
+        description,
+    })
+}
+
+/// True when a value metavar follows the short flag: `-n <COUNT>`.
+fn has_short_value_metavar(block: &str, short: char) -> bool {
+    let needle = format!("-{short}");
+    let Some(pos) = block.find(&needle) else {
+        return false;
+    };
+    let after = block[pos + needle.len()..].trim_start_matches([',', ' ']);
+    after.starts_with('<') || after.starts_with('[')
+}
+
+/// Description of a short-only option: everything after `-f` and its metavar.
+fn extract_short_only_description(block: &str) -> String {
+    let re = regex::Regex::new(r"^-[a-zA-Z](?:\.\.\.)?(?:\s+[<\[][A-Z][A-Z0-9_]*[>\]])?").unwrap();
+    let rest = match re.find(block.trim()) {
+        Some(m) => block.trim()[m.end()..].trim(),
+        None => block.trim(),
+    };
+    clean_annotations(rest)
+}
+
+/// Description of a positional: everything after the `<NAME>` declaration.
+fn extract_positional_description(block: &str) -> String {
+    let re = regex::Regex::new(r"^[<\[][A-Za-z][A-Za-z0-9_-]*[>\]](?:\.\.\.)?").unwrap();
+    let trimmed = block.trim();
+    let rest = match re.find(trimmed) {
+        Some(m) => trimmed[m.end()..].trim(),
+        None => trimmed,
+    };
+    clean_annotations(rest)
 }
 
 fn extract_long_flag(block: &str) -> Option<String> {
@@ -524,9 +811,15 @@ fn extract_param_description(block: &str) -> String {
         block.to_string()
     };
 
-    // Strip annotations: [default: ...], [possible values: ...], "Possible values: ..."
-    // Use bracket-counting removal so values containing nested `[...]` are removed whole.
-    let candidate = strip_bracket_annotation(&candidate, "[default:");
+    clean_annotations(&candidate)
+}
+
+/// Strip the annotations clap appends to a description: `[default: …]`,
+/// `[possible values: …]`, and the indented `Possible values:` block.
+///
+/// Bracket-counting removal so values containing nested `[...]` go whole.
+fn clean_annotations(text: &str) -> String {
+    let candidate = strip_bracket_annotation(text, "[default:");
     let candidate = strip_bracket_annotation(&candidate, "[possible values:");
     let candidate = if let Some(pv) = candidate.find("Possible values:") {
         candidate[..pv].trim().to_string()
@@ -1100,7 +1393,7 @@ Options:
   -V, --version
           Print version
 "#;
-        let parsed = parse_parameters_detailed(help);
+        let parsed = parse_parameters_detailed(help, "cmd", &ParseOptions::default());
         assert!(
             parsed.unparsed.is_empty(),
             "fully parseable help must report nothing unparsed, got: {:?}",
@@ -1109,52 +1402,389 @@ Options:
         assert_eq!(parsed.parameters.len(), 3);
     }
 
-    /// A short-only option produces no parameter today (#241).  The guard's job
-    /// is to make that visible instead of letting generation report success.
+    /// An unparsed declaration fails generation, naming the line, and the
+    /// escape hatch downgrades that to a warning.
     #[test]
-    fn unparsed_reports_short_only_option() {
-        let help = r#"Do something
+    fn unparsed_declaration_fails_generation_unless_allowed() {
+        let unparsed = vec!["--mystery-shape <X>  Something new".to_string()];
 
-Usage: tool cmd [OPTIONS]
-
-Options:
-  -f          Force the operation
-  -h, --help  Print help
-"#;
-        let parsed = parse_parameters_detailed(help);
-        assert_eq!(
-            parsed.unparsed.len(),
-            1,
-            "short-only option must be reported, got: {:?}",
-            parsed.unparsed
-        );
-        assert!(parsed.unparsed[0].contains("-f"));
-    }
-
-    /// `parse_subcommand` fails loudly when a declaration produced no
-    /// parameter, and the escape hatch downgrades that to a warning.
-    #[test]
-    fn subcommand_parse_fails_on_unparsed_declaration() {
-        let help = r#"Do something
-
-Usage: tool cmd [OPTIONS]
-
-Options:
-  -f          Force the operation
-  -h, --help  Print help
-"#;
-        let err = parse_subcommand("cmd", help, "tool", &ParseOptions::default())
+        let err = check_coverage("cmd", &unparsed, &ParseOptions::default())
             .expect_err("unparsed declaration must fail generation");
         let msg = err.to_string();
         assert!(
-            msg.contains("-f") && msg.contains("allow_unparsed_help"),
+            msg.contains("--mystery-shape") && msg.contains("allow_unparsed_help"),
             "error must name the declaration and the escape hatch, got: {msg}"
         );
 
         let opts = ParseOptions {
             allow_unparsed_help: true,
+            ..ParseOptions::default()
         };
-        parse_subcommand("cmd", help, "tool", &opts)
+        check_coverage("cmd", &unparsed, &opts)
             .expect("allow_unparsed_help must downgrade the failure to a warning");
+    }
+    // ── positional arguments (#242) ────────────────────────────────────────
+
+    /// A required positional is the natural shape for a single mandatory
+    /// argument (`pcu release version <VERSION>`). It must reach the orb.
+    #[test]
+    fn required_positional_generates_parameter() {
+        let help = r#"Re-verify a past release
+
+Usage: jci-audit verify [OPTIONS] <VERSION>
+
+Arguments:
+  <VERSION>  The released version to verify (e.g. "1.2.0")
+
+Options:
+      --advisory-db <ADVISORY_DB>  Advisory-db root
+  -h, --help                       Print help
+"#;
+        let params = parse_parameters(help);
+        let version = params
+            .iter()
+            .find(|p| p.long_name == "version")
+            .unwrap_or_else(|| panic!("no `version` parameter in {params:?}"));
+        assert_eq!(version.kind, ParamKind::Positional);
+        assert_eq!(version.param_type, ParamType::String);
+        assert!(
+            version.required,
+            "<VERSION> outside [...] in Usage is required"
+        );
+        assert_eq!(
+            version.description,
+            r#"The released version to verify (e.g. "1.2.0")"#
+        );
+        assert!(params.iter().any(|p| p.long_name == "advisory_db"));
+    }
+
+    /// `[NAME]` is optional, and so is a `<NAME>` that the Usage line brackets.
+    #[test]
+    fn optional_positional_is_not_required() {
+        let help = r#"Do something
+
+Usage: tool cmd [OPTIONS] [TARGET]
+
+Arguments:
+  [TARGET]  Where to write the output
+
+Options:
+  -h, --help  Print help
+"#;
+        let params = parse_parameters(help);
+        let target = params.iter().find(|p| p.long_name == "target").unwrap();
+        assert_eq!(target.kind, ParamKind::Positional);
+        assert!(!target.required);
+    }
+
+    /// Positionals carry `[default: …]` and possible values like any option.
+    #[test]
+    fn positional_default_and_possible_values_extracted() {
+        let help = r#"Do something
+
+Usage: tool cmd [OPTIONS] [FORMAT]
+
+Arguments:
+  [FORMAT]  Output format [default: source] [possible values: binary, source]
+
+Options:
+  -h, --help  Print help
+"#;
+        let params = parse_parameters(help);
+        let format = params.iter().find(|p| p.long_name == "format").unwrap();
+        assert_eq!(format.default.as_deref(), Some("source"));
+        assert_eq!(
+            format.param_type,
+            ParamType::Enum(vec!["binary".to_string(), "source".to_string()])
+        );
+    }
+
+    /// A variadic positional keeps its name; the repeat marker is not part of it.
+    #[test]
+    fn variadic_positional_strips_repeat_marker() {
+        let help = r#"Do something
+
+Usage: tool cmd [OPTIONS] <PATHS>...
+
+Arguments:
+  <PATHS>...  Files to process
+
+Options:
+  -h, --help  Print help
+"#;
+        let params = parse_parameters(help);
+        let paths = params.iter().find(|p| p.long_name == "paths").unwrap();
+        assert_eq!(paths.kind, ParamKind::Positional);
+        assert_eq!(paths.description, "Files to process");
+    }
+
+    /// Multi-paragraph help renders arguments over several lines.
+    #[test]
+    fn positional_parsed_in_long_help_layout() {
+        let help = r#"Do something
+
+Usage: tool cmd [OPTIONS] <VERSION>
+
+Arguments:
+  <VERSION>
+          The version to release
+
+Options:
+  -h, --help
+          Print help
+"#;
+        let params = parse_parameters(help);
+        let version = params.iter().find(|p| p.long_name == "version").unwrap();
+        assert_eq!(version.description, "The version to release");
+        assert!(version.required);
+    }
+
+    /// Positionals must not be counted as unparsed by the coverage guard.
+    #[test]
+    fn positional_is_covered_by_the_guard() {
+        let help = r#"Do something
+
+Usage: tool cmd [OPTIONS] <VERSION>
+
+Arguments:
+  <VERSION>  The version to release
+
+Options:
+  -h, --help  Print help
+"#;
+        let parsed = parse_parameters_detailed(help, "cmd", &ParseOptions::default());
+        assert!(parsed.unparsed.is_empty(), "got: {:?}", parsed.unparsed);
+        assert!(parsed.errors.is_empty(), "got: {:?}", parsed.errors);
+    }
+
+    // ── short-only options (#241) ──────────────────────────────────────────
+
+    /// With no long form to name it after, the parameter takes its name from
+    /// the first word of the description.
+    #[test]
+    fn short_only_option_named_from_description() {
+        let help = r#"Do something
+
+Usage: tool cmd [OPTIONS]
+
+Options:
+  -f          Force the operation
+  -h, --help  Print help
+"#;
+        let parsed = parse_parameters_detailed(help, "cmd", &ParseOptions::default());
+        assert!(parsed.errors.is_empty(), "got: {:?}", parsed.errors);
+        let force = parsed
+            .parameters
+            .iter()
+            .find(|p| p.long_name == "force")
+            .unwrap_or_else(|| panic!("no `force` parameter in {:?}", parsed.parameters));
+        assert_eq!(force.kind, ParamKind::ShortOnly);
+        assert_eq!(force.short, Some('f'));
+        assert_eq!(force.param_type, ParamType::Boolean);
+        assert!(parsed.unparsed.is_empty());
+    }
+
+    /// The consumer's chosen name wins over the derived one.
+    #[test]
+    fn short_only_option_named_from_config() {
+        let help = r#"Do something
+
+Usage: tool cmd [OPTIONS]
+
+Options:
+  -n <COUNT>  How many times
+  -h, --help  Print help
+"#;
+        let opts = ParseOptions {
+            short_param_names: [(
+                "cmd".to_string(),
+                [('n', "repeat_count".to_string())].into_iter().collect(),
+            )]
+            .into_iter()
+            .collect(),
+            ..ParseOptions::default()
+        };
+        let parsed = parse_parameters_detailed(help, "cmd", &opts);
+        assert!(parsed.errors.is_empty(), "got: {:?}", parsed.errors);
+        let p = parsed
+            .parameters
+            .iter()
+            .find(|p| p.long_name == "repeat_count")
+            .unwrap_or_else(|| panic!("no `repeat_count` in {:?}", parsed.parameters));
+        assert_eq!(p.short, Some('n'));
+        assert_eq!(p.param_type, ParamType::String);
+    }
+
+    /// "How many times" yields `how` — not a name worth generating. Fail and
+    /// say which config key names it, rather than guess.
+    #[test]
+    fn short_only_option_with_underivable_name_is_an_error() {
+        let help = r#"Do something
+
+Usage: tool cmd [OPTIONS]
+
+Options:
+  -n <COUNT>  How many times
+  -h, --help  Print help
+"#;
+        let parsed = parse_parameters_detailed(help, "cmd", &ParseOptions::default());
+        assert_eq!(parsed.errors.len(), 1, "got: {:?}", parsed.errors);
+        assert!(
+            parsed.errors[0].contains("-n") && parsed.errors[0].contains("short_param"),
+            "error must name the flag and the config key, got: {}",
+            parsed.errors[0]
+        );
+    }
+
+    /// A description opening with a number derives a name that is not a legal
+    /// shell identifier: the generated script would reference `${60}`, which is
+    /// a positional-parameter read, not a variable — silently broken output of
+    /// exactly the kind this parser exists to prevent.
+    #[test]
+    fn short_only_option_named_from_a_number_is_an_error() {
+        let help = r#"Do something
+
+Usage: tool cmd [OPTIONS]
+
+Options:
+  -t <SECONDS>  60 second timeout applied to the operation
+  -h, --help    Print help
+"#;
+        let parsed = parse_parameters_detailed(help, "cmd", &ParseOptions::default());
+        assert!(
+            parsed.parameters.iter().all(|p| p.long_name != "60"),
+            "a name starting with a digit must never reach the orb: {:?}",
+            parsed.parameters
+        );
+        assert_eq!(parsed.errors.len(), 1, "got: {:?}", parsed.errors);
+        assert!(parsed.errors[0].contains("-t") && parsed.errors[0].contains("short_param"));
+    }
+
+    /// The consumer's own name is held to the same rule — it ends up in a shell
+    /// variable just the same.
+    #[test]
+    fn configured_short_only_name_must_be_a_usable_identifier() {
+        let help = r#"Do something
+
+Usage: tool cmd [OPTIONS]
+
+Options:
+  -t <SECONDS>  Timeout
+  -h, --help    Print help
+"#;
+        let opts = ParseOptions {
+            short_param_names: [(
+                "cmd".to_string(),
+                [('t', "60".to_string())].into_iter().collect(),
+            )]
+            .into_iter()
+            .collect(),
+            ..ParseOptions::default()
+        };
+        let parsed = parse_parameters_detailed(help, "cmd", &opts);
+        assert_eq!(parsed.errors.len(), 1, "got: {:?}", parsed.errors);
+        assert!(parsed.errors[0].contains("-t"));
+    }
+
+    /// A short-only option the Usage line lists outside `[...]` is required, and
+    /// must generate a parameter CircleCI insists on — like every other required
+    /// input here.
+    #[test]
+    fn required_short_only_option_is_required() {
+        let help = r#"Do something
+
+Usage: tool cmd [OPTIONS] -f <FILE>
+
+Options:
+  -f <FILE>   File to process
+  -n <COUNT>  Repeat count
+  -h, --help  Print help
+"#;
+        let opts = ParseOptions {
+            short_param_names: [(
+                "cmd".to_string(),
+                [('f', "file".to_string()), ('n', "repeat_count".to_string())]
+                    .into_iter()
+                    .collect(),
+            )]
+            .into_iter()
+            .collect(),
+            ..ParseOptions::default()
+        };
+        let parsed = parse_parameters_detailed(help, "cmd", &opts);
+        assert!(parsed.errors.is_empty(), "got: {:?}", parsed.errors);
+        let file = parsed
+            .parameters
+            .iter()
+            .find(|p| p.long_name == "file")
+            .unwrap();
+        assert!(
+            file.required,
+            "`-f <FILE>` outside [...] in the Usage line is required"
+        );
+        let count = parsed
+            .parameters
+            .iter()
+            .find(|p| p.long_name == "repeat_count")
+            .unwrap();
+        assert!(!count.required, "`-n` only in [OPTIONS] is not required");
+    }
+
+    /// A description with no usable first word cannot name anything.
+    #[test]
+    fn short_only_option_without_description_is_an_error() {
+        let help = r#"Do something
+
+Usage: tool cmd [OPTIONS]
+
+Options:
+  -f
+  -h, --help  Print help
+"#;
+        let parsed = parse_parameters_detailed(help, "cmd", &ParseOptions::default());
+        assert_eq!(parsed.errors.len(), 1, "got: {:?}", parsed.errors);
+        assert!(parsed.errors[0].contains("-f"));
+    }
+
+    /// Two parameters cannot share a name — the orb would silently keep one.
+    #[test]
+    fn name_collision_is_an_error() {
+        let help = r#"Do something
+
+Usage: tool cmd [OPTIONS]
+
+Options:
+  -f              Force the operation
+      --force     Force it the long way
+  -h, --help      Print help
+"#;
+        let parsed = parse_parameters_detailed(help, "cmd", &ParseOptions::default());
+        assert_eq!(parsed.errors.len(), 1, "got: {:?}", parsed.errors);
+        assert!(
+            parsed.errors[0].contains("force"),
+            "error must name the clashing parameter, got: {}",
+            parsed.errors[0]
+        );
+    }
+
+    /// A naming failure is not something `allow_unparsed_help` can wave through:
+    /// the fix is to name the parameter, not to drop it.
+    #[test]
+    fn naming_error_is_not_silenced_by_allow_unparsed_help() {
+        let help = r#"Do something
+
+Usage: tool cmd [OPTIONS]
+
+Options:
+  -n <COUNT>  How many times
+  -h, --help  Print help
+"#;
+        let opts = ParseOptions {
+            allow_unparsed_help: true,
+            ..ParseOptions::default()
+        };
+        let err = parse_subcommand("cmd", help, "tool", &opts)
+            .expect_err("a naming failure must still fail generation");
+        assert!(err.to_string().contains("short_param"));
     }
 }

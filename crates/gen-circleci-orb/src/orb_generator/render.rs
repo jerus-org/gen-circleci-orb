@@ -1,6 +1,6 @@
 use super::types::{DockerImage, OrbCommand, OrbExecutor, OrbJob, OrbParameter};
 use crate::commands::generate::InstallMethod;
-use crate::help_parser::types::{CliDefinition, ParamType, SubCommand};
+use crate::help_parser::types::{CliDefinition, ParamKind, ParamType, Parameter, SubCommand};
 use crate::orb_config::OrbConfig;
 use indexmap::IndexMap;
 use std::collections::HashMap;
@@ -385,22 +385,38 @@ fn build_command_orb_parameters(sub: &SubCommand) -> IndexMap<String, OrbParamet
 
 /// Build the shell script body for a command.
 /// Parameters are received as uppercased env vars (set via the YAML environment: block).
+///
+/// Options are appended first and positionals last, in declaration order: a
+/// positional emitted between an option and its value would be read as that
+/// value.
 fn render_command_script_content(sub: &SubCommand, binary: &str) -> String {
     let mut lines: Vec<String> = vec![format!("set -- {} {}", binary, sub.name.replace('_', "-"))];
 
-    for p in &sub.parameters {
+    let (positionals, options): (Vec<&Parameter>, Vec<&Parameter>) = sub
+        .parameters
+        .iter()
+        .partition(|p| p.kind == ParamKind::Positional);
+
+    for p in options.into_iter().chain(positionals) {
         let orb_name = resolve_command_param_name(&sub.name, &p.long_name);
         let env_var = orb_name.to_uppercase();
-        let flag = format!("--{}", p.long_name.replace('_', "-"));
+        // A positional is passed bare; a short-only option by its short flag,
+        // which is the only form the CLI accepts.
+        let flag = match p.kind {
+            ParamKind::Positional => String::new(),
+            ParamKind::ShortOnly => p.short.map(|c| format!("-{c} ")).unwrap_or_default(),
+            ParamKind::Long => format!("--{} ", p.long_name.replace('_', "-")),
+        };
         let line = match &p.param_type {
             ParamType::Boolean => {
+                let flag = flag.trim_end();
                 format!(r#"[[ "${{{env_var}:-false}}" = "true" ]] && set -- "$@" {flag}"#)
             }
             _ => {
                 if p.required {
-                    format!(r#"set -- "$@" {flag} "${{{env_var}}}""#)
+                    format!(r#"set -- "$@" {flag}"${{{env_var}}}""#)
                 } else {
-                    format!(r#"[[ -n "${{{env_var}:-}}" ]] && set -- "$@" {flag} "${{{env_var}}}""#)
+                    format!(r#"[[ -n "${{{env_var}:-}}" ]] && set -- "$@" {flag}"${{{env_var}}}""#)
                 }
             }
         };
@@ -1478,6 +1494,7 @@ mod tests {
             default: None,
             required: false,
             description: "How the binary is installed".to_string(),
+            ..Default::default()
         };
         let orb = cli_param_to_orb_param(&p);
         assert_eq!(
@@ -1499,6 +1516,7 @@ mod tests {
                 default: None,
                 required: false,
                 description: "install method".to_string(),
+                ..Default::default()
             }],
         );
         let want = Some(serde_yaml::Value::String("binstall".to_string()));
@@ -2009,6 +2027,7 @@ mod tests {
             default: None,
             required: true,
             description: "Path to orb.".to_string(),
+            ..Default::default()
         }];
         let sub = make_leaf("generate", params);
         let cli = make_cli("mytool", vec![sub]);
@@ -2033,6 +2052,7 @@ mod tests {
             default: Some("./dist".to_string()),
             required: false,
             description: "Output dir.".to_string(),
+            ..Default::default()
         }];
         let sub = make_leaf("generate", params);
         let cli = make_cli("mytool", vec![sub]);
@@ -2054,6 +2074,7 @@ mod tests {
             default: None,
             required: false,
             description: "Force overwrite.".to_string(),
+            ..Default::default()
         }];
         let sub = make_leaf("generate", params);
         let cli = make_cli("mytool", vec![sub]);
@@ -2062,6 +2083,107 @@ mod tests {
         assert!(
             script.contains("[[ \"${FORCE:-false}\" = \"true\" ]]") && script.contains("--force"),
             "boolean flag in script must use shell conditional on env var:\n{script}"
+        );
+    }
+
+    /// A positional argument carries no flag and must follow every option, in
+    /// declaration order — otherwise the CLI reads an option's value as the
+    /// positional (#242).
+    #[test]
+    fn script_passes_positional_after_the_flags() {
+        let params = vec![
+            Parameter {
+                long_name: "version".to_string(),
+                kind: ParamKind::Positional,
+                param_type: ParamType::String,
+                required: true,
+                description: "Version to verify.".to_string(),
+                ..Default::default()
+            },
+            Parameter {
+                long_name: "advisory_db".to_string(),
+                param_type: ParamType::String,
+                description: "Advisory db root.".to_string(),
+                ..Default::default()
+            },
+        ];
+        let sub = make_leaf("verify", params);
+        let cli = make_cli("mytool", vec![sub]);
+        let files = generate(&cli, &default_opts(), None);
+        let script = &files[&PathBuf::from("src/scripts/verify.sh")];
+        let positional = script
+            .find(r#"set -- "$@" "${VERSION}""#)
+            .unwrap_or_else(|| panic!("positional not passed:\n{script}"));
+        let flag = script
+            .find("--advisory-db")
+            .unwrap_or_else(|| panic!("option not passed:\n{script}"));
+        assert!(
+            flag < positional,
+            "positional must be appended after the flags:\n{script}"
+        );
+        assert!(
+            !script.contains("--version"),
+            "a positional has no flag:\n{script}"
+        );
+    }
+
+    /// An optional positional is only appended when a value was supplied.
+    #[test]
+    fn script_guards_optional_positional() {
+        let params = vec![Parameter {
+            long_name: "target".to_string(),
+            kind: ParamKind::Positional,
+            param_type: ParamType::String,
+            description: "Where to write output.".to_string(),
+            ..Default::default()
+        }];
+        let sub = make_leaf("build", params);
+        let cli = make_cli("mytool", vec![sub]);
+        let files = generate(&cli, &default_opts(), None);
+        let script = &files[&PathBuf::from("src/scripts/build.sh")];
+        assert!(
+            script.contains(r#"[[ -n "${TARGET:-}" ]] && set -- "$@" "${TARGET}""#),
+            "optional positional must be conditional:\n{script}"
+        );
+    }
+
+    /// A short-only option is passed by its short flag, under the name the
+    /// parameter was given (#241).
+    #[test]
+    fn script_passes_short_only_flag() {
+        let params = vec![
+            Parameter {
+                long_name: "force".to_string(),
+                short: Some('f'),
+                kind: ParamKind::ShortOnly,
+                param_type: ParamType::Boolean,
+                description: "Force the operation.".to_string(),
+                ..Default::default()
+            },
+            Parameter {
+                long_name: "repeat_count".to_string(),
+                short: Some('n'),
+                kind: ParamKind::ShortOnly,
+                param_type: ParamType::String,
+                description: "How many times.".to_string(),
+                ..Default::default()
+            },
+        ];
+        let sub = make_leaf("run", params);
+        let cli = make_cli("mytool", vec![sub]);
+        let files = generate(&cli, &default_opts(), None);
+        let script = &files[&PathBuf::from("src/scripts/run.sh")];
+        assert!(
+            script.contains(r#"[[ "${FORCE:-false}" = "true" ]] && set -- "$@" -f"#),
+            "short-only boolean must be passed as -f:\n{script}"
+        );
+        assert!(
+            script.contains(r#"set -- "$@" -n "${REPEAT_COUNT}""#),
+            "short-only value option must be passed as -n <value>:\n{script}"
+        );
+        assert!(
+            !script.contains("--force") && !script.contains("--repeat-count"),
+            "a short-only option has no long form:\n{script}"
         );
     }
 
@@ -2075,6 +2197,7 @@ mod tests {
                 default: None,
                 required: true,
                 description: "Path to orb.".to_string(),
+                ..Default::default()
             },
             Parameter {
                 long_name: "force".to_string(),
@@ -2083,6 +2206,7 @@ mod tests {
                 default: None,
                 required: false,
                 description: "Force.".to_string(),
+                ..Default::default()
             },
         ];
         let sub = make_leaf("generate", params);
@@ -2144,6 +2268,7 @@ mod tests {
                 default: None,
                 required: true,
                 description: "The orb name.".to_string(),
+                ..Default::default()
             },
             Parameter {
                 long_name: "optional_flag".to_string(),
@@ -2152,6 +2277,7 @@ mod tests {
                 default: Some("false".to_string()),
                 required: false,
                 description: "An optional boolean.".to_string(),
+                ..Default::default()
             },
         ];
         let sub = make_leaf("dosomething", params);
@@ -2255,6 +2381,7 @@ mod tests {
             default: None,
             required: true,
             description: "Path to orb.".to_string(),
+            ..Default::default()
         }];
         let sub = make_leaf("generate", params);
         let cli = make_cli("mytool", vec![sub]);
@@ -2279,6 +2406,7 @@ mod tests {
             default: Some("./dist".to_string()),
             required: false,
             description: "Output dir.".to_string(),
+            ..Default::default()
         }];
         let sub = make_leaf("generate", params);
         let cli = make_cli("mytool", vec![sub]);
@@ -2299,6 +2427,7 @@ mod tests {
             default: None,
             required: false,
             description: "Force overwrite.".to_string(),
+            ..Default::default()
         }];
         let sub = make_leaf("generate", params);
         let cli = make_cli("mytool", vec![sub]);
@@ -2319,6 +2448,7 @@ mod tests {
             default: Some("source".to_string()),
             required: false,
             description: "Output format.".to_string(),
+            ..Default::default()
         }];
         let sub = make_leaf("generate", params);
         let cli = make_cli("mytool", vec![sub]);
@@ -2351,6 +2481,7 @@ mod tests {
             default: None,
             required: false,
             description: "Force overwrite.".to_string(),
+            ..Default::default()
         }];
         let sub = make_leaf("cmd", params);
         let files = generate(&make_cli("mytool", vec![sub]), &default_opts(), None);
@@ -2373,6 +2504,7 @@ mod tests {
             default: None,
             required: false,
             description: "Output path.".to_string(),
+            ..Default::default()
         }];
         let sub = make_leaf("cmd", params);
         let files = generate(&make_cli("mytool", vec![sub]), &default_opts(), None);
@@ -2395,6 +2527,7 @@ mod tests {
             default: None,
             required: true,
             description: "Path to orb.".to_string(),
+            ..Default::default()
         }];
         let sub = make_leaf("cmd", params);
         let files = generate(&make_cli("mytool", vec![sub]), &default_opts(), None);
@@ -2444,6 +2577,7 @@ mod tests {
                 default: None,
                 required: false,
                 description: "Name for the output.".to_string(),
+                ..Default::default()
             },
             Parameter {
                 long_name: "output".to_string(),
@@ -2452,6 +2586,7 @@ mod tests {
                 default: Some("./dist".to_string()),
                 required: false,
                 description: "Output dir.".to_string(),
+                ..Default::default()
             },
         ];
         let sub = make_leaf("generate", params);
@@ -2486,6 +2621,7 @@ mod tests {
             default: Some("orb".to_string()),
             required: false,
             description: "Orb output directory.".to_string(),
+            ..Default::default()
         }];
         let sub = make_leaf("generate", params);
         let cli = make_cli("mytool", vec![sub]);
@@ -2519,6 +2655,7 @@ mod tests {
             default: Some("orb".to_string()),
             required: false,
             description: "Orb output directory.".to_string(),
+            ..Default::default()
         }];
         let sub = make_leaf("generate", params);
         let cli = make_cli("mytool", vec![sub]);
@@ -2561,6 +2698,7 @@ mod tests {
             default: Some("orb".to_string()),
             required: false,
             description: "Orb output directory.".to_string(),
+            ..Default::default()
         }];
         let sub = make_leaf("generate", params);
         let cli = make_cli("mytool", vec![sub]);
@@ -2595,6 +2733,7 @@ mod tests {
             default: Some(String::new()),
             required: false,
             description: "Output.".to_string(),
+            ..Default::default()
         }];
         let sub = make_leaf("show", params);
         let cli = make_cli("mytool", vec![sub]);
@@ -2625,6 +2764,7 @@ mod tests {
                 default: Some(String::new()),
                 required: false,
                 description: "Name for the output.".to_string(),
+                ..Default::default()
             },
             Parameter {
                 long_name: "output".to_string(),
@@ -2633,6 +2773,7 @@ mod tests {
                 default: Some("./dist".to_string()),
                 required: false,
                 description: "Output dir.".to_string(),
+                ..Default::default()
             },
         ];
         let sub = make_leaf("generate", params);
@@ -2684,6 +2825,7 @@ mod tests {
             default: Some("false".to_string()),
             required: false,
             description: "Suppress auto-record.".to_string(),
+            ..Default::default()
         }];
         let sub = make_leaf("generate", params);
         let cli = make_cli("mytool", vec![sub]);
@@ -3446,6 +3588,7 @@ mod tests {
                 interactive: None,
                 param: None,
                 label: None,
+                short_param: None,
             },
         );
         let config = OrbConfig {
@@ -3474,6 +3617,7 @@ mod tests {
                 interactive: None,
                 param: None,
                 label: None,
+                short_param: None,
             },
         );
         let config = OrbConfig {
@@ -3623,6 +3767,7 @@ mod tests {
                 interactive: None,
                 param: None,
                 label: None,
+                short_param: None,
             },
         );
         let config = OrbConfig {
@@ -3650,6 +3795,7 @@ mod tests {
             default: Some("src/@orb.yml".to_string()),
             required: false,
             description: "Path to orb file.".to_string(),
+            ..Default::default()
         };
         let sub = make_leaf("generate", vec![orb_path_param]);
         let cli = make_cli("mytool", vec![sub]);
@@ -3669,6 +3815,7 @@ mod tests {
                 interactive: None,
                 param: Some(param_overrides),
                 label: None,
+                short_param: None,
             },
         );
         let config = OrbConfig {
@@ -3739,6 +3886,7 @@ mod tests {
             default: default.map(String::from),
             required,
             description: format!("{name} param."),
+            ..Default::default()
         }
     }
 
