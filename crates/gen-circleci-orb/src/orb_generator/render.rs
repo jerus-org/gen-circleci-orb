@@ -55,22 +55,18 @@ pub struct CrateWait {
 
 /// 40 x 15s — 39 sleeps, so ~9m45s of waiting. Twice the window that proved too
 /// short on the 0.1.4 release.
+///
+/// The numbers live in `orb_config`, which is where a consumer sets them: the
+/// same values seed `[orb]`'s defaults, so a saved config and an unconfigured
+/// build cannot disagree about what the window is.
 impl Default for CrateWait {
     fn default() -> Self {
         Self {
-            attempts: 40,
-            seconds: 15,
+            attempts: crate::orb_config::DEFAULT_CRATE_WAIT_ATTEMPTS,
+            seconds: crate::orb_config::DEFAULT_CRATE_WAIT_SECONDS,
         }
     }
 }
-
-/// Ceiling on `crate_wait_attempts`.
-///
-/// Past some point a "window" is just a hang: the job sits until CircleCI's own
-/// timeout kills it, which is a worse outcome than the loud failure the gate
-/// exists to produce. 240 attempts is an hour at the default interval — far
-/// beyond any propagation delay ever observed.
-pub const MAX_CRATE_WAIT_ATTEMPTS: u32 = 240;
 
 /// Generate all orb artifact strings keyed by their relative output path.
 pub fn generate(

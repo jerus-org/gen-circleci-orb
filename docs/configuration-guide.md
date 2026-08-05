@@ -71,6 +71,10 @@ crate_wait_attempts = 40   # default: 40 (maximum 240)
 crate_wait_seconds = 15    # default: 15  → 39 sleeps, so ~9m45s of waiting
 ```
 
+Unlike the other `[orb]` keys these two are always written out, so a saved config states the
+window in force and hands you the knob rather than leaving you to discover it. Deleting a line
+does not disable anything — it restores the default, which is then written back on the next save.
+
 The orb's container is built from the crate that was **just** published, so the build races the
 crates.io sparse index. The generated Dockerfile retries `cargo install <binary> --version
 "${CRATE_VERSION}"` on a bounded loop. The bound and the loud failure are deliberate: without the
@@ -91,9 +95,10 @@ was never built, and the orb was never published — and recovering means re-run
 workflow by hand. Raise these if a release keeps outrunning the window; the default is twice the
 window that proved too short in practice.
 
-A zero is ignored (the gate is not optional), and `crate_wait_attempts` is capped at 240 — an hour
-at the default interval. A window long enough to outlast the CI job timeout is a hang, not a window,
-and a hang is a worse outcome than the loud failure the gate exists to produce.
+Both are floored at 1: zero attempts is not a gate, and a zero interval is a busy-loop.
+`crate_wait_attempts` is capped at 240 — an hour at the default interval — because a window long
+enough to outlast the CI job timeout is a hang, not a window, and a hang is a worse outcome than the
+loud failure the gate exists to produce.
 
 ### `git_push_subcommands` — subcommands that push to git
 

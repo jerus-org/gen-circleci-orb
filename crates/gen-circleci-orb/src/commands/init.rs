@@ -348,12 +348,6 @@ pub(crate) fn build_bootstrap_config(
             binary: Some(binary.to_string()),
             namespaces: Some(namespaces.to_vec()),
             orb_dir: Some(orb_dir.to_string()),
-            base_image: None,
-            builder_image: None,
-            circleci_cli_version: None,
-            install_method: None,
-            apt_packages: None,
-            cargo_tools: None,
             home_url: home_url.map(str::to_string),
             source_url: source_url.map(str::to_string),
             git_push_subcommands: if git_push_subcommands.is_empty() {
@@ -361,10 +355,7 @@ pub(crate) fn build_bootstrap_config(
             } else {
                 Some(git_push_subcommands.to_vec())
             },
-            custom_files: None,
-            allow_unparsed_help: None,
-            crate_wait_attempts: None,
-            crate_wait_seconds: None,
+            ..OrbSection::default()
         }),
         ci: None, // populated by run() after gathering extras
         orbs: None,

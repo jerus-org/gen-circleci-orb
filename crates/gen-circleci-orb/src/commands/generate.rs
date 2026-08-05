@@ -469,36 +469,32 @@ pub(crate) fn resolve_apt_packages(
     pkgs
 }
 
-/// Resolve the crates.io propagation window from `[orb]`, falling back to the
-/// generator default. A consumer tunes this when their release keeps outrunning
-/// the gate, without waiting for a generator release (#236).
+/// Resolve the crates.io propagation window from `[orb]`.
 ///
 /// There is no CLI flag: this is a property of the project's release, not of a
-/// single run. Zero is ignored — the gate is not optional — and an absurd
-/// attempt count is clamped to [`MAX_CRATE_WAIT_ATTEMPTS`], since a window long
-/// enough to outlast the CI job timeout is a hang, not a window.
+/// single run. The config always carries a value — `[orb]` defaults supply one
+/// when the file omits the key — so this only has to keep that value sane:
+/// floored at 1, and capped at [`MAX_CRATE_WAIT_ATTEMPTS`], since a window long
+/// enough to outlast the CI job timeout is a hang rather than a window (#236).
 pub(crate) fn resolve_crate_wait(
     config: &crate::orb_config::OrbConfig,
 ) -> orb_generator::render::CrateWait {
-    use orb_generator::render::{CrateWait, MAX_CRATE_WAIT_ATTEMPTS};
-    let default = CrateWait::default();
-    let orb = config.orb.as_ref();
-    let attempts = orb
-        .and_then(|o| o.crate_wait_attempts)
-        .filter(|n| *n > 0)
-        .unwrap_or(default.attempts);
-    if attempts > MAX_CRATE_WAIT_ATTEMPTS {
+    use crate::orb_config::MAX_CRATE_WAIT_ATTEMPTS;
+    use orb_generator::render::CrateWait;
+    let section = config.orb.clone().unwrap_or_default();
+
+    if section.crate_wait_attempts > MAX_CRATE_WAIT_ATTEMPTS {
         tracing::warn!(
-            "[orb] crate_wait_attempts = {attempts} exceeds the {MAX_CRATE_WAIT_ATTEMPTS} \
-             maximum; using {MAX_CRATE_WAIT_ATTEMPTS}"
+            "[orb] crate_wait_attempts = {} exceeds the {MAX_CRATE_WAIT_ATTEMPTS} \
+             maximum; using {MAX_CRATE_WAIT_ATTEMPTS}",
+            section.crate_wait_attempts
         );
     }
     CrateWait {
-        attempts: attempts.min(MAX_CRATE_WAIT_ATTEMPTS),
-        seconds: orb
-            .and_then(|o| o.crate_wait_seconds)
-            .filter(|n| *n > 0)
-            .unwrap_or(default.seconds),
+        attempts: section
+            .crate_wait_attempts
+            .clamp(1, MAX_CRATE_WAIT_ATTEMPTS),
+        seconds: section.crate_wait_seconds.max(1),
     }
 }
 
@@ -1654,8 +1650,8 @@ mod tests {
         use crate::orb_config::{OrbConfig, OrbSection};
         let config = OrbConfig {
             orb: Some(OrbSection {
-                crate_wait_attempts: Some(60),
-                crate_wait_seconds: Some(30),
+                crate_wait_attempts: 60,
+                crate_wait_seconds: 30,
                 ..OrbSection::default()
             }),
             ..OrbConfig::default()
@@ -1665,31 +1661,35 @@ mod tests {
         assert_eq!(wait.seconds, 30);
     }
 
-    /// Zero would disable the gate — the one thing it must not be able to do.
+    /// Zero attempts is not a gate at all, and zero seconds is a busy-loop.
+    /// Both are floored at one rather than silently replaced by the default:
+    /// the value is now written in the consumer's config, so it is a stated
+    /// choice rather than an absent one.
     #[test]
-    fn resolve_crate_wait_ignores_zero() {
+    fn resolve_crate_wait_floors_zero_at_one() {
         use crate::orb_config::{OrbConfig, OrbSection};
-        use crate::orb_generator::render::CrateWait;
         let config = OrbConfig {
             orb: Some(OrbSection {
-                crate_wait_attempts: Some(0),
-                crate_wait_seconds: Some(0),
+                crate_wait_attempts: 0,
+                crate_wait_seconds: 0,
                 ..OrbSection::default()
             }),
             ..OrbConfig::default()
         };
-        assert_eq!(resolve_crate_wait(&config), CrateWait::default());
+        let wait = resolve_crate_wait(&config);
+        assert_eq!(wait.attempts, 1);
+        assert_eq!(wait.seconds, 1);
     }
 
     /// A value big enough to outlast the CircleCI job timeout is not a window,
     /// it is a hang. Clamp it and say so.
     #[test]
     fn resolve_crate_wait_clamps_absurd_attempts() {
+        use crate::orb_config::MAX_CRATE_WAIT_ATTEMPTS;
         use crate::orb_config::{OrbConfig, OrbSection};
-        use crate::orb_generator::render::MAX_CRATE_WAIT_ATTEMPTS;
         let config = OrbConfig {
             orb: Some(OrbSection {
-                crate_wait_attempts: Some(100_000),
+                crate_wait_attempts: 100_000,
                 ..OrbSection::default()
             }),
             ..OrbConfig::default()
@@ -1713,7 +1713,7 @@ mod tests {
         // seconds configured, attempts left unset
         let seconds_only = OrbConfig {
             orb: Some(OrbSection {
-                crate_wait_seconds: Some(30),
+                crate_wait_seconds: 30,
                 ..OrbSection::default()
             }),
             ..OrbConfig::default()
@@ -1728,7 +1728,7 @@ mod tests {
         // attempts configured, seconds left unset
         let attempts_only = OrbConfig {
             orb: Some(OrbSection {
-                crate_wait_attempts: Some(60),
+                crate_wait_attempts: 60,
                 ..OrbSection::default()
             }),
             ..OrbConfig::default()
