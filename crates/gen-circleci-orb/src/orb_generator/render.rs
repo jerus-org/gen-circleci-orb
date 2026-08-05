@@ -47,11 +47,14 @@ pub struct GenerateOpts {
 /// half-published, with the crate on crates.io and no container or orb (#236).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CrateWait {
+    /// How many times to try the install before failing loudly.
     pub attempts: u32,
+    /// Seconds to wait between tries.
     pub seconds: u32,
 }
 
-/// Ten minutes: twice the window that proved too short on the 0.1.4 release.
+/// 40 x 15s — 39 sleeps, so ~9m45s of waiting. Twice the window that proved too
+/// short on the 0.1.4 release.
 impl Default for CrateWait {
     fn default() -> Self {
         Self {
@@ -60,6 +63,14 @@ impl Default for CrateWait {
         }
     }
 }
+
+/// Ceiling on `crate_wait_attempts`.
+///
+/// Past some point a "window" is just a hang: the job sits until CircleCI's own
+/// timeout kills it, which is a worse outcome than the loud failure the gate
+/// exists to produce. 240 attempts is an hour at the default interval — far
+/// beyond any propagation delay ever observed.
+pub const MAX_CRATE_WAIT_ATTEMPTS: u32 = 240;
 
 /// Generate all orb artifact strings keyed by their relative output path.
 pub fn generate(
@@ -617,8 +628,16 @@ fn render_dockerfile(binary: &str, opts: &GenerateOpts) -> String {
             // recovering means re-running the tag's workflow by hand (#236).
             let CrateWait { attempts, seconds } = crate_wait;
             out.push_str(&format!(
-                "    && {{ n=0; until cargo install {binary} --version \"${{CRATE_VERSION}}\" --locked; do \\\n"
+                "    && {{ n=0; until cargo install {binary} --version \"${{CRATE_VERSION}}\" --locked 2>/tmp/cargo-install.err; do \\\n"
             ));
+            out.push_str("         cat /tmp/cargo-install.err >&2; \\\n");
+            // Only an index miss is worth waiting out. A build failure is
+            // deterministic: retrying it recompiles the whole crate every
+            // attempt and buries the compiler error N repetitions deep, so stop
+            // at the first one.
+            out.push_str(
+                "         grep -q \"failed to compile\" /tmp/cargo-install.err && echo \"build failed — not an index delay, giving up\" >&2 && exit 1; \\\n",
+            );
             out.push_str("         n=$((n+1)); \\\n");
             out.push_str(&format!(
                 "         [ \"$n\" -ge {attempts} ] && echo \"crates.io index never served ${{CRATE_VERSION}}\" >&2 && exit 1; \\\n",
@@ -626,8 +645,10 @@ fn render_dockerfile(binary: &str, opts: &GenerateOpts) -> String {
             out.push_str(
                 "         echo \"waiting for crates.io index to propagate ${CRATE_VERSION} (attempt $n)\"; \\\n",
             );
-            // Drop cargo's cached sparse-index entries so the next attempt is a
-            // real re-query rather than a replay of the lookup that just missed.
+            // Drop cargo's LOCAL sparse-index cache, so the next attempt makes a
+            // full request instead of a conditional one. Cargo revalidates per
+            // invocation anyway, and this cannot touch staleness at the CDN edge
+            // — it is cheap insurance on the one layer we control, not the fix.
             out.push_str(
                 "         rm -rf \"${CARGO_HOME:-/usr/local/cargo}\"/registry/index/*/.cache; \\\n",
             );
@@ -3040,21 +3061,41 @@ mod tests {
         );
     }
 
-    /// cargo caches sparse-index lookups under $CARGO_HOME. Dropping that cache
-    /// between attempts makes each retry a real re-query, so waiting longer can
-    /// actually help.
+    /// cargo caches sparse-index lookups under $CARGO_HOME. Dropping the local
+    /// cache between attempts turns a conditional re-query into a full one.
+    /// It has to sit inside the retry body — between the bail-out and the sleep.
     #[test]
     fn dockerfile_retry_busts_the_sparse_index_cache() {
         let dockerfile = render_dockerfile("mytool", &default_opts());
         let bust = dockerfile
-            .find("registry/index")
+            .find(r#"rm -rf "${CARGO_HOME:-/usr/local/cargo}"/registry/index/*/.cache"#)
             .unwrap_or_else(|| panic!("no index cache bust:\n{dockerfile}"));
         let fail = dockerfile
             .find("crates.io index never served")
             .expect("gate must fail loudly");
+        let sleep = dockerfile.find("sleep 15").expect("gate must sleep");
         assert!(
-            bust > fail,
-            "the cache bust belongs inside the retry body:\n{dockerfile}"
+            fail < bust && bust < sleep,
+            "the cache bust belongs inside the retry body, after the bail-out and \
+             before the sleep:\n{dockerfile}"
+        );
+    }
+
+    /// The loop retries whatever `cargo install` failed at. A compile failure is
+    /// deterministic — retrying it burns a full build per attempt and buries the
+    /// compiler error N repetitions deep, so it must stop at the first one.
+    #[test]
+    fn dockerfile_does_not_retry_a_compile_failure() {
+        let dockerfile = render_dockerfile("mytool", &default_opts());
+        assert!(
+            dockerfile.contains("failed to compile"),
+            "the gate must recognise a build failure:\n{dockerfile}"
+        );
+        let detect = dockerfile.find("failed to compile").unwrap();
+        let sleep = dockerfile.find("sleep 15").expect("gate must sleep");
+        assert!(
+            detect < sleep,
+            "a build failure must bail out before the retry sleeps:\n{dockerfile}"
         );
     }
 

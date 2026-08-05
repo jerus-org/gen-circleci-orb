@@ -9,7 +9,9 @@ RUN apt-get update \
     libssl-dev \
     pkg-config \
     && rm -rf /var/lib/apt/lists/* \
-    && { n=0; until cargo install gen-circleci-orb --version "${CRATE_VERSION}" --locked; do \
+    && { n=0; until cargo install gen-circleci-orb --version "${CRATE_VERSION}" --locked 2>/tmp/cargo-install.err; do \
+         cat /tmp/cargo-install.err >&2; \
+         grep -q "failed to compile" /tmp/cargo-install.err && echo "build failed — not an index delay, giving up" >&2 && exit 1; \
          n=$((n+1)); \
          [ "$n" -ge 40 ] && echo "crates.io index never served ${CRATE_VERSION}" >&2 && exit 1; \
          echo "waiting for crates.io index to propagate ${CRATE_VERSION} (attempt $n)"; \

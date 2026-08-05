@@ -67,21 +67,33 @@ it with `apt`/`local` is an error. It assumes each tool's binary shares its crat
 
 ```toml
 [orb]
-crate_wait_attempts = 40   # default: 40
-crate_wait_seconds = 15    # default: 15  → a ten-minute window
+crate_wait_attempts = 40   # default: 40 (maximum 240)
+crate_wait_seconds = 15    # default: 15  → 39 sleeps, so ~9m45s of waiting
 ```
 
 The orb's container is built from the crate that was **just** published, so the build races the
 crates.io sparse index. The generated Dockerfile retries `cargo install <binary> --version
-"${CRATE_VERSION}"` on a bounded loop, dropping cargo's cached index entries between attempts so
-each retry is a real re-query. The bound and the loud failure are deliberate: without the pinned
-version the install would silently resolve the *previous* release and ship a container whose binary
-does not match its own tag.
+"${CRATE_VERSION}"` on a bounded loop. The bound and the loud failure are deliberate: without the
+pinned version the install would silently resolve the *previous* release and ship a container whose
+binary does not match its own tag.
 
-Only the size of the window is tunable. If the gate expires the release stalls **half-published** —
-the crate is on crates.io, the container was never built, and the orb was never published — and
-recovering means re-running the tag's release workflow by hand. Raise these if a release keeps
-outrunning the window; the default is twice the window that proved too short in practice.
+Only an index delay is waited out. A **build** failure — `cargo install` reporting `failed to
+compile` — stops the loop immediately, because it is deterministic: retrying it recompiles the whole
+crate every attempt and buries the compiler error N repetitions deep.
+
+Between attempts the loop drops cargo's *local* sparse-index cache, turning the next lookup into a
+full request rather than a conditional one. Cargo revalidates per invocation anyway, and this cannot
+clear staleness at the CDN edge — it is cheap insurance on the one layer the build controls, not the
+mechanism that makes waiting work.
+
+If the gate expires the release stalls **half-published** — the crate is on crates.io, the container
+was never built, and the orb was never published — and recovering means re-running the tag's release
+workflow by hand. Raise these if a release keeps outrunning the window; the default is twice the
+window that proved too short in practice.
+
+A zero is ignored (the gate is not optional), and `crate_wait_attempts` is capped at 240 — an hour
+at the default interval. A window long enough to outlast the CI job timeout is a hang, not a window,
+and a hang is a worse outcome than the loud failure the gate exists to produce.
 
 ### `git_push_subcommands` — subcommands that push to git
 
