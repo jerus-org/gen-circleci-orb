@@ -75,41 +75,41 @@ pub enum InstallMethod {
 #[derive(Debug, clap::Args)]
 pub struct Generate {
     /// Name of the binary to introspect (must be on PATH).
-    /// Falls back to `binary` in the [orb] section of gen-circleci-orb.toml.
+    /// Falls back to `binary` in the `[orb]` section of gen-circleci-orb.toml.
     #[arg(long)]
     pub binary: Option<String>,
 
     /// CircleCI orb namespace(s) to publish the orb under (repeatable).
-    /// Falls back to `namespaces` in the [orb] section of gen-circleci-orb.toml.
+    /// Falls back to `namespaces` in the `[orb]` section of gen-circleci-orb.toml.
     #[arg(long = "orb-namespace")]
     pub namespaces: Vec<String>,
 
-    /// Project root directory (orb source is written to <output>/<orb-dir>/).
+    /// Project root directory (orb source is written to `<output>/<orb-dir>/`).
     #[arg(long, default_value = ".")]
     pub output: PathBuf,
 
     /// How the binary is installed in the generated Docker image.
-    /// Falls back to `install_method` in the [orb] section of gen-circleci-orb.toml, then "binstall".
+    /// Falls back to `install_method` in the `[orb]` section of gen-circleci-orb.toml, then "binstall".
     #[arg(long, value_enum)]
     pub install_method: Option<InstallMethod>,
 
     /// Base Docker image for the generated executor.
-    /// Falls back to `base_image` in the [orb] section of gen-circleci-orb.toml, then "debian:13-slim".
+    /// Falls back to `base_image` in the `[orb]` section of gen-circleci-orb.toml, then "debian:13-slim".
     #[arg(long)]
     pub base_image: Option<String>,
 
     /// Home URL for the orb registry display section.
-    /// Falls back to `home_url` in the [orb] section of gen-circleci-orb.toml.
+    /// Falls back to `home_url` in the `[orb]` section of gen-circleci-orb.toml.
     #[arg(long)]
     pub home_url: Option<String>,
 
     /// Source URL for the orb registry display section.
-    /// Falls back to `source_url` in the [orb] section of gen-circleci-orb.toml.
+    /// Falls back to `source_url` in the `[orb]` section of gen-circleci-orb.toml.
     #[arg(long)]
     pub source_url: Option<String>,
 
     /// Subdirectory within --output where orb source is written.
-    /// Falls back to `orb_dir` in the [orb] section of gen-circleci-orb.toml, then "orb".
+    /// Falls back to `orb_dir` in the `[orb]` section of gen-circleci-orb.toml, then "orb".
     #[arg(long)]
     pub orb_dir: Option<String>,
 
@@ -147,7 +147,7 @@ pub struct Generate {
     pub dry_run: bool,
 
     /// Path to gen-circleci-orb.toml config file.
-    /// Defaults to <output>/gen-circleci-orb.toml when not specified.
+    /// Defaults to `<output>/gen-circleci-orb.toml` when not specified.
     #[arg(long)]
     pub config: Option<PathBuf>,
 
