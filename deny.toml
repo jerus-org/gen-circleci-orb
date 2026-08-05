@@ -7,9 +7,6 @@ db-urls = ["https://github.com/rustsec/advisory-db"]
 unmaintained = "all"
 yanked = "warn"
 ignore = [
-    # RUSTSEC-2023-0071: Marvin Attack timing side-channel in rsa. Transitive
-    # via pcu -> sigstore; no fixed upstream release. Matches pcu/gen-orb-mcp.
-    "RUSTSEC-2023-0071",
 ]
 
 [licenses]
@@ -30,15 +27,6 @@ allow = [
     "CDLA-Permissive-2.0",
 ]
 
-# LGPL-2.0-or-later: the OpenPGP stack used for GPG commit/tag signing (via pcu).
-[[licenses.exceptions]]
-name = "sequoia-openpgp"
-allow = ["LGPL-2.0-or-later"]
-
-[[licenses.exceptions]]
-name = "buffered-reader"
-allow = ["LGPL-2.0-or-later"]
-
 # MPL-2.0 (file-level copyleft): transitive config/dirs helper.
 [[licenses.exceptions]]
 name = "option-ext"
@@ -47,6 +35,12 @@ allow = ["MPL-2.0"]
 [bans]
 multiple-versions = "warn"
 wildcards = "allow"
+# `rsa` carries an unfixed advisory (RUSTSEC-2023-0071) and reaches this graph
+# only through pcu's `attest` feature, which this crate does not use. The ban
+# exists so that anything reintroducing `rsa` forces a check of its advisory
+# state and a decision — a different solution, or an exception if warranted.
+# Local guard: CI does not run cargo-deny yet (#260).
+deny = [{ name = "rsa" }]
 
 [sources]
 unknown-registry = "warn"
