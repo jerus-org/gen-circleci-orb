@@ -31,8 +31,13 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && cd /tmp \
     && TARBALL="circleci-cli_${CIRCLECI_CLI_VERSION}_linux_amd64.tar.gz" \
-    && curl -fLSs --proto '=https' "https://github.com/CircleCI-Public/circleci-cli/releases/download/v${CIRCLECI_CLI_VERSION}/${TARBALL}" -o "${TARBALL}" \
-    && curl -fLSs --proto '=https' "https://github.com/CircleCI-Public/circleci-cli/releases/download/v${CIRCLECI_CLI_VERSION}/circleci-cli_${CIRCLECI_CLI_VERSION}_checksums.txt" -o checksums.txt \
+    && BASE="https://github.com/CircleCI-Public/circleci-cli/releases" \
+    && REL="${BASE}/download/v${CIRCLECI_CLI_VERSION}" \
+    && curl -fLSs --proto '=https' \
+         "${REL}/${TARBALL}" -o "${TARBALL}" \
+    && curl -fLSs --proto '=https' \
+         "${REL}/circleci-cli_${CIRCLECI_CLI_VERSION}_checksums.txt" \
+         -o checksums.txt \
     && grep "${TARBALL}" checksums.txt | sha256sum --check \
     && tar -xzf "${TARBALL}" --strip 1 \
     && install -m 755 circleci /usr/local/bin/circleci \
