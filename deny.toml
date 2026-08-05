@@ -35,26 +35,11 @@ allow = ["MPL-2.0"]
 [bans]
 multiple-versions = "warn"
 wildcards = "allow"
-# Keeps pcu's `attest` surface out of the graph. `rsa` is reachable only through
-# that feature (openidconnect + sigstore), which this crate does not use — it
-# depends on pcu for git and GPG only, and pcu shells out to the `gpg` CLI, so
-# signing is unaffected. Enabling it would add ~170 crates for nothing.
-#
-# `rsa` is the marker rather than the point: it is the one crate on that path
-# with an unfixed advisory (RUSTSEC-2023-0071, `patched = []` since 2023), so it
-# is what a reviewer recognises. The ban is NOT waiting on that fix — the crate
-# would still be unwanted weight if the advisory were withdrawn tomorrow, and
-# nothing would tell us it had been, since cargo-audit only reports on crates
-# actually in the graph. Treat it as a dependency-surface guard with no expiry:
-# a legitimate future need for `rsa` should remove this line deliberately, which
-# is the point of it failing first.
-#
-# Enforcement today is local (`just audit`). CI does not run cargo-deny — the
-# security job runs `cargo audit -D warnings` only — so the CI-side guarantee
-# comes from `.cargo/audit.toml` no longer ignoring RUSTSEC-2023-0071: a
-# returning `rsa` fails the audit there. Do not restore that ignore on the
-# grounds that this ban covers it; it does not. Adopting jci-audit at 0.1.0
-# runs both tools in CI and makes the ban enforced there too (#260).
+# `rsa` carries an unfixed advisory (RUSTSEC-2023-0071) and reaches this graph
+# only through pcu's `attest` feature, which this crate does not use. The ban
+# exists so that anything reintroducing `rsa` forces a check of its advisory
+# state and a decision — a different solution, or an exception if warranted.
+# Local guard: CI does not run cargo-deny yet (#260).
 deny = [{ name = "rsa" }]
 
 [sources]
