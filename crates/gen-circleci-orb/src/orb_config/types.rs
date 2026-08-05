@@ -87,7 +87,21 @@ pub struct CiSection {
     pub rust_image: Option<String>,
 }
 
-#[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq)]
+/// Default number of `cargo install` attempts in the generated Dockerfile's
+/// crates.io propagation gate.
+pub const DEFAULT_CRATE_WAIT_ATTEMPTS: u32 = 40;
+/// Default seconds between those attempts. 40 x 15s is 39 sleeps, ~9m45s.
+pub const DEFAULT_CRATE_WAIT_SECONDS: u32 = 15;
+/// Ceiling on `crate_wait_attempts`.
+///
+/// Past some point a "window" is just a hang: the job sits until CircleCI's own
+/// timeout kills it, which is a worse outcome than the loud failure the gate
+/// exists to produce. 240 attempts is an hour at the default interval — far
+/// beyond any propagation delay ever observed.
+pub const MAX_CRATE_WAIT_ATTEMPTS: u32 = 240;
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(default)]
 pub struct OrbSection {
     pub binary: Option<String>,
     pub namespaces: Option<Vec<String>>,
@@ -139,6 +153,48 @@ pub struct OrbSection {
     /// Set this to `true` to ship in spite of the gap — the missing input is
     /// then logged as a warning — while the generator is taught the shape.
     pub allow_unparsed_help: Option<bool>,
+    /// How many times the generated Dockerfile retries `cargo install` while
+    /// waiting for crates.io to serve the version being released.
+    ///
+    /// The container is built from the crate that was just published, so it
+    /// races the sparse index. When the gate expires the release stalls
+    /// half-published — crate on crates.io, no container, no orb — so raise
+    /// this (or `crate_wait_seconds`) if a release keeps outrunning it.
+    ///
+    /// Unlike the `Option` fields around it this carries a real default rather
+    /// than "unset", so a saved config states the value in force and gives the
+    /// consumer the knob already written out. Floored at 1 and capped at
+    /// [`MAX_CRATE_WAIT_ATTEMPTS`].
+    pub crate_wait_attempts: u32,
+    /// Seconds between those retries. Floored at 1 — a zero would spin.
+    pub crate_wait_seconds: u32,
+}
+
+/// Hand-written because `derive(Default)` would give the crate-wait settings
+/// `u32::default()` — zero — which as an attempt count means "never wait" and
+/// as an interval means "spin". The defaults are the constants above, and this
+/// impl is what `#[serde(default)]` uses for a config that omits them.
+impl Default for OrbSection {
+    fn default() -> Self {
+        Self {
+            binary: None,
+            namespaces: None,
+            orb_dir: None,
+            base_image: None,
+            builder_image: None,
+            circleci_cli_version: None,
+            install_method: None,
+            apt_packages: None,
+            cargo_tools: None,
+            home_url: None,
+            source_url: None,
+            git_push_subcommands: None,
+            custom_files: None,
+            allow_unparsed_help: None,
+            crate_wait_attempts: DEFAULT_CRATE_WAIT_ATTEMPTS,
+            crate_wait_seconds: DEFAULT_CRATE_WAIT_SECONDS,
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq)]
