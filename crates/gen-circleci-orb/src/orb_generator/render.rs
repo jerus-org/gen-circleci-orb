@@ -545,8 +545,15 @@ fn render_cli_installer_stage(ver: &str) -> String {
     s.push_str("    && rm -rf /var/lib/apt/lists/* \\\n");
     s.push_str("    && cd /tmp \\\n");
     s.push_str("    && TARBALL=\"circleci-cli_${CIRCLECI_CLI_VERSION}_linux_amd64.tar.gz\" \\\n");
-    s.push_str("    && curl -fLSs --proto '=https' \"https://github.com/CircleCI-Public/circleci-cli/releases/download/v${CIRCLECI_CLI_VERSION}/${TARBALL}\" -o \"${TARBALL}\" \\\n");
-    s.push_str("    && curl -fLSs --proto '=https' \"https://github.com/CircleCI-Public/circleci-cli/releases/download/v${CIRCLECI_CLI_VERSION}/circleci-cli_${CIRCLECI_CLI_VERSION}_checksums.txt\" -o checksums.txt \\\n");
+    // The release URL exceeds the line limit on its own, so it is assembled from
+    // variables and each download splits over continuations (docker:S7020).
+    s.push_str("    && BASE=\"https://github.com/CircleCI-Public/circleci-cli/releases\" \\\n");
+    s.push_str("    && REL=\"${BASE}/download/v${CIRCLECI_CLI_VERSION}\" \\\n");
+    s.push_str("    && curl -fLSs --proto '=https' \\\n");
+    s.push_str("         \"${REL}/${TARBALL}\" -o \"${TARBALL}\" \\\n");
+    s.push_str("    && curl -fLSs --proto '=https' \\\n");
+    s.push_str("         \"${REL}/circleci-cli_${CIRCLECI_CLI_VERSION}_checksums.txt\" \\\n");
+    s.push_str("         -o checksums.txt \\\n");
     s.push_str("    && grep \"${TARBALL}\" checksums.txt | sha256sum --check \\\n");
     s.push_str("    && tar -xzf \"${TARBALL}\" --strip 1 \\\n");
     s.push_str("    && install -m 755 circleci /usr/local/bin/circleci \\\n");
@@ -669,11 +676,16 @@ fn render_dockerfile(binary: &str, opts: &GenerateOpts) -> String {
             let mut sorted_tools = cargo_tools.to_vec();
             sorted_tools.sort();
             if !sorted_tools.is_empty() {
+                // One tool per line: the joined list grows with [orb] cargo_tools
+                // and would otherwise run past the line limit (docker:S7020),
+                // exactly as the apt package list does.
                 out.push_str("RUN cargo install cargo-binstall --locked \\\n");
-                out.push_str(&format!(
-                    "    && cargo binstall --no-confirm {}\n",
-                    sorted_tools.join(" ")
-                ));
+                out.push_str("    && cargo binstall --no-confirm \\\n");
+                let last = sorted_tools.len() - 1;
+                for (i, tool) in sorted_tools.iter().enumerate() {
+                    let cont = if i == last { "" } else { " \\" };
+                    out.push_str(&format!("    {tool}{cont}\n"));
+                }
             }
             if let Some(ver) = circleci_cli_version {
                 out.push('\n');
@@ -1719,7 +1731,7 @@ mod tests {
             "builder should install cargo-binstall:\n{content}"
         );
         assert!(
-            content.contains("cargo binstall --no-confirm cargo-audit cargo-deny"),
+            binstall_tools(content) == ["cargo-audit", "cargo-deny"],
             "builder should binstall the cargo tools:\n{content}"
         );
         assert!(
@@ -1763,7 +1775,7 @@ mod tests {
         };
         let content = &generate(&cli, &opts, None)[&PathBuf::from("Dockerfile")];
         assert!(
-            content.contains("cargo binstall --no-confirm cargo-audit cargo-deny"),
+            binstall_tools(content) == ["cargo-audit", "cargo-deny"],
             "tools should be emitted in sorted order:\n{content}"
         );
     }
@@ -3097,33 +3109,100 @@ mod tests {
             .join(" ")
     }
 
-    /// docker:S7020 — a long line must be split over `\` continuations.
+    /// The `cargo binstall` tool list as emitted, one tool per line.
     ///
-    /// Scoped to the propagation gate, which is what this rule caught. Checked
-    /// with a long binary name too: the limit has to hold for a consumer whose
-    /// crate name is longer than this one's, not just for the shape emitted here.
+    /// Reads the actual lines rather than a whitespace-flattened copy: a missing
+    /// `\` continuation produces a Dockerfile that does not build, and a check
+    /// that collapses newlines cannot tell the difference.
+    fn binstall_tools(dockerfile: &str) -> Vec<String> {
+        let mut lines = dockerfile
+            .lines()
+            .skip_while(|l| !l.contains("cargo binstall --no-confirm"));
+        let head = lines.next().unwrap_or_default();
+        assert!(
+            head.trim_end().ends_with('\\'),
+            "the binstall command must continue onto the tool lines:\n{head}"
+        );
+        let mut tools = Vec::new();
+        for line in lines {
+            let trimmed = line.trim();
+            let cont = trimmed.ends_with('\\');
+            let tool = trimmed.trim_end_matches('\\').trim();
+            if tool.is_empty() {
+                break;
+            }
+            tools.push(tool.to_string());
+            if !cont {
+                break;
+            }
+        }
+        tools
+    }
+
+    /// docker:S7020 — "Too long RUN instruction should be split into multiple
+    /// lines". Scoped to `RUN`, which is what the rule covers: `COPY` and `FROM`
+    /// can exceed the width without being flagged, and this repo's own
+    /// digest-pinned `FROM` already does.
     ///
-    /// (The `COPY --from=builder …` lines and the CLI-installer stage's `curl`
-    /// lines also exceed the limit for a long binary name. Both predate this
-    /// change and reflowing them churns every consumer's Dockerfile, so they are
-    /// left for their own change.)
+    /// The fixtures stress the two parts that grow with consumer config — a long
+    /// binary name, and a realistic `cargo_tools` list — because a limit only
+    /// holds if the test reaches it.
     #[test]
-    fn propagation_gate_lines_stay_within_the_length_limit() {
+    fn every_run_instruction_line_stays_within_the_length_limit() {
         const MAX: usize = 120;
-        for binary in ["mytool", "a-consumer-crate-with-a-considerably-longer-name"] {
-            let dockerfile = render_dockerfile(binary, &default_opts());
-            let gate: Vec<&str> = dockerfile
-                .lines()
-                .skip_while(|l| !l.contains("err=/tmp/cargo-install.err"))
-                .take_while(|l| !l.contains("done; }"))
-                .collect();
-            assert!(!gate.is_empty(), "gate not found:\n{dockerfile}");
-            for line in gate {
-                assert!(
-                    line.chars().count() <= MAX,
-                    "gate line is {} chars (limit {MAX}) for binary `{binary}`:\n{line}",
-                    line.chars().count()
-                );
+        let long_binary = "a-consumer-crate-with-a-considerably-longer-name";
+        let many_tools: Vec<String> = [
+            "cargo-audit",
+            "cargo-deny",
+            "cargo-nextest",
+            "cargo-llvm-cov",
+            "cargo-msrv",
+            "cargo-machete",
+            "cargo-about",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+
+        for binary in ["mytool", long_binary] {
+            for method in [
+                InstallMethod::Binstall,
+                InstallMethod::Local,
+                InstallMethod::Apt,
+            ] {
+                let opts = GenerateOpts {
+                    install_method: method.clone(),
+                    circleci_cli_version: Some("0.1.38646".to_string()),
+                    cargo_tools: if matches!(method, InstallMethod::Binstall) {
+                        many_tools.clone()
+                    } else {
+                        vec![]
+                    },
+                    apt_packages: vec!["libssl-dev".to_string(), "pkg-config".to_string()],
+                    ..default_opts()
+                };
+                let dockerfile = render_dockerfile(binary, &opts);
+
+                // A RUN instruction spans its continuation lines, so track
+                // whether the previous line ended with `\`.
+                let mut in_run = false;
+                for (n, line) in dockerfile.lines().enumerate() {
+                    if line.starts_with("RUN ") {
+                        in_run = true;
+                    }
+                    if in_run {
+                        assert!(
+                            line.chars().count() <= MAX,
+                            "RUN line {} is {} chars (limit {MAX}) for `{binary}` \
+                             with {method:?}:\n{line}",
+                            n + 1,
+                            line.chars().count()
+                        );
+                    }
+                    if !line.trim_end().ends_with('\\') {
+                        in_run = false;
+                    }
+                }
             }
         }
     }
