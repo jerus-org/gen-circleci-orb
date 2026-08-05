@@ -626,24 +626,33 @@ fn render_dockerfile(binary: &str, opts: &GenerateOpts) -> String {
             // crate is published but not yet served leaves the release
             // half-published — crate on crates.io, no container, no orb — and
             // recovering means re-running the tag's workflow by hand (#236).
+            // Every emitted line stays inside the Dockerfile line-length limit
+            // (docker:S7020) — including for a consumer whose binary name is far
+            // longer than this crate's — so the shell statements are split over
+            // `\` continuations and the error file is held in `$err`.
             let CrateWait { attempts, seconds } = crate_wait;
+            out.push_str("    && { err=/tmp/cargo-install.err; n=0; \\\n");
             out.push_str(&format!(
-                "    && {{ n=0; until cargo install {binary} --version \"${{CRATE_VERSION}}\" --locked 2>/tmp/cargo-install.err; do \\\n"
+                "       until cargo install {binary} --locked \\\n"
             ));
-            out.push_str("         cat /tmp/cargo-install.err >&2; \\\n");
+            out.push_str("             --version \"${CRATE_VERSION}\" 2>\"$err\"; do \\\n");
+            out.push_str("         cat \"$err\" >&2; \\\n");
             // Only an index miss is worth waiting out. A build failure is
             // deterministic: retrying it recompiles the whole crate every
             // attempt and buries the compiler error N repetitions deep, so stop
             // at the first one.
+            out.push_str("         grep -q \"failed to compile\" \"$err\" \\\n");
             out.push_str(
-                "         grep -q \"failed to compile\" /tmp/cargo-install.err && echo \"build failed — not an index delay, giving up\" >&2 && exit 1; \\\n",
+                "           && echo \"build failed, not an index delay\" >&2 && exit 1; \\\n",
             );
             out.push_str("         n=$((n+1)); \\\n");
-            out.push_str(&format!(
-                "         [ \"$n\" -ge {attempts} ] && echo \"crates.io index never served ${{CRATE_VERSION}}\" >&2 && exit 1; \\\n",
-            ));
+            out.push_str(&format!("         [ \"$n\" -ge {attempts} ] \\\n"));
             out.push_str(
-                "         echo \"waiting for crates.io index to propagate ${CRATE_VERSION} (attempt $n)\"; \\\n",
+                "           && echo \"crates.io index never served ${CRATE_VERSION}\" >&2 \\\n",
+            );
+            out.push_str("           && exit 1; \\\n");
+            out.push_str(
+                "         echo \"waiting for crates.io index: ${CRATE_VERSION} (try $n)\"; \\\n",
             );
             // Drop cargo's LOCAL sparse-index cache, so the next attempt makes a
             // full request instead of a conditional one. Cargo revalidates per
@@ -3081,6 +3090,48 @@ mod tests {
         );
     }
 
+    /// The Dockerfile as Docker will run it: `\`-continuations joined and runs
+    /// of whitespace collapsed. Assertions about a *command* belong here so they
+    /// survive a reflow; assertions about layout belong on the raw text.
+    fn joined_commands(dockerfile: &str) -> String {
+        dockerfile
+            .replace("\\\n", " ")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    /// docker:S7020 — a long line must be split over `\` continuations.
+    ///
+    /// Scoped to the propagation gate, which is what this rule caught. Checked
+    /// with a long binary name too: the limit has to hold for a consumer whose
+    /// crate name is longer than this one's, not just for the shape emitted here.
+    ///
+    /// (The `COPY --from=builder …` lines and the CLI-installer stage's `curl`
+    /// lines also exceed the limit for a long binary name. Both predate this
+    /// change and reflowing them churns every consumer's Dockerfile, so they are
+    /// left for their own change.)
+    #[test]
+    fn propagation_gate_lines_stay_within_the_length_limit() {
+        const MAX: usize = 120;
+        for binary in ["mytool", "a-consumer-crate-with-a-considerably-longer-name"] {
+            let dockerfile = render_dockerfile(binary, &default_opts());
+            let gate: Vec<&str> = dockerfile
+                .lines()
+                .skip_while(|l| !l.contains("err=/tmp/cargo-install.err"))
+                .take_while(|l| !l.contains("done; }"))
+                .collect();
+            assert!(!gate.is_empty(), "gate not found:\n{dockerfile}");
+            for line in gate {
+                assert!(
+                    line.chars().count() <= MAX,
+                    "gate line is {} chars (limit {MAX}) for binary `{binary}`:\n{line}",
+                    line.chars().count()
+                );
+            }
+        }
+    }
+
     /// The loop retries whatever `cargo install` failed at. A compile failure is
     /// deterministic — retrying it burns a full build per attempt and buries the
     /// compiler error N repetitions deep, so it must stop at the first one.
@@ -3126,7 +3177,8 @@ mod tests {
         );
         // build the exact published dep set (Cargo.lock), not a fresh resolve.
         assert!(
-            dockerfile.contains("cargo install mytool --version \"${CRATE_VERSION}\" --locked"),
+            joined_commands(&dockerfile)
+                .contains("cargo install mytool --locked --version \"${CRATE_VERSION}\""),
             "builder must cargo install the pinned version --locked:\n{dockerfile}"
         );
     }
@@ -3152,8 +3204,8 @@ mod tests {
             "builder must declare a CRATE_VERSION build-arg:\n{dockerfile}"
         );
         assert!(
-            dockerfile
-                .contains("until cargo install mytool --version \"${CRATE_VERSION}\" --locked"),
+            joined_commands(&dockerfile)
+                .contains("until cargo install mytool --locked --version \"${CRATE_VERSION}\""),
             "install must be wrapped in a retry loop that waits out index lag:\n{dockerfile}"
         );
         assert!(
