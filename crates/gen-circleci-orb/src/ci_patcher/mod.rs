@@ -169,61 +169,96 @@ fn strip_managed(content: &str) -> (String, Vec<String>) {
     let mut in_marked_region = false;
     let mut i = 0;
     while i < lines.len() {
-        let line = lines[i];
-        let trimmed = line.trim_start();
-        // Marker comments are advisory only: drop them (patch_build re-inserts a
-        // fresh pair) and track the region so we can flag unrecognised content —
-        // but never use a marker to delete by position.
-        if trimmed.starts_with(MANAGED_BEGIN) {
-            in_marked_region = true;
+        // Three outcomes per line, in order: it toggles a marker, it opens a
+        // block we own, or it is the consumer's and we keep it. Each is decided
+        // by its own function so the walk does not also have to hold the rules.
+        if let Some(region_open) = marker_toggle(lines[i]) {
+            in_marked_region = region_open;
             i += 1;
-            continue;
-        }
-        if trimmed.starts_with(MANAGED_END) {
-            in_marked_region = false;
+        } else if let Some(next) = managed_item_end(&lines, i) {
+            i = next;
+        } else {
+            keep_line(lines[i], in_marked_region, &mut out, &mut warnings);
             i += 1;
-            continue;
         }
-        // (1) the gen-circleci-orb orbs entry — a single line.
-        if trimmed.starts_with("gen-circleci-orb: ") {
-            i += 1;
-            continue;
-        }
-        // (3) the orb-release workflow — its header plus the indented body.
-        if line.trim_end() == "  orb-release:" {
-            i += 1;
-            while i < lines.len() && (lines[i].is_empty() || indent_of(lines[i]) >= 4) {
-                i += 1;
-            }
-            continue;
-        }
-        // (2) a managed validation job block — a 6-space job invocation whose
-        // `name:` is in the managed set; drop the `- ` line + its continuation.
-        if indent_of(line) == 6 && trimmed.starts_with("- ") {
-            let mut j = i + 1;
-            while j < lines.len() && (lines[j].is_empty() || indent_of(lines[j]) > 6) {
-                j += 1;
-            }
-            if block_is_managed_validation(&lines[i..j]) {
-                i = j;
-                continue;
-            }
-        }
-        // Keep this line. If it sits inside a managed-marker region but was not one
-        // of our items, surface it: preserved, but the operator should know custom
-        // content lives in a managed block (or that a marker is damaged).
-        if in_marked_region && !trimmed.is_empty() {
-            warnings.push(format!(
-                "kept unrecognised content inside a gen-circleci-orb managed region (preserved, review): {trimmed}"
-            ));
-        }
-        out.push(line.to_string());
-        i += 1;
     }
     (
         normalize_blanks(&out.join("\n"), content.ends_with('\n')),
         warnings,
     )
+}
+
+/// `Some(true)` for a begin marker, `Some(false)` for an end marker.
+///
+/// Marker comments are advisory only: they are dropped (`patch_build` re-inserts
+/// a fresh pair) and the region is tracked so unrecognised content inside it can
+/// be flagged — but a marker never authorises a deletion by position.
+fn marker_toggle(line: &str) -> Option<bool> {
+    let trimmed = line.trim_start();
+    if trimmed.starts_with(MANAGED_BEGIN) {
+        Some(true)
+    } else if trimmed.starts_with(MANAGED_END) {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+/// Index just past the generator-owned item starting at `i`, or `None` when the
+/// line is not the start of one.
+///
+/// This is the whole authority to delete: each arm names content we generate and
+/// bounds it by its own indentation. Nothing here consults the markers.
+fn managed_item_end(lines: &[&str], i: usize) -> Option<usize> {
+    let line = lines[i];
+    let trimmed = line.trim_start();
+
+    // (1) the gen-circleci-orb orbs entry — a single line.
+    if trimmed.starts_with("gen-circleci-orb: ") {
+        return Some(i + 1);
+    }
+
+    // (2) the orb-release workflow — its header plus the indented body.
+    if line.trim_end() == "  orb-release:" {
+        return Some(indented_block_end(lines, i + 1, 4));
+    }
+
+    // (3) a managed validation job block — a 6-space job invocation whose
+    // `name:` is in the managed set; the `- ` line plus its continuation.
+    if indent_of(line) == 6 && trimmed.starts_with("- ") {
+        let end = indented_block_end(lines, i + 1, 7);
+        if block_is_managed_validation(&lines[i..end]) {
+            return Some(end);
+        }
+    }
+
+    None
+}
+
+/// Index just past a run of lines that are empty or indented at least `indent`.
+fn indented_block_end(lines: &[&str], mut i: usize, indent: usize) -> usize {
+    while i < lines.len() && (lines[i].is_empty() || indent_of(lines[i]) >= indent) {
+        i += 1;
+    }
+    i
+}
+
+/// Keep a line. If it sits inside a managed-marker region but was not one of our
+/// items, surface it: preserved, but the operator should know custom content
+/// lives in a managed block (or that a marker is damaged).
+fn keep_line(
+    line: &str,
+    in_marked_region: bool,
+    out: &mut Vec<String>,
+    warnings: &mut Vec<String>,
+) {
+    let trimmed = line.trim_start();
+    if in_marked_region && !trimmed.is_empty() {
+        warnings.push(format!(
+            "kept unrecognised content inside a gen-circleci-orb managed region (preserved, review): {trimmed}"
+        ));
+    }
+    out.push(line.to_string());
 }
 
 fn block_is_managed_validation(block: &[&str]) -> bool {
@@ -2475,4 +2510,342 @@ workflows:
           source_dir: orb/src
           requires: [pack-orb]
 ";
+}
+
+/// Characterisation tests for [`strip_managed`], written before the refactor in
+/// #255 so the behaviour they pin is the behaviour that survives it.
+///
+/// The contract under test is the one the doc comment states: removal is
+/// authorised by **content**, never by marker position. A damaged, partial or
+/// missing marker must never cause adjacent consumer content to be consumed —
+/// this runs against a config the tool does not own, on a command the operator
+/// expected to be a no-op.
+#[cfg(test)]
+mod strip_managed_tests {
+    use super::*;
+
+    fn strip(content: &str) -> String {
+        strip_managed(content).0
+    }
+
+    fn warnings(content: &str) -> Vec<String> {
+        strip_managed(content).1
+    }
+
+    #[test]
+    fn a_config_with_nothing_managed_is_returned_unchanged() {
+        let content = "\
+version: 2.1
+
+orbs:
+  toolkit: my-org/toolkit@2.9.1
+
+workflows:
+  validation:
+    jobs:
+      - my-own-job:
+          name: mine
+";
+        assert_eq!(strip(content), content);
+        assert!(warnings(content).is_empty());
+    }
+
+    #[test]
+    fn the_managed_orbs_entry_is_removed_and_the_unmanaged_pins_kept() {
+        let content = "\
+orbs:
+  toolkit: my-org/toolkit@2.9.1
+  gen-circleci-orb: my-org/gen-circleci-orb@0.1.4
+  orb-tools: circleci/orb-tools@12.3.3
+";
+        let stripped = strip(content);
+        assert!(!stripped.contains("gen-circleci-orb:"));
+        assert!(stripped.contains("toolkit: my-org/toolkit@2.9.1"));
+        assert!(stripped.contains("orb-tools: circleci/orb-tools@12.3.3"));
+    }
+
+    /// Markers are advisory. Removing them must not remove what they wrapped
+    /// unless that content is ours by name.
+    #[test]
+    fn marker_comments_are_dropped_but_the_content_they_wrap_is_judged_on_its_own() {
+        let content = format!(
+            "\
+workflows:
+  validation:
+    jobs:
+      {MANAGED_BEGIN}
+      - my-own-job:
+          name: mine
+      {MANAGED_END}
+"
+        );
+        let stripped = strip(&content);
+        assert!(!stripped.contains(">>> gen-circleci-orb"));
+        assert!(!stripped.contains("<<< gen-circleci-orb"));
+        assert!(
+            stripped.contains("name: mine"),
+            "content inside a marker region is not ours to delete:\n{stripped}"
+        );
+    }
+
+    /// …and it is surfaced, so an operator can see custom content is sitting
+    /// where the generator will rewrite around it.
+    #[test]
+    fn unrecognised_content_inside_a_marker_region_is_reported() {
+        let content = format!(
+            "\
+workflows:
+  validation:
+    jobs:
+      {MANAGED_BEGIN}
+      - my-own-job:
+          name: mine
+      {MANAGED_END}
+"
+        );
+        let found = warnings(&content);
+        assert!(
+            found.iter().any(|w| w.contains("my-own-job")),
+            "expected a warning naming the kept content, got: {found:?}"
+        );
+    }
+
+    /// A truncated or hand-edited config leaves a `>>>` with no `<<<`. The
+    /// region then runs to end of file — which must still not delete anything.
+    #[test]
+    fn an_unmatched_begin_marker_deletes_nothing() {
+        let content = format!(
+            "\
+workflows:
+  validation:
+    jobs:
+      {MANAGED_BEGIN}
+      - my-own-job:
+          name: mine
+      - another-job:
+          name: also-mine
+"
+        );
+        let stripped = strip(&content);
+        assert!(stripped.contains("name: mine"));
+        assert!(stripped.contains("name: also-mine"));
+    }
+
+    /// The mirror case: a stray `<<<` with no opener.
+    #[test]
+    fn an_unmatched_end_marker_deletes_nothing() {
+        let content = format!(
+            "\
+workflows:
+  validation:
+    jobs:
+      - my-own-job:
+          name: mine
+      {MANAGED_END}
+      - another-job:
+          name: also-mine
+"
+        );
+        let stripped = strip(&content);
+        assert!(stripped.contains("name: mine"));
+        assert!(stripped.contains("name: also-mine"));
+    }
+
+    #[test]
+    fn a_managed_validation_job_is_removed_with_its_continuation() {
+        let content = "\
+workflows:
+  validation:
+    jobs:
+      - my-own-job:
+          name: mine
+      - toolkit/build:
+          name: build-binary
+          requires:
+            - setup
+      - my-other-job:
+          name: also-mine
+";
+        let stripped = strip(content);
+        assert!(!stripped.contains("build-binary"));
+        assert!(
+            !stripped.contains("- setup"),
+            "the job's continuation lines go with it:\n{stripped}"
+        );
+        assert!(stripped.contains("name: mine"));
+        assert!(stripped.contains("name: also-mine"));
+    }
+
+    #[test]
+    fn the_orb_release_workflow_is_removed_whole() {
+        let content = "\
+workflows:
+  validation:
+    jobs:
+      - my-own-job:
+          name: mine
+  orb-release:
+    when: << pipeline.parameters.orb_release >>
+    jobs:
+      - build-binary-release
+      - pack-orb-release
+  my-own-workflow:
+    jobs:
+      - something
+";
+        let stripped = strip(content);
+        assert!(!stripped.contains("orb-release:"));
+        assert!(!stripped.contains("pack-orb-release"));
+        assert!(stripped.contains("my-own-workflow:"));
+        assert!(stripped.contains("- something"));
+    }
+
+    /// Consumer content sitting *between* two managed regions must come through
+    /// intact — comments included, since those are the operator's notes to
+    /// themselves — and must not be reported, because it is not inside a region.
+    #[test]
+    fn consumer_content_between_managed_regions_survives_with_its_comments() {
+        let content = format!(
+            "\
+workflows:
+  validation:
+    jobs:
+      {MANAGED_BEGIN}
+      - toolkit/build:
+          name: build-binary
+      {MANAGED_END}
+      # our own smoke test, keep this between the orb jobs
+      - my-own-job:
+          name: mine
+      {MANAGED_BEGIN}
+      - orb-tools/pack:
+          name: pack-orb
+      {MANAGED_END}
+"
+        );
+        let (stripped, found) = strip_managed(&content);
+        assert!(
+            stripped.contains("# our own smoke test, keep this between the orb jobs"),
+            "the operator's comment must survive:\n{stripped}"
+        );
+        assert!(stripped.contains("name: mine"));
+        assert!(!stripped.contains("build-binary"), "got:\n{stripped}");
+        assert!(!stripped.contains("pack-orb"), "got:\n{stripped}");
+        assert!(
+            found.is_empty(),
+            "content outside the regions must not be reported: {found:?}"
+        );
+    }
+
+    /// A comment the operator put *inside* a region is a different case: it is
+    /// still preserved, but it is surfaced, because the generator rewrites
+    /// around it and they should know it is there.
+    #[test]
+    fn a_comment_inside_a_managed_region_is_preserved_and_reported() {
+        let content = format!(
+            "\
+workflows:
+  validation:
+    jobs:
+      {MANAGED_BEGIN}
+      # why we pinned this one
+      - toolkit/build:
+          name: build-binary
+      {MANAGED_END}
+"
+        );
+        let (stripped, found) = strip_managed(&content);
+        assert!(
+            stripped.contains("# why we pinned this one"),
+            "a comment is never ours to delete:\n{stripped}"
+        );
+        assert!(!stripped.contains("build-binary"));
+        assert!(
+            found.iter().any(|w| w.contains("why we pinned this one")),
+            "expected the comment to be reported, got: {found:?}"
+        );
+    }
+
+    #[test]
+    fn a_file_without_a_trailing_newline_stays_without_one() {
+        let content = "version: 2.1\n\norbs:\n  toolkit: my-org/toolkit@2.9.1";
+        let stripped = strip(content);
+        assert!(!stripped.ends_with('\n'), "got: {stripped:?}");
+        assert_eq!(stripped, content);
+    }
+
+    #[test]
+    fn a_file_with_a_trailing_newline_keeps_exactly_one() {
+        let content = "version: 2.1\n";
+        assert_eq!(strip(content), "version: 2.1\n");
+    }
+
+    #[test]
+    fn a_marker_at_end_of_file_without_a_trailing_newline_is_dropped_cleanly() {
+        let content = format!("version: 2.1\n{MANAGED_END}");
+        let stripped = strip(&content);
+        assert_eq!(stripped, "version: 2.1");
+    }
+
+    /// Deleting a marker-wrapped block leaves the blank line above it next to
+    /// the blank line below it, and those runs are collapsed.
+    ///
+    /// The fixture has to be a wrapped block: removing a single line, as an
+    /// earlier version of this test did, cannot put two blanks together, so the
+    /// assertion held even with collapsing deleted outright.
+    ///
+    /// What collapsing ultimately protects — `patch_build` staying a fixed
+    /// point of `resync_build`, so `update --check` does not fail consumer CI
+    /// on a change nobody made — is already covered by
+    /// `patch_build_output_is_a_fixed_point_of_resync` and its siblings. This
+    /// test pins the mechanism; those pin the consequence.
+    #[test]
+    fn blank_runs_left_by_a_removal_are_collapsed() {
+        let content = format!(
+            "\
+orbs:
+  toolkit: my-org/toolkit@2.9.1
+
+  {MANAGED_BEGIN}
+  gen-circleci-orb: my-org/gen-circleci-orb@0.1.4
+  {MANAGED_END}
+
+workflows:
+  validation:
+    jobs:
+      - my-own-job:
+          name: mine
+"
+        );
+        let stripped = strip(&content);
+        assert!(
+            !stripped.contains("\n\n\n"),
+            "the gap left by the removed block must be collapsed:\n{stripped:?}"
+        );
+        assert!(stripped.contains("toolkit: my-org/toolkit@2.9.1"));
+        assert!(stripped.contains("name: mine"));
+    }
+
+    #[test]
+    fn stripping_is_idempotent() {
+        let content = "\
+orbs:
+  toolkit: my-org/toolkit@2.9.1
+  gen-circleci-orb: my-org/gen-circleci-orb@0.1.4
+
+workflows:
+  validation:
+    jobs:
+      - my-own-job:
+          name: mine
+      - toolkit/build:
+          name: build-binary
+  orb-release:
+    jobs:
+      - pack-orb-release
+";
+        let once = strip(content);
+        let twice = strip(&once);
+        assert_eq!(once, twice, "a second strip must be a no-op");
+    }
 }
