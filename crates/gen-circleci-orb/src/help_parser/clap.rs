@@ -128,16 +128,19 @@ pub fn extract_subcommand_names(text: &str) -> Vec<String> {
 /// that produced was the whole of its complexity (#257).
 fn commands_block(text: &str) -> impl Iterator<Item = &str> {
     text.lines()
-        .map(str::trim)
         // Everything up to and including the header is preamble. When the
         // header is absent this consumes the lot, which is the empty case.
-        .skip_while(|line| *line != "Commands:")
+        .skip_while(|line| line.trim() != "Commands:")
         .skip(1)
         // Blank lines are spacing within the block, not the end of it — clap
-        // emits one between groups. Filtered before the terminator test, as in
-        // the original walk.
-        .filter(|line| !line.is_empty())
-        .take_while(|line| !is_section_header(line))
+        // emits one between groups.
+        .filter(|line| !line.trim().is_empty())
+        // Tested on the *untrimmed* line: what separates a header from a
+        // command line is that the header is not indented. Trimming first
+        // discards exactly that, so any description ending in a colon looked
+        // like a header and truncated the block (#278).
+        .take_while(|line| !is_top_level_section(line))
+        .map(str::trim)
 }
 
 /// Parse the Usage line to find flags listed outside any `[...]` group.
@@ -959,6 +962,40 @@ Commands:
   verify   Verify it
 "#;
         assert_eq!(extract_subcommand_names(help), vec!["run", "verify"]);
+    }
+
+    /// A description ending in a colon must not be mistaken for a section
+    /// header (#278). It was: the terminator test ran on the trimmed line, so
+    /// the indentation that tells a command line from a header had already been
+    /// removed — truncating the block and silently dropping that subcommand and
+    /// every one after it from the generated orb.
+    #[test]
+    fn a_description_ending_in_a_colon_does_not_end_the_block() {
+        let help = r#"Usage: tool <COMMAND>
+
+Commands:
+  run     Run the thing
+  verify  Verify it, including:
+  deploy  Deploy the thing
+"#;
+        assert_eq!(
+            extract_subcommand_names(help),
+            vec!["run", "verify", "deploy"]
+        );
+    }
+
+    /// The guard that distinguishes them is indentation, so a real header at
+    /// column 0 must still end the block.
+    #[test]
+    fn an_unindented_header_still_ends_the_block() {
+        let help = r#"Usage: tool <COMMAND>
+
+Commands:
+  run   Run the thing
+Options:
+  -h, --help  Print help
+"#;
+        assert_eq!(extract_subcommand_names(help), vec!["run"]);
     }
 
     /// A `Commands:` block that runs to the end of the help text has no
