@@ -104,60 +104,81 @@ fn merge_into_document(existing: &str, rendered: &str) -> Result<String> {
 /// only when `known` says this binary understands it and `source` no longer has
 /// it — an unrecognised key is left as the user wrote it.
 fn merge_table(target: &mut toml_edit::Table, source: &toml_edit::Table, known: &toml_edit::Table) {
+    // Keys whose decor must be cleared once the borrow on their item is released.
     let mut reset_key_decor: Vec<String> = Vec::new();
     for (key, source_item) in source.iter() {
-        let known_child = known.get(key).and_then(|i| i.as_table());
-        match (target.get_mut(key), source_item) {
-            // Both tables: recurse so nested comments survive too.
-            (Some(toml_edit::Item::Table(target_tbl)), toml_edit::Item::Table(source_tbl)) => {
-                // No counterpart in `known` means this binary models nothing
-                // here, so nothing below is removed.
-                let empty = toml_edit::Table::new();
-                merge_table(target_tbl, source_tbl, known_child.unwrap_or(&empty));
-            }
-            // Arrays of tables (`[[job_group]]`): merge element by element so an
-            // entry's comment survives a change to a sibling — or to itself.
-            (
-                Some(toml_edit::Item::ArrayOfTables(target_arr)),
-                toml_edit::Item::ArrayOfTables(source_arr),
-            ) => {
-                merge_array_of_tables(target_arr, source_arr);
-            }
-            // Present but not a matching pair: replace only if the value actually
-            // changed. An untouched value keeps the formatting the user gave it
-            // — otherwise every write reflows their inline arrays, which is the
-            // same "don't rewrite what I wrote" complaint in smaller form.
-            (Some(target_item), _) => {
-                if !same_value(target_item, source_item) {
-                    // An inline `x = { … }` becoming a `[x]` section carries its
-                    // old key decor into the header, rendering `[x ]`. Note it
-                    // and clear that decor once the borrow is released.
-                    if target_item.is_value() && !source_item.is_value() {
-                        reset_key_decor.push(key.to_string());
-                    }
-                    replace_preserving_decor(target_item, source_item);
-                }
-            }
-            // New key: append it.
-            (None, _) => {
-                target.insert(key, source_item.clone());
-            }
-        }
+        merge_entry(target, key, source_item, known, &mut reset_key_decor);
     }
-
     for key in reset_key_decor {
         if let Some(mut k) = target.key_mut(&key) {
             k.leaf_decor_mut().clear();
             k.dotted_decor_mut().clear();
         }
     }
+    remove_stale_keys(target, source, known);
+}
 
-    let removed: Vec<String> = target
+/// Merge one key of `source` into `target`.
+///
+/// Records in `reset_key_decor` any key whose decor must be cleared afterwards,
+/// which cannot be done here while the item is mutably borrowed.
+fn merge_entry(
+    target: &mut toml_edit::Table,
+    key: &str,
+    source_item: &toml_edit::Item,
+    known: &toml_edit::Table,
+    reset_key_decor: &mut Vec<String>,
+) {
+    match (target.get_mut(key), source_item) {
+        // Both tables: recurse so nested comments survive too.
+        (Some(toml_edit::Item::Table(target_tbl)), toml_edit::Item::Table(source_tbl)) => {
+            // No counterpart in `known` means this binary models nothing here,
+            // so nothing below is removed.
+            let empty = toml_edit::Table::new();
+            let known_child = known.get(key).and_then(|i| i.as_table()).unwrap_or(&empty);
+            merge_table(target_tbl, source_tbl, known_child);
+        }
+        // Arrays of tables (`[[job_group]]`): merge element by element so an
+        // entry's comment survives a change to a sibling — or to itself.
+        (
+            Some(toml_edit::Item::ArrayOfTables(target_arr)),
+            toml_edit::Item::ArrayOfTables(source_arr),
+        ) => merge_array_of_tables(target_arr, source_arr),
+        // Present but not a matching pair: replace only if the value actually
+        // changed. An untouched value keeps the formatting the user gave it —
+        // otherwise every write reflows their inline arrays, which is the same
+        // "don't rewrite what I wrote" complaint in smaller form.
+        (Some(target_item), _) if !same_value(target_item, source_item) => {
+            // An inline `x = { … }` becoming a `[x]` section carries its old key
+            // decor into the header, rendering `[x ]`. Note it and clear that
+            // decor once the borrow is released.
+            if target_item.is_value() && !source_item.is_value() {
+                reset_key_decor.push(key.to_string());
+            }
+            replace_preserving_decor(target_item, source_item);
+        }
+        // Unchanged value: leave it exactly as the user wrote it.
+        (Some(_), _) => {}
+        // New key: append it.
+        (None, _) => {
+            target.insert(key, source_item.clone());
+        }
+    }
+}
+
+/// Drop keys this binary models that `source` no longer has — an unrecognised
+/// key is left alone, since serde silently discards what it does not know.
+fn remove_stale_keys(
+    target: &mut toml_edit::Table,
+    source: &toml_edit::Table,
+    known: &toml_edit::Table,
+) {
+    let stale: Vec<String> = target
         .iter()
         .map(|(k, _)| k.to_string())
         .filter(|k| source.get(k).is_none() && known.get(k).is_some())
         .collect();
-    for key in removed {
+    for key in stale {
         target.remove(&key);
     }
 }
