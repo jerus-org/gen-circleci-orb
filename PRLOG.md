@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - generate parameters for positionals and short-only options(pr [#244])
+- record the [orb] settings in the config(pr [#272])
 
 ### Changed
 
@@ -845,6 +846,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#263]: https://github.com/jerus-org/gen-circleci-orb/pull/263
 [#264]: https://github.com/jerus-org/gen-circleci-orb/pull/264
 [#270]: https://github.com/jerus-org/gen-circleci-orb/pull/270
+[#272]: https://github.com/jerus-org/gen-circleci-orb/pull/272
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.4...HEAD
 [0.1.4]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.2...v0.1.3
