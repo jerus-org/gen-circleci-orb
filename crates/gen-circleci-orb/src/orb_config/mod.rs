@@ -2,8 +2,9 @@ mod types;
 
 pub use types::{
     CiSection, ExtraJob, JobGroup, JobGroupParam, JobGroupStep, OrbConfig, OrbSection,
-    ParamOverride, RecordConfig, SubcommandConfig, DEFAULT_CRATE_WAIT_ATTEMPTS,
-    DEFAULT_CRATE_WAIT_SECONDS, MAX_CRATE_WAIT_ATTEMPTS,
+    ParamOverride, RecordConfig, SubcommandConfig, DEFAULT_BASE_IMAGE, DEFAULT_BUILDER_IMAGE,
+    DEFAULT_CRATE_WAIT_ATTEMPTS, DEFAULT_CRATE_WAIT_SECONDS, DEFAULT_INSTALL_METHOD,
+    DEFAULT_ORB_DIR, MAX_CRATE_WAIT_ATTEMPTS, MCP_DEFAULT_BASE_IMAGE,
 };
 
 use anyhow::{Context, Result};
@@ -649,7 +650,7 @@ steps:
             orb: Some(OrbSection {
                 binary: Some("mytool".to_string()),
                 namespaces: Some(vec!["my-org".to_string()]),
-                orb_dir: Some("orb".to_string()),
+                orb_dir: "orb".to_string(),
                 ..OrbSection::default()
             }),
             ci: None,
@@ -690,7 +691,7 @@ steps:
         .unwrap();
 
         let mut config = load_config(&path).unwrap();
-        config.orb.as_mut().unwrap().orb_dir = Some("orb".to_string());
+        config.orb.as_mut().unwrap().orb_dir = "orb".to_string();
         save_config(&path, &config).unwrap();
 
         let written = std::fs::read_to_string(&path).unwrap();
@@ -778,7 +779,7 @@ steps:
         .unwrap();
 
         let mut config = load_config(&path).unwrap();
-        config.orb.as_mut().unwrap().orb_dir = Some("orb".to_string());
+        config.orb.as_mut().unwrap().orb_dir = "orb".to_string();
         save_config(&path, &config).unwrap();
 
         let written = std::fs::read_to_string(&path).unwrap();
@@ -824,7 +825,7 @@ steps:
         .unwrap();
 
         let mut config = load_config(&path).unwrap();
-        config.orb.as_mut().unwrap().orb_dir = Some("custom".to_string());
+        config.orb.as_mut().unwrap().orb_dir = "custom".to_string();
         save_config(&path, &config).unwrap();
 
         let reloaded = load_config(&path).unwrap();
@@ -908,7 +909,7 @@ steps:
         .unwrap();
 
         let mut config = load_config(&path).unwrap();
-        config.orb.as_mut().unwrap().orb_dir = Some("orb".to_string());
+        config.orb.as_mut().unwrap().orb_dir = "orb".to_string();
         save_config(&path, &config).unwrap();
 
         let written = std::fs::read_to_string(&path).unwrap();
@@ -1037,11 +1038,28 @@ steps:
     }
 
     /// Saving an unchanged config must not touch the file's shape at all.
+    ///
+    /// "Unchanged" means every materialised setting is already stated: a config
+    /// that omits one gains it on the next save, which is the point of giving
+    /// them real defaults (#245/#251) rather than a rewrite this guards against.
     #[test]
     fn saving_an_unchanged_config_rewrites_nothing() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("gen-circleci-orb.toml");
-        let original = "# keep pinned\norbs = { toolkit = \"pinned@2.9.1\" }\n\n[orb]\nbinary = \"mytool\"\nnamespaces = [\"my-org\"]\ncrate_wait_attempts = 40\ncrate_wait_seconds = 15\n";
+        let original = concat!(
+            "# keep pinned\n",
+            "orbs = { toolkit = \"pinned@2.9.1\" }\n",
+            "\n",
+            "[orb]\n",
+            "binary = \"mytool\"\n",
+            "namespaces = [\"my-org\"]\n",
+            "orb_dir = \"orb\"\n",
+            "base_image = \"debian:13-slim\"\n",
+            "builder_image = \"rust:1-slim-trixie\"\n",
+            "install_method = \"binstall\"\n",
+            "crate_wait_attempts = 40\n",
+            "crate_wait_seconds = 15\n",
+        );
         std::fs::write(&path, original).unwrap();
 
         let config = load_config(&path).unwrap();
@@ -1219,6 +1237,95 @@ steps:
             written.contains("crate_wait_attempts = 40")
                 && written.contains("crate_wait_seconds = 15"),
             "the written config must show the defaults in force:\n{written}"
+        );
+    }
+
+    // ── #251: the rest of [orb]'s defaults are materialised too ────────────
+
+    #[test]
+    fn orb_section_default_materialises_the_orb_settings() {
+        let orb = OrbSection::default();
+        assert_eq!(orb.orb_dir, DEFAULT_ORB_DIR);
+        assert_eq!(orb.install_method, DEFAULT_INSTALL_METHOD);
+        assert_eq!(orb.base_image, DEFAULT_BASE_IMAGE);
+        assert_eq!(orb.builder_image, DEFAULT_BUILDER_IMAGE);
+    }
+
+    /// A config written before these keys existed still resolves to the
+    /// recommendations, so nothing has to be re-`init`ed to keep working.
+    #[test]
+    fn a_config_omitting_the_orb_settings_loads_the_recommendations() {
+        let config: OrbConfig = toml::from_str("[orb]\nbinary = \"mytool\"\n").unwrap();
+        let orb = config.orb.unwrap();
+        assert_eq!(orb.orb_dir, DEFAULT_ORB_DIR);
+        assert_eq!(orb.install_method, DEFAULT_INSTALL_METHOD);
+        assert_eq!(orb.base_image, DEFAULT_BASE_IMAGE);
+        assert_eq!(orb.builder_image, DEFAULT_BUILDER_IMAGE);
+    }
+
+    /// `circleci_cli_version` is deliberately *not* materialised: a recorded
+    /// version is an opt-in to bundling the CLI, so a default value in every
+    /// config would install it into every executor that never asked for it.
+    #[test]
+    fn circleci_cli_version_stays_absent_when_unconfigured() {
+        let config: OrbConfig = toml::from_str("[orb]\nbinary = \"mytool\"\n").unwrap();
+        assert_eq!(config.orb.unwrap().circleci_cli_version, None);
+    }
+
+    #[test]
+    fn saved_config_spells_out_the_orb_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gen-circleci-orb.toml");
+        let config = OrbConfig {
+            orb: Some(OrbSection {
+                binary: Some("mytool".to_string()),
+                ..OrbSection::default()
+            }),
+            ..OrbConfig::default()
+        };
+        save_config(&path, &config).unwrap();
+        let written = std::fs::read_to_string(&path).unwrap();
+        for expected in [
+            format!("orb_dir = \"{DEFAULT_ORB_DIR}\""),
+            format!("install_method = \"{DEFAULT_INSTALL_METHOD}\""),
+            format!("base_image = \"{DEFAULT_BASE_IMAGE}\""),
+            format!("builder_image = \"{DEFAULT_BUILDER_IMAGE}\""),
+        ] {
+            assert!(
+                written.contains(&expected),
+                "expected `{expected}` in the written config:\n{written}"
+            );
+        }
+    }
+
+    /// The whole point of the merge: a recorded value is the project's stated
+    /// configuration and a save must not reset it to the recommendation.
+    #[test]
+    fn a_recorded_orb_setting_survives_a_save() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gen-circleci-orb.toml");
+        std::fs::write(
+            &path,
+            concat!(
+                "[orb]\n",
+                "binary = \"mytool\"\n",
+                "# pinned so the digest survives regeneration\n",
+                "builder_image = \"rust:1-slim-trixie@sha256:abc123\"\n",
+            ),
+        )
+        .unwrap();
+        let mut config = load_config(&path).unwrap();
+        assert_eq!(
+            config.orb.as_ref().unwrap().builder_image,
+            "rust:1-slim-trixie@sha256:abc123"
+        );
+        config.orb.as_mut().unwrap().binary = Some("mytool".to_string());
+        save_config(&path, &config).unwrap();
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            written.contains("rust:1-slim-trixie@sha256:abc123")
+                && written.contains("# pinned so the digest survives regeneration"),
+            "the pin and its comment must survive:\n{written}"
         );
     }
 }

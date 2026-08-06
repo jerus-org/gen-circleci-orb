@@ -22,7 +22,15 @@ Options:
       --release-after-job <RELEASE_AFTER_JOB>
           Job in the release workflow after which the generated release jobs (build-binary-release, pack-orb-release, build-container, ensure-orb-registered) should be gated. This is the sole mechanism for specifying where the generated jobs plug into the existing pipeline topology. Falls back to `[ci] release_after_job` in the config; prompted for if neither is set
       --orb-dir <ORB_DIR>
-          Output directory for the generated orb source (relative to repo root) [default: orb]
+          Output directory for the generated orb source (relative to repo root). Falls back to `[orb] orb_dir` in the config; prompted for if neither is set
+      --install-method <INSTALL_METHOD>
+          How the generated Dockerfile obtains the binary: `binstall`, `apt` or `local`. Falls back to `[orb] install_method` in the config; prompted for if neither is set
+      --base-image <BASE_IMAGE>
+          Runtime stage image for the generated Dockerfile. Falls back to `[orb] base_image` in the config; prompted for if neither is set
+      --builder-image <BUILDER_IMAGE>
+          Image for the Rust `builder` stage that installs the binary. Falls back to `[orb] builder_image` in the config; prompted for if neither is set
+      --circleci-cli-version <CIRCLECI_CLI_VERSION>
+          circleci-cli version to bundle into the generated image. Only needed for a binary that shells out to `circleci`; empty records nothing and bundles no CLI. Falls back to `[orb] circleci_cli_version` in the config
       --ci-dir <CI_DIR>
           Path to the .circleci/ directory [default: .circleci]
       --orb-tools-version <ORB_TOOLS_VERSION>
