@@ -45,6 +45,7 @@ pub(crate) struct GatheredCore {
 /// on — maintained by the user (Renovate, for the pinned images). A later
 /// generator release changing a recommendation is therefore correct and does
 /// not reach an existing project.
+#[derive(Debug)]
 pub(crate) struct GatheredOrb {
     pub orb_dir: String,
     pub install_method: String,
@@ -840,6 +841,15 @@ impl Init {
             "How the executor image installs the binary (binstall, apt, local)",
             interactive,
         )?;
+        // Checked here rather than left to the generator's warning: `init` both
+        // records the answer and generates from it, so an unrecognised value
+        // would be written to the config *and* silently produce an image built
+        // by whatever method the old config named — two different wrong answers
+        // from one typo.
+        if crate::commands::generate::install_method_from_str(&install_method).is_none() {
+            anyhow::bail!("install_method \"{install_method}\" is not one of binstall, apt, local");
+        }
+
         // MCP compiles the MCP server in the executor, so it needs cargo there.
         // Recommending the right image up front is what keeps the correction in
         // `resolve_base_image` a safety net rather than the normal path.
@@ -848,9 +858,18 @@ impl Init {
         } else {
             DEFAULT_BASE_IMAGE
         };
+        // A recorded value equal to the plain default is the *unset* case, not a
+        // choice: `base_image` is materialised, so any config with an `[orb]`
+        // table deserialises it to `DEFAULT_BASE_IMAGE` whether or not the key
+        // was ever written. Treating that as a decision made `--mcp` recommend
+        // debian for every existing repo — and the safety net in
+        // `resolve_base_image` cannot cover for it here, because `[ci] mcp` is
+        // not written to the config until after generation.
+        let recorded_base = non_empty(orb.map(|o| o.base_image.clone()))
+            .filter(|image| !(self.mcp && image == DEFAULT_BASE_IMAGE));
         let base_image = resolve_value(
             self.base_image.clone(),
-            recorded(orb.map(|o| o.base_image.clone()), recommended_base),
+            recorded_base.unwrap_or_else(|| recommended_base.to_string()),
             "Runtime image for the executor (pin a @sha256 digest to keep it)",
             interactive,
         )?;
@@ -1073,6 +1092,7 @@ impl Init {
             // it was, ignoring what the dialogue just gathered.
             install_method: crate::commands::generate::install_method_from_str(&orb.install_method),
             base_image: Some(orb.base_image.clone()),
+            builder_image: Some(orb.builder_image.clone()),
             home_url: extras.home_url.clone(),
             source_url: extras.source_url.clone(),
             git_push_subcommands: extras.git_push_subcommands.clone(),
@@ -2373,6 +2393,72 @@ mod tests {
             .gather_orb(&OrbConfig::default(), false, false)
             .unwrap();
         assert_eq!(orb.base_image, crate::orb_config::MCP_DEFAULT_BASE_IMAGE);
+    }
+
+    /// The recommendation has to reach a repo that already has an `[orb]` table.
+    /// `base_image` is materialised, so *every* such config deserialises it to
+    /// `debian:13-slim` whether the key was written or not — treating that as a
+    /// stated choice made `--mcp` recommend an executor with no cargo for every
+    /// existing repo, which `resolve_base_image` cannot correct for either,
+    /// since `[ci] mcp` is not on disk until after generation.
+    #[test]
+    fn init_recommends_the_mcp_base_image_over_a_materialised_plain_default() {
+        let existing = OrbConfig {
+            orb: Some(OrbSection {
+                binary: Some("mytool".to_string()),
+                ..OrbSection::default()
+            }),
+            ..OrbConfig::default()
+        };
+        let mut init = make_init(true);
+        init.mcp = true;
+        let orb = init.gather_orb(&existing, false, false).unwrap();
+        assert_eq!(orb.base_image, crate::orb_config::MCP_DEFAULT_BASE_IMAGE);
+    }
+
+    /// …but a genuinely chosen image still wins, MCP or not.
+    #[test]
+    fn init_keeps_a_chosen_base_image_under_mcp() {
+        let existing = OrbConfig {
+            orb: Some(OrbSection {
+                base_image: "debian:13-slim@sha256:chosen".to_string(),
+                ..OrbSection::default()
+            }),
+            ..OrbConfig::default()
+        };
+        let mut init = make_init(true);
+        init.mcp = true;
+        let orb = init.gather_orb(&existing, false, false).unwrap();
+        assert_eq!(orb.base_image, "debian:13-slim@sha256:chosen");
+    }
+
+    /// `init` records the answer *and* generates from it, so an unrecognised
+    /// value would be written to the config and silently build an image by
+    /// whatever method the old config named. Refuse it instead.
+    #[test]
+    fn init_rejects_an_unrecognised_install_method() {
+        let mut init = make_init(true);
+        init.install_method = Some("Local".to_string());
+        let err = init
+            .gather_orb(&OrbConfig::default(), false, false)
+            .expect_err("an unrecognised install method must not be accepted");
+        let message = err.to_string();
+        assert!(
+            message.contains("Local") && message.contains("binstall"),
+            "the error must name the bad value and the valid ones: {message}"
+        );
+    }
+
+    #[test]
+    fn init_accepts_every_valid_install_method() {
+        for method in ["binstall", "apt", "local"] {
+            let mut init = make_init(true);
+            init.install_method = Some(method.to_string());
+            let orb = init
+                .gather_orb(&OrbConfig::default(), false, false)
+                .unwrap();
+            assert_eq!(orb.install_method, method);
+        }
     }
 
     /// The property `circleci_cli_version` is kept `Option` for: materialising a

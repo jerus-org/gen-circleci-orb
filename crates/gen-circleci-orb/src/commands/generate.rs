@@ -93,6 +93,13 @@ pub struct Generate {
     #[arg(long)]
     pub base_image: Option<String>,
 
+    /// Builder-stage image override. Deliberately not a CLI flag: it is a
+    /// pinned-digest concern that belongs in gen-circleci-orb.toml, and adding
+    /// a flag would put it in this subcommand's generated orb job. `init` sets
+    /// it directly, because it generates before it writes the config.
+    #[arg(skip)]
+    pub builder_image: Option<String>,
+
     /// Home URL for the orb registry display section.
     /// Falls back to `home_url` in the `[orb]` section of gen-circleci-orb.toml.
     #[arg(long)]
@@ -376,29 +383,45 @@ pub(crate) fn install_method_from_str(name: &str) -> Option<InstallMethod> {
 /// materialised default safe: the key is now always present, so "unset, pick
 /// per MCP" can no longer fire, and a config recorded before MCP was turned on
 /// would otherwise build an executor with no cargo — a `build_mcp_server` that
-/// fails in CI rather than at generation. A deliberately chosen image is left
-/// alone; only the untouched recommendation is upgraded.
+/// fails in CI rather than at generation.
+///
+/// The correction applies to the *config-derived* value only. A `--base-image`
+/// on the command line is an explicit instruction for this run and is honoured
+/// even when it names the plain default: a consumer supplying cargo themselves
+/// through `[orb] apt_packages` must be able to say so, and silently
+/// substituting a different image would make the flag a lie.
 pub(crate) fn resolve_base_image(
     cli: Option<&str>,
     config: &crate::orb_config::OrbConfig,
 ) -> String {
-    let chosen = cli
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-        .or_else(|| orb_config::non_empty(config.orb.as_ref().map(|o| o.base_image.clone())))
+    if let Some(explicit) = cli.filter(|s| !s.is_empty()) {
+        return explicit.to_string();
+    }
+    let recorded = orb_config::non_empty(config.orb.as_ref().map(|o| o.base_image.clone()))
         .unwrap_or_else(|| DEFAULT_BASE_IMAGE.to_string());
-    if mcp_enabled(config) && chosen == DEFAULT_BASE_IMAGE {
+    if mcp_enabled(config) && recorded == DEFAULT_BASE_IMAGE {
         return MCP_DEFAULT_BASE_IMAGE.to_string();
     }
-    chosen
+    recorded
 }
 
-/// The Rust `builder` stage image: `[orb].builder_image` in config, which
-/// carries [`DEFAULT_BUILDER_IMAGE`] when the key is absent. Config-only (no
-/// CLI flag) — it's a pinned-digest concern kept in gen-circleci-orb.toml, not
-/// something overridden per-run.
-pub(crate) fn resolve_builder_image(config: &crate::orb_config::OrbConfig) -> String {
-    orb_config::non_empty(config.orb.as_ref().map(|o| o.builder_image.clone()))
+/// The Rust `builder` stage image: the caller's override, then
+/// `[orb].builder_image`, which carries [`DEFAULT_BUILDER_IMAGE`] when the key
+/// is absent.
+///
+/// There is no `--builder-image` flag on `generate` — this is a pinned-digest
+/// concern kept in gen-circleci-orb.toml, not something overridden per run. The
+/// override exists for `init`, which generates *before* it writes the config
+/// and would otherwise emit a Dockerfile contradicting the value it is about to
+/// record.
+pub(crate) fn resolve_builder_image(
+    override_value: Option<&str>,
+    config: &crate::orb_config::OrbConfig,
+) -> String {
+    override_value
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .or_else(|| orb_config::non_empty(config.orb.as_ref().map(|o| o.builder_image.clone())))
         .unwrap_or_else(|| DEFAULT_BUILDER_IMAGE.to_string())
 }
 
@@ -609,7 +632,7 @@ impl Generate {
             namespaces,
             install_method,
             base_image: resolve_base_image(self.base_image.as_deref(), &orb_config),
-            builder_image: resolve_builder_image(&orb_config),
+            builder_image: resolve_builder_image(self.builder_image.as_deref(), &orb_config),
             home_url,
             source_url,
             binary_name: cli_def.binary_name.clone(),
@@ -1407,7 +1430,7 @@ mod tests {
     fn resolve_builder_image_defaults_to_rust_trixie() {
         use crate::orb_config::OrbConfig;
         assert_eq!(
-            resolve_builder_image(&OrbConfig::default()),
+            resolve_builder_image(None, &OrbConfig::default()),
             DEFAULT_BUILDER_IMAGE
         );
     }
@@ -1423,7 +1446,7 @@ mod tests {
             }),
             ..OrbConfig::default()
         };
-        assert_eq!(resolve_builder_image(&config), pinned);
+        assert_eq!(resolve_builder_image(None, &config), pinned);
     }
 
     // ── resolve_base_image ─────────────────────────────────────────────────
@@ -1997,7 +2020,7 @@ mod tests {
             ..OrbConfig::default()
         };
         assert_eq!(
-            resolve_builder_image(&config),
+            resolve_builder_image(None, &config),
             "rust:1-slim-trixie@sha256:abc"
         );
     }
@@ -2025,6 +2048,42 @@ mod tests {
         assert_eq!(
             resolve_base_image(None, &config),
             "rust:1-slim-trixie@sha256:abc"
+        );
+    }
+
+    /// An explicit `--base-image` is an instruction, not a recommendation. A
+    /// consumer who wants debian under MCP and supplies cargo themselves via
+    /// `[orb] apt_packages` has to be able to say so.
+    #[test]
+    fn resolve_base_image_honours_an_explicit_flag_naming_the_plain_default() {
+        let mut config = mcp_config();
+        config.orb = Some(crate::orb_config::OrbSection::default());
+        assert_eq!(
+            resolve_base_image(Some(DEFAULT_BASE_IMAGE), &config),
+            DEFAULT_BASE_IMAGE
+        );
+    }
+
+    /// `init` generates before it writes the config, so without an override the
+    /// Dockerfile it emits contradicts the `builder_image` it is about to record.
+    #[test]
+    fn resolve_builder_image_uses_the_override_ahead_of_the_config() {
+        use crate::orb_config::{OrbConfig, OrbSection};
+        let config = OrbConfig {
+            orb: Some(OrbSection {
+                builder_image: "rust:1-slim-trixie@sha256:recorded".to_string(),
+                ..OrbSection::default()
+            }),
+            ..OrbConfig::default()
+        };
+        assert_eq!(
+            resolve_builder_image(Some("rust:1-slim-trixie@sha256:override"), &config),
+            "rust:1-slim-trixie@sha256:override"
+        );
+        assert_eq!(
+            resolve_builder_image(None, &config),
+            "rust:1-slim-trixie@sha256:recorded",
+            "no override leaves the recorded value in force"
         );
     }
 
