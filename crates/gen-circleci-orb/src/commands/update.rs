@@ -185,9 +185,8 @@ fn opts_from_config(config: &orb_config::OrbConfig) -> ci_patcher::PatchOpts {
         binary: orb.and_then(|o| o.binary.clone()).unwrap_or_default(),
         rust_image: ci.and_then(|c| c.rust_image.clone()).unwrap_or_default(),
         namespaces: orb.and_then(|o| o.namespaces.clone()).unwrap_or_default(),
-        orb_dir: orb
-            .and_then(|o| o.orb_dir.clone())
-            .unwrap_or_else(|| "orb".to_string()),
+        orb_dir: crate::orb_config::non_empty(orb.map(|o| o.orb_dir.clone()))
+            .unwrap_or_else(|| crate::orb_config::DEFAULT_ORB_DIR.to_string()),
         docker_namespace: ci
             .and_then(|c| c.docker_namespace.clone())
             .unwrap_or_default(),

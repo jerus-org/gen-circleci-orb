@@ -2,6 +2,11 @@
 binary = "gen-circleci-orb"
 namespaces = ["jerus-org"]
 orb_dir = "orb"
+# How the executor image gets the binary: `cargo binstall` from crates.io in the
+# builder stage. The other options are `apt` and `local` (binary already in the
+# Docker build context). Stated here rather than left to the generator default
+# so the file says what is in force.
+install_method = "binstall"
 # gnupg is required at runtime by `generate --record` (GPG-signed commit-back).
 apt_packages = ["gnupg"]
 # Pinned Rust builder image for the Dockerfile `builder` stage. Kept here (not

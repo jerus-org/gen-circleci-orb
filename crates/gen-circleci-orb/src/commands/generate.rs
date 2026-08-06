@@ -5,7 +5,13 @@ use std::path::{Path, PathBuf};
 
 use crate::{help_parser, orb_config, orb_generator, output_writer};
 
-pub const DEFAULT_BASE_IMAGE: &str = "debian:13-slim";
+// The image and layout recommendations live in `orb_config` because they are
+// what an omitted key resolves to, so a saved config and an unconfigured run
+// cannot disagree about them. Re-exported here, where the resolvers read them.
+pub use crate::orb_config::{
+    DEFAULT_BASE_IMAGE, DEFAULT_BUILDER_IMAGE, DEFAULT_INSTALL_METHOD, DEFAULT_ORB_DIR,
+    MCP_DEFAULT_BASE_IMAGE,
+};
 
 /// circleci-cli version baked into the generated image when the wrapped binary
 /// needs the CLI but no version is configured. A version *floor*, not a gate:
@@ -18,17 +24,6 @@ pub const DEFAULT_CIRCLECI_CLI_VERSION: &str = "0.1.38646";
 /// CLI, so a binary exposing any of them needs the CLI bundled in its image.
 /// Extend this list as new subcommands start invoking `circleci`.
 const CIRCLECI_CLI_SUBCOMMANDS: &[&str] = &["ensure-orb-registered"];
-
-/// Default image for the Rust `builder` stage (Binstall method) that
-/// `cargo install`s the binary. Config-driven (`[orb].builder_image`) so a
-/// pinned `…@sha256:…` digest can be kept in gen-circleci-orb.toml and tracked
-/// by Renovate instead of being stripped on every regeneration.
-pub const DEFAULT_BUILDER_IMAGE: &str = "rust:1-slim-trixie";
-
-/// Base image used when the MCP feature is enabled. `build_mcp_server` compiles
-/// the MCP server at runtime via `gen-orb-mcp generate --format binary`, so the
-/// executor needs a Rust toolchain (cargo) present in the runtime stage.
-pub const MCP_DEFAULT_BASE_IMAGE: &str = "rust:1-slim-trixie";
 
 /// Apt packages the executor image needs to support `build_mcp_server`:
 /// `libssl-dev`/`pkg-config` for the cargo compile, `gnupg` for the
@@ -306,12 +301,13 @@ pub(crate) fn parse_options(
     }
 }
 
-/// Resolve orb_dir: CLI value takes precedence, then `[orb].orb_dir` in config, then "orb".
+/// Resolve orb_dir: CLI value takes precedence, then `[orb].orb_dir` in config,
+/// which carries [`DEFAULT_ORB_DIR`] when the key is absent.
 pub(crate) fn resolve_orb_dir(cli: Option<&str>, config: &crate::orb_config::OrbConfig) -> String {
     cli.filter(|s| !s.is_empty())
         .map(str::to_string)
-        .or_else(|| config.orb.as_ref().and_then(|o| o.orb_dir.clone()))
-        .unwrap_or_else(|| "orb".to_string())
+        .or_else(|| orb_config::non_empty(config.orb.as_ref().map(|o| o.orb_dir.clone())))
+        .unwrap_or_else(|| DEFAULT_ORB_DIR.to_string())
 }
 
 /// CLI flag takes precedence; falls back to `[orb] git_push_subcommands` in the config.
@@ -329,7 +325,13 @@ pub(crate) fn resolve_git_push_subcommands(
         .unwrap_or_default()
 }
 
-/// CLI flag takes precedence; falls back to `[orb].install_method` in config, then Binstall.
+/// CLI flag takes precedence; falls back to `[orb].install_method` in config,
+/// which carries [`DEFAULT_INSTALL_METHOD`] when the key is absent.
+///
+/// An unrecognised value is reported rather than silently accepted: it is a
+/// stated choice the generator cannot honour, and quietly building a `binstall`
+/// image for a config that asked for `local` is a long way from the typo that
+/// caused it.
 pub(crate) fn resolve_install_method(
     cli: Option<&InstallMethod>,
     config: &crate::orb_config::OrbConfig,
@@ -337,48 +339,66 @@ pub(crate) fn resolve_install_method(
     if let Some(m) = cli {
         return m.clone();
     }
-    config
+    let configured = config
         .orb
         .as_ref()
-        .and_then(|o| o.install_method.as_deref())
-        .and_then(|s| match s {
-            "apt" => Some(InstallMethod::Apt),
-            "binstall" => Some(InstallMethod::Binstall),
-            "local" => Some(InstallMethod::Local),
-            _ => None,
-        })
-        .unwrap_or(InstallMethod::Binstall)
+        .map(|o| o.install_method.trim())
+        .filter(|s| !s.is_empty());
+    match configured {
+        None => InstallMethod::Binstall,
+        Some(name) => install_method_from_str(name).unwrap_or_else(|| {
+            tracing::warn!(
+                "[orb] install_method = \"{name}\" is not one of binstall, apt, local — \
+                 using {DEFAULT_INSTALL_METHOD}"
+            );
+            InstallMethod::Binstall
+        }),
+    }
 }
 
-/// CLI flag takes precedence, then `[orb].base_image`. When neither is set the
-/// default depends on the MCP feature: MCP needs a Rust runtime (cargo) for the
-/// `--format binary` compile, so it defaults to `MCP_DEFAULT_BASE_IMAGE`;
-/// otherwise `DEFAULT_BASE_IMAGE`.
+/// Parse a recorded `install_method` name. `None` for anything unrecognised —
+/// the caller decides whether that is a warning or an error.
+pub(crate) fn install_method_from_str(name: &str) -> Option<InstallMethod> {
+    match name.trim() {
+        "apt" => Some(InstallMethod::Apt),
+        "binstall" => Some(InstallMethod::Binstall),
+        "local" => Some(InstallMethod::Local),
+        _ => None,
+    }
+}
+
+/// CLI flag takes precedence, then `[orb].base_image`, which carries
+/// [`DEFAULT_BASE_IMAGE`] when the key is absent.
+///
+/// MCP needs a Rust runtime (cargo) for the `--format binary` compile, so a
+/// value that is still the plain default is corrected to
+/// [`MCP_DEFAULT_BASE_IMAGE`] when MCP is on. That correction is what keeps the
+/// materialised default safe: the key is now always present, so "unset, pick
+/// per MCP" can no longer fire, and a config recorded before MCP was turned on
+/// would otherwise build an executor with no cargo — a `build_mcp_server` that
+/// fails in CI rather than at generation. A deliberately chosen image is left
+/// alone; only the untouched recommendation is upgraded.
 pub(crate) fn resolve_base_image(
     cli: Option<&str>,
     config: &crate::orb_config::OrbConfig,
 ) -> String {
-    cli.filter(|s| !s.is_empty())
+    let chosen = cli
+        .filter(|s| !s.is_empty())
         .map(str::to_string)
-        .or_else(|| config.orb.as_ref().and_then(|o| o.base_image.clone()))
-        .unwrap_or_else(|| {
-            if mcp_enabled(config) {
-                MCP_DEFAULT_BASE_IMAGE.to_string()
-            } else {
-                DEFAULT_BASE_IMAGE.to_string()
-            }
-        })
+        .or_else(|| orb_config::non_empty(config.orb.as_ref().map(|o| o.base_image.clone())))
+        .unwrap_or_else(|| DEFAULT_BASE_IMAGE.to_string());
+    if mcp_enabled(config) && chosen == DEFAULT_BASE_IMAGE {
+        return MCP_DEFAULT_BASE_IMAGE.to_string();
+    }
+    chosen
 }
 
-/// The Rust `builder` stage image: `[orb].builder_image` in config, else
-/// `DEFAULT_BUILDER_IMAGE`. Config-only (no CLI flag) — it's a pinned-digest
-/// concern kept in gen-circleci-orb.toml, not something overridden per-run.
+/// The Rust `builder` stage image: `[orb].builder_image` in config, which
+/// carries [`DEFAULT_BUILDER_IMAGE`] when the key is absent. Config-only (no
+/// CLI flag) — it's a pinned-digest concern kept in gen-circleci-orb.toml, not
+/// something overridden per-run.
 pub(crate) fn resolve_builder_image(config: &crate::orb_config::OrbConfig) -> String {
-    config
-        .orb
-        .as_ref()
-        .and_then(|o| o.builder_image.clone())
-        .filter(|s| !s.is_empty())
+    orb_config::non_empty(config.orb.as_ref().map(|o| o.builder_image.clone()))
         .unwrap_or_else(|| DEFAULT_BUILDER_IMAGE.to_string())
 }
 
@@ -1304,7 +1324,7 @@ mod tests {
         use crate::orb_config::{OrbConfig, OrbSection};
         let config = OrbConfig {
             orb: Some(OrbSection {
-                orb_dir: Some("src/orb".to_string()),
+                orb_dir: "src/orb".to_string(),
                 ..OrbSection::default()
             }),
             ..OrbConfig::default()
@@ -1334,7 +1354,7 @@ mod tests {
         use crate::orb_config::{OrbConfig, OrbSection};
         let config = OrbConfig {
             orb: Some(OrbSection {
-                install_method: Some("apt".to_string()),
+                install_method: "apt".to_string(),
                 ..OrbSection::default()
             }),
             ..OrbConfig::default()
@@ -1351,7 +1371,7 @@ mod tests {
         use crate::orb_config::{OrbConfig, OrbSection};
         let config = OrbConfig {
             orb: Some(OrbSection {
-                install_method: Some("apt".to_string()),
+                install_method: "apt".to_string(),
                 ..OrbSection::default()
             }),
             ..OrbConfig::default()
@@ -1365,7 +1385,7 @@ mod tests {
         use crate::orb_config::{OrbConfig, OrbSection};
         let config = OrbConfig {
             orb: Some(OrbSection {
-                install_method: Some("local".to_string()),
+                install_method: "local".to_string(),
                 ..OrbSection::default()
             }),
             ..OrbConfig::default()
@@ -1398,7 +1418,7 @@ mod tests {
         let pinned = "rust:1-slim-trixie@sha256:abc123";
         let config = OrbConfig {
             orb: Some(OrbSection {
-                builder_image: Some(pinned.to_string()),
+                builder_image: pinned.to_string(),
                 ..OrbSection::default()
             }),
             ..OrbConfig::default()
@@ -1420,7 +1440,7 @@ mod tests {
         use crate::orb_config::{OrbConfig, OrbSection};
         let config = OrbConfig {
             orb: Some(OrbSection {
-                base_image: Some("ubuntu:22.04".to_string()),
+                base_image: "ubuntu:22.04".to_string(),
                 ..OrbSection::default()
             }),
             ..OrbConfig::default()
@@ -1434,7 +1454,7 @@ mod tests {
         use crate::orb_config::{OrbConfig, OrbSection};
         let config = OrbConfig {
             orb: Some(OrbSection {
-                base_image: Some("ubuntu:22.04".to_string()),
+                base_image: "ubuntu:22.04".to_string(),
                 ..OrbSection::default()
             }),
             ..OrbConfig::default()
@@ -1822,7 +1842,7 @@ mod tests {
         use crate::orb_config::{CiSection, OrbConfig, OrbSection};
         let config = OrbConfig {
             orb: Some(OrbSection {
-                base_image: Some("rust:1.85-slim".to_string()),
+                base_image: "rust:1.85-slim".to_string(),
                 ..OrbSection::default()
             }),
             ci: Some(CiSection {
@@ -1962,5 +1982,65 @@ mod tests {
         };
         let resolved = resolve_git_push_subcommands(&["commit".to_string()], &config);
         assert_eq!(resolved, vec!["commit".to_string()]);
+    }
+
+    // ── #251: the resolvers read the materialised value ────────────────────
+
+    #[test]
+    fn resolve_builder_image_reads_the_materialised_value() {
+        use crate::orb_config::{OrbConfig, OrbSection};
+        let config = OrbConfig {
+            orb: Some(OrbSection {
+                builder_image: "rust:1-slim-trixie@sha256:abc".to_string(),
+                ..OrbSection::default()
+            }),
+            ..OrbConfig::default()
+        };
+        assert_eq!(
+            resolve_builder_image(&config),
+            "rust:1-slim-trixie@sha256:abc"
+        );
+    }
+
+    /// The MCP correction has to survive materialisation. `base_image` now
+    /// always carries a value, so the old "unset → pick per MCP" branch can
+    /// never fire; without an explicit correction, a config that records the
+    /// plain default and later turns MCP on would build an executor with no
+    /// cargo, and `build_mcp_server` would fail at runtime.
+    #[test]
+    fn resolve_base_image_corrects_the_plain_default_when_mcp_is_enabled() {
+        let mut config = mcp_config();
+        config.orb = Some(crate::orb_config::OrbSection::default());
+        assert_eq!(resolve_base_image(None, &config), MCP_DEFAULT_BASE_IMAGE);
+    }
+
+    /// …but a deliberately chosen image is never second-guessed, MCP or not.
+    #[test]
+    fn resolve_base_image_leaves_a_chosen_image_alone_under_mcp() {
+        let mut config = mcp_config();
+        config.orb = Some(crate::orb_config::OrbSection {
+            base_image: "rust:1-slim-trixie@sha256:abc".to_string(),
+            ..crate::orb_config::OrbSection::default()
+        });
+        assert_eq!(
+            resolve_base_image(None, &config),
+            "rust:1-slim-trixie@sha256:abc"
+        );
+    }
+
+    #[test]
+    fn resolve_install_method_falls_back_when_the_recorded_value_is_unrecognised() {
+        use crate::orb_config::{OrbConfig, OrbSection};
+        let config = OrbConfig {
+            orb: Some(OrbSection {
+                install_method: "carrier-pigeon".to_string(),
+                ..OrbSection::default()
+            }),
+            ..OrbConfig::default()
+        };
+        assert!(matches!(
+            resolve_install_method(None, &config),
+            InstallMethod::Binstall
+        ));
     }
 }

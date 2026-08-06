@@ -1,12 +1,14 @@
 use anyhow::Result;
-use indexmap::IndexMap;
 use std::path::PathBuf;
 
 use crate::{
     ci_patcher,
     commands::generate::Generate,
     help_parser::types::CliDefinition,
-    orb_config::{non_empty, CiSection, OrbConfig, OrbSection, RecordConfig, SubcommandConfig},
+    orb_config::{
+        non_empty, CiSection, OrbConfig, OrbSection, RecordConfig, DEFAULT_CRATE_WAIT_ATTEMPTS,
+        DEFAULT_CRATE_WAIT_SECONDS,
+    },
 };
 
 pub const DEFAULT_DOCKER_ORB_VERSION: &str = "3.0.1";
@@ -33,6 +35,25 @@ pub(crate) struct GatheredCore {
     pub crate_tag_prefix: String,
     pub release_after_job: String,
     pub docker_namespace: String,
+}
+
+/// The `[orb]` settings `init` records so the config states them rather than
+/// leaving them to resolve from code the consumer cannot see (#251).
+///
+/// Each is a *seed*: the generator's recommendation is offered as the prompt
+/// default, and what comes back is the project's stated configuration from then
+/// on — maintained by the user (Renovate, for the pinned images). A later
+/// generator release changing a recommendation is therefore correct and does
+/// not reach an existing project.
+pub(crate) struct GatheredOrb {
+    pub orb_dir: String,
+    pub install_method: String,
+    pub base_image: String,
+    pub builder_image: String,
+    /// `None` means "not recorded", which for this one setting is meaningful:
+    /// a version is also an opt-in to bundling the CLI, so it is recorded only
+    /// for a binary that intrinsically needs it. See [`OrbSection`].
+    pub circleci_cli_version: Option<String>,
 }
 
 /// Values resolved by the interactive dialogue (or non-interactive fallback).
@@ -311,8 +332,30 @@ pub struct Init {
     pub release_after_job: Option<String>,
 
     /// Output directory for the generated orb source (relative to repo root).
-    #[arg(long, default_value = "orb")]
-    pub orb_dir: String,
+    /// Falls back to `[orb] orb_dir` in the config; prompted for if neither is set.
+    #[arg(long)]
+    pub orb_dir: Option<String>,
+
+    /// How the generated Dockerfile obtains the binary: `binstall`, `apt` or `local`.
+    /// Falls back to `[orb] install_method` in the config; prompted for if neither is set.
+    #[arg(long)]
+    pub install_method: Option<String>,
+
+    /// Runtime stage image for the generated Dockerfile.
+    /// Falls back to `[orb] base_image` in the config; prompted for if neither is set.
+    #[arg(long)]
+    pub base_image: Option<String>,
+
+    /// Image for the Rust `builder` stage that installs the binary.
+    /// Falls back to `[orb] builder_image` in the config; prompted for if neither is set.
+    #[arg(long)]
+    pub builder_image: Option<String>,
+
+    /// circleci-cli version to bundle into the generated image. Only needed for a
+    /// binary that shells out to `circleci`; empty records nothing and bundles no CLI.
+    /// Falls back to `[orb] circleci_cli_version` in the config.
+    #[arg(long)]
+    pub circleci_cli_version: Option<String>,
 
     /// Path to the .circleci/ directory.
     #[arg(long, default_value = ".circleci")]
@@ -433,28 +476,37 @@ pub(crate) fn present_default_interactive(cli: &CliDefinition) -> Vec<String> {
         .collect()
 }
 
+/// Assemble the config `init` writes.
+///
+/// `existing` is the config being re-initialised (or [`OrbConfig::default`] on
+/// a first run). Sections this dialogue does not gather are carried across from
+/// it rather than dropped: `init` used to null `[[job_group]]`, `[[extra_job]]`
+/// and `[orbs]`, and since the save now removes keys the config no longer has,
+/// a re-run deleted the consumer's hand-authored job groups along with their
+/// comments (#268). `[ci]` and `[record]` are already carried this way, via the
+/// gathered values.
 pub(crate) fn build_bootstrap_config(
     binary: &str,
     namespaces: &[String],
-    orb_dir: &str,
-    home_url: Option<&str>,
-    source_url: Option<&str>,
-    git_push_subcommands: &[String],
+    orb: &GatheredOrb,
+    extras: &GatheredExtras,
+    existing: &OrbConfig,
     interactive: &[(String, bool)],
 ) -> OrbConfig {
     // `help` is reserved at the `--help` parser, so it needs no entry. Interactive
     // (CLI-only) subcommands — `init`/`config` by default, as confirmed at init
     // time — are fully excluded from the orb (job + command + script); a parent
     // (`config`) cascades to its whole subtree, so no per-child entries are needed.
-    let mut subcommands = IndexMap::new();
+    //
+    // Merged into the recorded entries rather than replacing them (#271): the
+    // dialogue owns `interactive` for the subcommands it asked about and nothing
+    // else, so a curated `label`, a `short_param` naming, or a `param` override
+    // has to survive. Rebuilding the map dropped all three — and losing a
+    // `short_param` entry is not merely cosmetic: a short-only option with no
+    // derivable name fails generation until it is restored by hand.
+    let mut subcommands = existing.subcommand.clone().unwrap_or_default();
     for (name, is_interactive) in interactive {
-        subcommands.insert(
-            name.clone(),
-            SubcommandConfig {
-                interactive: Some(*is_interactive),
-                ..SubcommandConfig::default()
-            },
-        );
+        subcommands.entry(name.clone()).or_default().interactive = Some(*is_interactive);
     }
     let subcommand = if subcommands.is_empty() {
         None
@@ -465,21 +517,41 @@ pub(crate) fn build_bootstrap_config(
         orb: Some(OrbSection {
             binary: Some(binary.to_string()),
             namespaces: Some(namespaces.to_vec()),
-            orb_dir: Some(orb_dir.to_string()),
-            home_url: home_url.map(str::to_string),
-            source_url: source_url.map(str::to_string),
-            git_push_subcommands: if git_push_subcommands.is_empty() {
+            orb_dir: orb.orb_dir.clone(),
+            install_method: orb.install_method.clone(),
+            base_image: orb.base_image.clone(),
+            builder_image: orb.builder_image.clone(),
+            circleci_cli_version: orb.circleci_cli_version.clone(),
+            home_url: extras.home_url.clone(),
+            source_url: extras.source_url.clone(),
+            git_push_subcommands: if extras.git_push_subcommands.is_empty() {
                 None
             } else {
-                Some(git_push_subcommands.to_vec())
+                Some(extras.git_push_subcommands.clone())
             },
-            ..OrbSection::default()
+            // Settings with no place in the dialogue — advanced knobs, edited in
+            // the toml — are carried across for the same reason as the sections
+            // below: `init` is a bootstrap, not a reset.
+            apt_packages: existing.orb.as_ref().and_then(|o| o.apt_packages.clone()),
+            cargo_tools: existing.orb.as_ref().and_then(|o| o.cargo_tools.clone()),
+            custom_files: existing.orb.as_ref().and_then(|o| o.custom_files.clone()),
+            allow_unparsed_help: existing.orb.as_ref().and_then(|o| o.allow_unparsed_help),
+            crate_wait_attempts: existing
+                .orb
+                .as_ref()
+                .map(|o| o.crate_wait_attempts)
+                .unwrap_or(DEFAULT_CRATE_WAIT_ATTEMPTS),
+            crate_wait_seconds: existing
+                .orb
+                .as_ref()
+                .map(|o| o.crate_wait_seconds)
+                .unwrap_or(DEFAULT_CRATE_WAIT_SECONDS),
         }),
         ci: None, // populated by run() after gathering extras
-        orbs: None,
+        orbs: existing.orbs.clone(),
         subcommand,
-        job_group: None,
-        extra_job: None,
+        job_group: existing.job_group.clone(),
+        extra_job: existing.extra_job.clone(),
         record: None, // populated by run() after gathering extras
     }
 }
@@ -728,9 +800,93 @@ impl Init {
         })
     }
 
+    /// Resolve the `[orb]` settings the config should state (#251).
+    ///
+    /// Same order as everything else in the dialogue: flag > recorded value >
+    /// the generator's recommendation, offered as the prompt default. The
+    /// recorded value is never "unset" for four of the five — `OrbSection`
+    /// carries the recommendation — so a re-run offers back what the project
+    /// already chose rather than resetting it.
+    ///
+    /// `needs_circleci_cli` comes from the binary's own `--help`, so the CLI is
+    /// offered where it is actually required and left out otherwise.
+    pub(crate) fn gather_orb(
+        &self,
+        existing: &OrbConfig,
+        needs_circleci_cli: bool,
+        interactive: bool,
+    ) -> Result<GatheredOrb> {
+        use crate::orb_config::{
+            DEFAULT_BASE_IMAGE, DEFAULT_BUILDER_IMAGE, DEFAULT_INSTALL_METHOD, DEFAULT_ORB_DIR,
+            MCP_DEFAULT_BASE_IMAGE,
+        };
+        let orb = existing.orb.as_ref();
+        let recorded = |value: Option<String>, recommended: &str| -> String {
+            non_empty(value).unwrap_or_else(|| recommended.to_string())
+        };
+
+        let orb_dir = resolve_value(
+            self.orb_dir.clone(),
+            recorded(orb.map(|o| o.orb_dir.clone()), DEFAULT_ORB_DIR),
+            "Directory to generate the orb source into",
+            interactive,
+        )?;
+        let install_method = resolve_value(
+            self.install_method.clone(),
+            recorded(
+                orb.map(|o| o.install_method.clone()),
+                DEFAULT_INSTALL_METHOD,
+            ),
+            "How the executor image installs the binary (binstall, apt, local)",
+            interactive,
+        )?;
+        // MCP compiles the MCP server in the executor, so it needs cargo there.
+        // Recommending the right image up front is what keeps the correction in
+        // `resolve_base_image` a safety net rather than the normal path.
+        let recommended_base = if self.mcp {
+            MCP_DEFAULT_BASE_IMAGE
+        } else {
+            DEFAULT_BASE_IMAGE
+        };
+        let base_image = resolve_value(
+            self.base_image.clone(),
+            recorded(orb.map(|o| o.base_image.clone()), recommended_base),
+            "Runtime image for the executor (pin a @sha256 digest to keep it)",
+            interactive,
+        )?;
+        let builder_image = resolve_value(
+            self.builder_image.clone(),
+            recorded(orb.map(|o| o.builder_image.clone()), DEFAULT_BUILDER_IMAGE),
+            "Rust image the binary is built/installed in (pin a @sha256 digest to keep it)",
+            interactive,
+        )?;
+
+        // Optional, unlike the four above: recording a version also opts the
+        // image into carrying the CLI, so an answer of "none" has to remain
+        // expressible — and has to be the default for a binary that never
+        // invokes `circleci`.
+        let recommended_cli = needs_circleci_cli
+            .then(|| crate::commands::generate::DEFAULT_CIRCLECI_CLI_VERSION.to_string());
+        let circleci_cli_version = resolve_optional(
+            self.circleci_cli_version.clone(),
+            non_empty(orb.and_then(|o| o.circleci_cli_version.clone())).or(recommended_cli),
+            "circleci-cli version to bundle in the image (Enter to skip)",
+            interactive,
+        )?;
+
+        Ok(GatheredOrb {
+            orb_dir,
+            install_method,
+            base_image,
+            builder_image,
+            circleci_cli_version,
+        })
+    }
+
     pub(crate) fn gather_extras(
         &self,
         detected: &[String],
+        detected_url: Option<&str>,
         existing: &OrbConfig,
         interactive: bool,
     ) -> Result<GatheredExtras> {
@@ -741,15 +897,21 @@ impl Init {
         let orb = existing.orb.as_ref();
         let record = self.gather_record(existing, interactive)?;
 
+        // Seed both from the repo's own remote (#269). `generate` detects it
+        // anyway and puts it in the orb, so offering nothing here made Enter
+        // record a blank for a value the orb was going to carry regardless —
+        // leaving the config unable to say, or change, what the registry links
+        // would be. Still optional: an explicit empty answer clears them.
+        let detected_url = non_empty(detected_url.map(str::to_string));
         let home_url = resolve_optional(
             self.home_url.clone(),
-            orb.and_then(|o| o.home_url.clone()),
+            non_empty(orb.and_then(|o| o.home_url.clone())).or_else(|| detected_url.clone()),
             "Home URL for orb registry (Enter to skip)",
             interactive,
         )?;
         let source_url = resolve_optional(
             self.source_url.clone(),
-            orb.and_then(|o| o.source_url.clone()),
+            non_empty(orb.and_then(|o| o.source_url.clone())).or(detected_url),
             "Source URL for orb registry (Enter to skip)",
             interactive,
         )?;
@@ -861,9 +1023,10 @@ impl Init {
         let existing_config = crate::orb_config::load_config(config_path)?;
         let core = self.gather_core(&existing_config, interactive)?;
 
-        // Parse binary early: detect push-capable subcommands (for dialogue default)
-        // and subcommands with a required orb_path param (for config defaults).
-        let (detected_push, detected_orb_path, present_interactive) =
+        // Parse binary early: detect push-capable subcommands (for dialogue default),
+        // subcommands with a required orb_path param (for config defaults), and
+        // whether the binary shells out to `circleci` (for the CLI version prompt).
+        let (detected_push, detected_orb_path, present_interactive, needs_circleci_cli) =
             match crate::help_parser::parse_binary(
                 &core.binary,
                 &crate::commands::generate::parse_options(&existing_config),
@@ -872,6 +1035,7 @@ impl Init {
                     detect_git_push_subcommands(&cli),
                     detect_orb_path_subcommands(&cli),
                     present_default_interactive(&cli),
+                    crate::commands::generate::binary_uses_circleci_cli(&cli),
                 ),
                 Err(e) => {
                     // Not fatal here — `generate` re-runs the parse a moment later
@@ -879,11 +1043,17 @@ impl Init {
                     // at a prompt, so say why it could not be read, rather than
                     // letting it surface one step downstream as a generate error.
                     tracing::warn!("could not introspect `{}`: {e:#}", core.binary);
-                    (vec![], vec![], vec![])
+                    (vec![], vec![], vec![], false)
                 }
             };
 
-        let extras = self.gather_extras(&detected_push, &existing_config, interactive)?;
+        let orb = self.gather_orb(&existing_config, needs_circleci_cli, interactive)?;
+        let extras = self.gather_extras(
+            &detected_push,
+            crate::commands::generate::detect_source_url().as_deref(),
+            &existing_config,
+            interactive,
+        )?;
         let namespaces: Vec<String> = self
             .public_orb_namespaces
             .iter()
@@ -892,18 +1062,21 @@ impl Init {
             .collect();
 
         // Step 1: generate orb source files
-        tracing::info!("Generating orb source into ./{}", self.orb_dir);
+        tracing::info!("Generating orb source into ./{}", orb.orb_dir);
         let gen = Generate {
             binary: Some(core.binary.clone()),
             namespaces: namespaces.clone(),
             output: PathBuf::from("."),
-            orb_dir: Some(self.orb_dir.clone()),
-            install_method: None,
-            base_image: None,
+            orb_dir: Some(orb.orb_dir.clone()),
+            // Passed explicitly because `generate` runs *before* the config is
+            // written in step 3 — it would otherwise resolve from the config as
+            // it was, ignoring what the dialogue just gathered.
+            install_method: crate::commands::generate::install_method_from_str(&orb.install_method),
+            base_image: Some(orb.base_image.clone()),
             home_url: extras.home_url.clone(),
             source_url: extras.source_url.clone(),
             git_push_subcommands: extras.git_push_subcommands.clone(),
-            circleci_cli_version: None,
+            circleci_cli_version: orb.circleci_cli_version.clone(),
             apt_packages: vec![],
             cargo_tools: vec![],
             dry_run: self.dry_run,
@@ -923,7 +1096,7 @@ impl Init {
             rust_image: String::new(),
             namespaces,
             docker_namespace: core.docker_namespace.clone(),
-            orb_dir: self.orb_dir.clone(),
+            orb_dir: orb.orb_dir.clone(),
             build_workflow: core.build_workflow.clone(),
             release_workflow: core.release_workflow.clone(),
             requires_job: self.requires_job.clone(),
@@ -962,10 +1135,9 @@ impl Init {
         let mut bootstrap = build_bootstrap_config(
             &core.binary,
             opts.namespaces.as_slice(),
-            &self.orb_dir,
-            extras.home_url.as_deref(),
-            extras.source_url.as_deref(),
-            &extras.git_push_subcommands,
+            &orb,
+            &extras,
+            &existing_config,
             &reserved,
         );
         populate_orb_path_defaults(&mut bootstrap, &detected_orb_path);
@@ -1007,6 +1179,8 @@ impl Init {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::orb_config::SubcommandConfig;
+    use indexmap::IndexMap;
 
     #[test]
     fn default_docker_orb_version_matches_registry() {
@@ -1020,15 +1194,56 @@ mod tests {
 
     // ── Phase 6: bootstrap config written by init ───────────────────────────
 
+    /// The `[orb]` settings as a first `init` would resolve them: every one at
+    /// the generator's recommendation.
+    fn gathered_orb() -> GatheredOrb {
+        GatheredOrb {
+            orb_dir: crate::orb_config::DEFAULT_ORB_DIR.to_string(),
+            install_method: crate::orb_config::DEFAULT_INSTALL_METHOD.to_string(),
+            base_image: crate::orb_config::DEFAULT_BASE_IMAGE.to_string(),
+            builder_image: crate::orb_config::DEFAULT_BUILDER_IMAGE.to_string(),
+            circleci_cli_version: None,
+        }
+    }
+
+    fn gathered_extras() -> GatheredExtras {
+        GatheredExtras {
+            home_url: None,
+            source_url: None,
+            git_push_subcommands: vec![],
+            docker_context: DEFAULT_DOCKER_CONTEXT.to_string(),
+            orb_context: DEFAULT_ORB_CONTEXT.to_string(),
+            mcp_context: vec![],
+            mcp_earliest_version: DEFAULT_MCP_EARLIEST_VERSION.to_string(),
+            record: None,
+        }
+    }
+
+    /// `build_bootstrap_config` against no existing config — a first `init`.
+    fn bootstrap_with(
+        binary: &str,
+        namespaces: &[String],
+        orb: GatheredOrb,
+        extras: GatheredExtras,
+        interactive: &[(String, bool)],
+    ) -> OrbConfig {
+        build_bootstrap_config(
+            binary,
+            namespaces,
+            &orb,
+            &extras,
+            &OrbConfig::default(),
+            interactive,
+        )
+    }
+
     #[test]
     fn bootstrap_config_has_orb_section_with_binary() {
-        let config = build_bootstrap_config(
+        let config = bootstrap_with(
             "mytool",
             &["my-org".to_string()],
-            "orb",
-            None,
-            None,
-            &[],
+            gathered_orb(),
+            gathered_extras(),
             &[],
         );
         assert!(
@@ -1043,13 +1258,11 @@ mod tests {
 
     #[test]
     fn bootstrap_config_has_namespaces() {
-        let config = build_bootstrap_config(
+        let config = bootstrap_with(
             "mytool",
             &["ns1".to_string(), "ns2".to_string()],
-            "orb",
-            None,
-            None,
-            &[],
+            gathered_orb(),
+            gathered_extras(),
             &[],
         );
         assert_eq!(
@@ -1063,13 +1276,11 @@ mod tests {
         // The bootstrap scaffolds the init-time interactive decisions explicitly
         // (init reserved, config opted in) and does NOT emit a help entry — help is
         // reserved at the --help parser.
-        let config = build_bootstrap_config(
+        let config = bootstrap_with(
             "mytool",
             &["my-org".to_string()],
-            "orb",
-            None,
-            None,
-            &[],
+            gathered_orb(),
+            gathered_extras(),
             &[("init".to_string(), true), ("config".to_string(), false)],
         );
         let subcommands = config
@@ -1086,13 +1297,11 @@ mod tests {
 
     #[test]
     fn bootstrap_config_has_no_subcommand_section_without_interactive() {
-        let config = build_bootstrap_config(
+        let config = bootstrap_with(
             "mytool",
             &["my-org".to_string()],
-            "orb",
-            None,
-            None,
-            &[],
+            gathered_orb(),
+            gathered_extras(),
             &[],
         );
         assert!(
@@ -1134,7 +1343,11 @@ mod tests {
             requires_job: None,
             crate_tag_prefix: Some("mytool-v".to_string()),
             release_after_job: Some("publish-orb".to_string()),
-            orb_dir: "orb".to_string(),
+            orb_dir: None,
+            install_method: None,
+            base_image: None,
+            builder_image: None,
+            circleci_cli_version: None,
             ci_dir: std::path::PathBuf::from(".circleci"),
             orb_tools_version: "12.3.3".to_string(),
             docker_orb_version: "3.0.1".to_string(),
@@ -1167,13 +1380,14 @@ mod tests {
 
     #[test]
     fn bootstrap_config_includes_git_push_subcommands() {
-        let config = build_bootstrap_config(
+        let config = bootstrap_with(
             "mytool",
             &["my-org".to_string()],
-            "orb",
-            None,
-            None,
-            &["save".to_string()],
+            gathered_orb(),
+            GatheredExtras {
+                git_push_subcommands: vec!["save".to_string()],
+                ..gathered_extras()
+            },
             &[],
         );
         assert_eq!(
@@ -1184,13 +1398,11 @@ mod tests {
 
     #[test]
     fn bootstrap_config_git_push_subcommands_none_when_empty() {
-        let config = build_bootstrap_config(
+        let config = bootstrap_with(
             "mytool",
             &["my-org".to_string()],
-            "orb",
-            None,
-            None,
-            &[],
+            gathered_orb(),
+            gathered_extras(),
             &[],
         );
         assert_eq!(
@@ -1204,7 +1416,7 @@ mod tests {
     fn init_run_writes_ci_section_to_config() {
         let init = make_init(true);
         let extras = init
-            .gather_extras(&[], &OrbConfig::default(), false)
+            .gather_extras(&[], None, &OrbConfig::default(), false)
             .unwrap();
         let core = init.gather_core(&OrbConfig::default(), false).unwrap();
         let ci = CiSection {
@@ -1229,13 +1441,15 @@ mod tests {
 
     #[test]
     fn bootstrap_config_includes_home_and_source_url() {
-        let config = build_bootstrap_config(
+        let config = bootstrap_with(
             "mytool",
             &["my-org".to_string()],
-            "orb",
-            Some("https://example.com/home"),
-            Some("https://example.com/source"),
-            &[],
+            gathered_orb(),
+            GatheredExtras {
+                home_url: Some("https://example.com/home".to_string()),
+                source_url: Some("https://example.com/source".to_string()),
+                ..gathered_extras()
+            },
             &[],
         );
         assert_eq!(
@@ -1297,13 +1511,11 @@ mod tests {
 
     #[test]
     fn populate_orb_path_defaults_adds_subcommand_entries() {
-        let mut config = build_bootstrap_config(
+        let mut config = bootstrap_with(
             "mytool",
             &["my-org".to_string()],
-            "orb",
-            None,
-            None,
-            &[],
+            gathered_orb(),
+            gathered_extras(),
             &[],
         );
         populate_orb_path_defaults(
@@ -1327,13 +1539,11 @@ mod tests {
     fn populate_orb_path_defaults_preserves_existing_subcommand_entries() {
         // An existing interactive entry (init reserved) must not be disturbed when
         // populate adds orb_path param defaults for another subcommand.
-        let mut config = build_bootstrap_config(
+        let mut config = bootstrap_with(
             "mytool",
             &["my-org".to_string()],
-            "orb",
-            None,
-            None,
-            &[],
+            gathered_orb(),
+            gathered_extras(),
             &[("init".to_string(), true)],
         );
         populate_orb_path_defaults(&mut config, &["generate".to_string()]);
@@ -1343,13 +1553,11 @@ mod tests {
 
     #[test]
     fn populate_orb_path_defaults_noop_when_empty() {
-        let mut config = build_bootstrap_config(
+        let mut config = bootstrap_with(
             "mytool",
             &["my-org".to_string()],
-            "orb",
-            None,
-            None,
-            &[],
+            gathered_orb(),
+            gathered_extras(),
             &[],
         );
         let before = config.subcommand.clone();
@@ -1450,7 +1658,7 @@ mod tests {
     fn gather_extras_uses_detected_when_cli_empty() {
         let init = make_init(true); // dry_run = true → non-interactive
         let extras = init
-            .gather_extras(&["save".to_string()], &OrbConfig::default(), false)
+            .gather_extras(&["save".to_string()], None, &OrbConfig::default(), false)
             .unwrap();
         assert_eq!(
             extras.git_push_subcommands,
@@ -1467,7 +1675,7 @@ mod tests {
             ..make_init(true)
         };
         let extras = init
-            .gather_extras(&["save".to_string()], &OrbConfig::default(), false)
+            .gather_extras(&["save".to_string()], None, &OrbConfig::default(), false)
             .unwrap();
         assert_eq!(
             extras.git_push_subcommands,
@@ -1488,7 +1696,11 @@ mod tests {
             requires_job: None,
             crate_tag_prefix: Some("mytool-v".to_string()),
             release_after_job: Some("publish-orb".to_string()),
-            orb_dir: "orb".to_string(),
+            orb_dir: None,
+            install_method: None,
+            base_image: None,
+            builder_image: None,
+            circleci_cli_version: None,
             ci_dir: std::path::PathBuf::from(".circleci"),
             orb_tools_version: "12.3.3".to_string(),
             docker_orb_version: "3.0.1".to_string(),
@@ -1559,7 +1771,7 @@ mod tests {
             orb_context: None,
             ..make_init(false)
         };
-        let extras = init.gather_extras(&[], &existing, false).unwrap();
+        let extras = init.gather_extras(&[], None, &existing, false).unwrap();
         assert_eq!(extras.docker_context, DEFAULT_DOCKER_CONTEXT);
         assert_eq!(extras.orb_context, DEFAULT_ORB_CONTEXT);
     }
@@ -1795,7 +2007,7 @@ mod tests {
     fn gather_extras_non_interactive_uses_hardcoded_defaults() {
         let init = make_init(true); // dry_run=true → non-interactive
         let extras = init
-            .gather_extras(&[], &OrbConfig::default(), false)
+            .gather_extras(&[], None, &OrbConfig::default(), false)
             .unwrap();
         assert_eq!(extras.docker_context, DEFAULT_DOCKER_CONTEXT);
         assert_eq!(extras.orb_context, DEFAULT_ORB_CONTEXT);
@@ -1820,7 +2032,7 @@ mod tests {
             ..make_init(true)
         };
         let extras = init
-            .gather_extras(&[], &OrbConfig::default(), false)
+            .gather_extras(&[], None, &OrbConfig::default(), false)
             .unwrap();
         assert_eq!(extras.docker_context, "my-docker");
         assert_eq!(extras.orb_context, "my-orb-ctx");
@@ -1871,7 +2083,7 @@ mod tests {
             ..make_init(true)
         };
         let extras = init
-            .gather_extras(&[], &OrbConfig::default(), false)
+            .gather_extras(&[], None, &OrbConfig::default(), false)
             .unwrap();
         assert_eq!(extras.docker_context, "explicit-docker");
     }
@@ -1884,7 +2096,7 @@ mod tests {
             ..make_init(true)
         };
         let extras = init
-            .gather_extras(&[], &OrbConfig::default(), false)
+            .gather_extras(&[], None, &OrbConfig::default(), false)
             .unwrap();
         assert_eq!(extras.orb_context, "explicit-orb");
     }
@@ -1898,7 +2110,7 @@ mod tests {
             ..make_init(true)
         };
         let extras = init
-            .gather_extras(&[], &OrbConfig::default(), false)
+            .gather_extras(&[], None, &OrbConfig::default(), false)
             .unwrap();
         assert_eq!(extras.mcp_context, vec!["ctx-a", "ctx-b"]);
     }
@@ -1912,7 +2124,7 @@ mod tests {
             ..make_init(true)
         };
         let extras = init
-            .gather_extras(&[], &OrbConfig::default(), false)
+            .gather_extras(&[], None, &OrbConfig::default(), false)
             .unwrap();
         assert_eq!(extras.mcp_earliest_version, "3.0.0");
     }
@@ -1926,7 +2138,7 @@ mod tests {
         };
         // detected list is different — CLI must win without prompting
         let extras = init
-            .gather_extras(&["save".to_string()], &OrbConfig::default(), false)
+            .gather_extras(&["save".to_string()], None, &OrbConfig::default(), false)
             .unwrap();
         assert_eq!(extras.git_push_subcommands, vec!["deploy"]);
     }
@@ -1939,7 +2151,7 @@ mod tests {
             ..make_init(true)
         };
         let extras = init
-            .gather_extras(&[], &OrbConfig::default(), false)
+            .gather_extras(&[], None, &OrbConfig::default(), false)
             .unwrap();
         assert_eq!(extras.home_url.as_deref(), Some("https://example.com/home"));
     }
@@ -1952,7 +2164,7 @@ mod tests {
             ..make_init(true)
         };
         let extras = init
-            .gather_extras(&[], &OrbConfig::default(), false)
+            .gather_extras(&[], None, &OrbConfig::default(), false)
             .unwrap();
         assert_eq!(
             extras.source_url.as_deref(),
@@ -1986,7 +2198,7 @@ mod tests {
     fn gather_extras_falls_back_to_existing_docker_context() {
         let init = make_init(true); // dry_run → non-interactive
         let extras = init
-            .gather_extras(&[], &make_existing_config(), false)
+            .gather_extras(&[], None, &make_existing_config(), false)
             .unwrap();
         assert_eq!(
             extras.docker_context, "existing-docker",
@@ -1998,7 +2210,7 @@ mod tests {
     fn gather_extras_falls_back_to_existing_orb_context() {
         let init = make_init(true);
         let extras = init
-            .gather_extras(&[], &make_existing_config(), false)
+            .gather_extras(&[], None, &make_existing_config(), false)
             .unwrap();
         assert_eq!(extras.orb_context, "existing-orb");
     }
@@ -2011,7 +2223,7 @@ mod tests {
             ..make_init(true)
         };
         let extras = init
-            .gather_extras(&[], &make_existing_config(), false)
+            .gather_extras(&[], None, &make_existing_config(), false)
             .unwrap();
         assert_eq!(extras.mcp_context, vec!["existing-mcp"]);
     }
@@ -2020,7 +2232,7 @@ mod tests {
     fn gather_extras_falls_back_to_existing_mcp_earliest_version() {
         let init = make_init(true);
         let extras = init
-            .gather_extras(&[], &make_existing_config(), false)
+            .gather_extras(&[], None, &make_existing_config(), false)
             .unwrap();
         assert_eq!(extras.mcp_earliest_version, "9.9.9");
     }
@@ -2029,7 +2241,7 @@ mod tests {
     fn gather_extras_falls_back_to_existing_home_url() {
         let init = make_init(true);
         let extras = init
-            .gather_extras(&[], &make_existing_config(), false)
+            .gather_extras(&[], None, &make_existing_config(), false)
             .unwrap();
         assert_eq!(
             extras.home_url.as_deref(),
@@ -2041,7 +2253,7 @@ mod tests {
     fn gather_extras_falls_back_to_existing_source_url() {
         let init = make_init(true);
         let extras = init
-            .gather_extras(&[], &make_existing_config(), false)
+            .gather_extras(&[], None, &make_existing_config(), false)
             .unwrap();
         assert_eq!(
             extras.source_url.as_deref(),
@@ -2054,7 +2266,7 @@ mod tests {
         let init = make_init(true);
         // No CLI flag, no detected — should fall back to existing config
         let extras = init
-            .gather_extras(&[], &make_existing_config(), false)
+            .gather_extras(&[], None, &make_existing_config(), false)
             .unwrap();
         assert_eq!(extras.git_push_subcommands, vec!["existing-push"]);
     }
@@ -2068,7 +2280,7 @@ mod tests {
             ..make_init(true)
         };
         let extras = init
-            .gather_extras(&[], &make_existing_config(), false)
+            .gather_extras(&[], None, &make_existing_config(), false)
             .unwrap();
         assert_eq!(extras.docker_context, "cli-docker");
         assert_eq!(extras.orb_context, "cli-orb");
@@ -2079,7 +2291,7 @@ mod tests {
         let init = make_init(true);
         let existing = OrbConfig::default(); // no git_push_subcommands in config
         let extras = init
-            .gather_extras(&["detected-push".to_string()], &existing, false)
+            .gather_extras(&["detected-push".to_string()], None, &existing, false)
             .unwrap();
         assert_eq!(extras.git_push_subcommands, vec!["detected-push"]);
     }
@@ -2121,18 +2333,359 @@ mod tests {
 
     #[test]
     fn bootstrap_config_has_orb_dir() {
+        let config = bootstrap_with(
+            "mytool",
+            &["my-org".to_string()],
+            GatheredOrb {
+                orb_dir: "custom-orb".to_string(),
+                ..gathered_orb()
+            },
+            gathered_extras(),
+            &[],
+        );
+        assert_eq!(config.orb.as_ref().unwrap().orb_dir, "custom-orb");
+    }
+
+    // ── #251: init records the [orb] settings ──────────────────────────────
+
+    #[test]
+    fn init_records_the_orb_settings_at_their_recommendations() {
+        let orb = make_init(true)
+            .gather_orb(&OrbConfig::default(), false, false)
+            .unwrap();
+        assert_eq!(orb.orb_dir, crate::orb_config::DEFAULT_ORB_DIR);
+        assert_eq!(
+            orb.install_method,
+            crate::orb_config::DEFAULT_INSTALL_METHOD
+        );
+        assert_eq!(orb.base_image, crate::orb_config::DEFAULT_BASE_IMAGE);
+        assert_eq!(orb.builder_image, crate::orb_config::DEFAULT_BUILDER_IMAGE);
+    }
+
+    /// MCP compiles the MCP server inside the executor, so the recommendation
+    /// has to be the image that has cargo — recording `debian:13-slim` here
+    /// would produce a `build_mcp_server` that fails in CI.
+    #[test]
+    fn init_recommends_the_mcp_base_image_when_mcp_is_wired_in() {
+        let mut init = make_init(true);
+        init.mcp = true;
+        let orb = init
+            .gather_orb(&OrbConfig::default(), false, false)
+            .unwrap();
+        assert_eq!(orb.base_image, crate::orb_config::MCP_DEFAULT_BASE_IMAGE);
+    }
+
+    /// The property `circleci_cli_version` is kept `Option` for: materialising a
+    /// version would bundle the CLI into every executor, turning "installed
+    /// because the binary needs it" into "installed because the file says so".
+    #[test]
+    fn init_records_no_circleci_cli_version_for_a_binary_that_does_not_need_one() {
+        let orb = make_init(true)
+            .gather_orb(&OrbConfig::default(), false, false)
+            .unwrap();
+        assert_eq!(orb.circleci_cli_version, None);
+    }
+
+    #[test]
+    fn init_records_the_default_circleci_cli_version_for_a_binary_that_needs_one() {
+        let orb = make_init(true)
+            .gather_orb(&OrbConfig::default(), true, false)
+            .unwrap();
+        assert_eq!(
+            orb.circleci_cli_version.as_deref(),
+            Some(crate::commands::generate::DEFAULT_CIRCLECI_CLI_VERSION)
+        );
+    }
+
+    /// A re-run offers back what the project already chose. The pinned digests
+    /// in these two keys are the reason: resetting them to the unpinned
+    /// recommendation would silently un-pin the executor's images.
+    #[test]
+    fn init_keeps_the_recorded_orb_settings() {
+        let existing = OrbConfig {
+            orb: Some(OrbSection {
+                orb_dir: "src/orb".to_string(),
+                install_method: "local".to_string(),
+                base_image: "debian:13-slim@sha256:abc".to_string(),
+                builder_image: "rust:1-slim-trixie@sha256:def".to_string(),
+                circleci_cli_version: Some("0.1.30000".to_string()),
+                ..OrbSection::default()
+            }),
+            ..OrbConfig::default()
+        };
+        let orb = make_init(true).gather_orb(&existing, true, false).unwrap();
+        assert_eq!(orb.orb_dir, "src/orb");
+        assert_eq!(orb.install_method, "local");
+        assert_eq!(orb.base_image, "debian:13-slim@sha256:abc");
+        assert_eq!(orb.builder_image, "rust:1-slim-trixie@sha256:def");
+        assert_eq!(orb.circleci_cli_version.as_deref(), Some("0.1.30000"));
+    }
+
+    #[test]
+    fn init_flags_win_over_the_recorded_orb_settings() {
+        let existing = OrbConfig {
+            orb: Some(OrbSection {
+                orb_dir: "src/orb".to_string(),
+                ..OrbSection::default()
+            }),
+            ..OrbConfig::default()
+        };
+        let mut init = make_init(true);
+        init.orb_dir = Some("elsewhere".to_string());
+        init.builder_image = Some("rust:1-slim-trixie@sha256:flag".to_string());
+        let orb = init.gather_orb(&existing, false, false).unwrap();
+        assert_eq!(orb.orb_dir, "elsewhere");
+        assert_eq!(orb.builder_image, "rust:1-slim-trixie@sha256:flag");
+    }
+
+    #[test]
+    fn the_written_config_states_the_orb_settings() {
+        let config = bootstrap_with(
+            "mytool",
+            &["my-org".to_string()],
+            gathered_orb(),
+            gathered_extras(),
+            &[],
+        );
+        let orb = config.orb.as_ref().unwrap();
+        assert_eq!(orb.orb_dir, crate::orb_config::DEFAULT_ORB_DIR);
+        assert_eq!(
+            orb.install_method,
+            crate::orb_config::DEFAULT_INSTALL_METHOD
+        );
+        assert_eq!(orb.base_image, crate::orb_config::DEFAULT_BASE_IMAGE);
+        assert_eq!(orb.builder_image, crate::orb_config::DEFAULT_BUILDER_IMAGE);
+    }
+
+    // ── #268: a re-run is a bootstrap, not a reset ─────────────────────────
+
+    #[test]
+    fn re_running_init_keeps_job_groups_extra_jobs_and_orbs() {
+        use crate::orb_config::{ExtraJob, JobGroup};
+        let mut orbs = IndexMap::new();
+        orbs.insert("toolkit".to_string(), "org/toolkit@2.9.1".to_string());
+        let existing = OrbConfig {
+            orbs: Some(orbs.clone()),
+            job_group: Some(vec![JobGroup {
+                name: "sync_and_publish".to_string(),
+                steps: vec!["prime".to_string()],
+                ..JobGroup::default()
+            }]),
+            extra_job: Some(vec![ExtraJob {
+                name: "smoke".to_string(),
+                yaml: "  steps:\n    - checkout\n".to_string(),
+            }]),
+            ..OrbConfig::default()
+        };
         let config = build_bootstrap_config(
             "mytool",
             &["my-org".to_string()],
-            "custom-orb",
-            None,
-            None,
+            &gathered_orb(),
+            &gathered_extras(),
+            &existing,
             &[],
+        );
+        assert_eq!(config.orbs, Some(orbs));
+        assert_eq!(
+            config.job_group.as_ref().map(|g| g.len()),
+            Some(1),
+            "a hand-authored job group must survive a re-init"
+        );
+        assert_eq!(config.extra_job.as_ref().map(|j| j.len()), Some(1));
+    }
+
+    /// The advanced `[orb]` knobs are not in the dialogue, so nulling them had
+    /// the same effect as nulling the sections above: a re-run deleted them.
+    #[test]
+    fn re_running_init_keeps_the_orb_settings_the_dialogue_never_asks_about() {
+        let existing = OrbConfig {
+            orb: Some(OrbSection {
+                apt_packages: Some(vec!["gnupg".to_string()]),
+                cargo_tools: Some(vec!["cargo-audit".to_string()]),
+                custom_files: Some(vec!["src/scripts/build-container.sh".to_string()]),
+                allow_unparsed_help: Some(true),
+                crate_wait_attempts: 60,
+                crate_wait_seconds: 20,
+                ..OrbSection::default()
+            }),
+            ..OrbConfig::default()
+        };
+        let config = build_bootstrap_config(
+            "mytool",
+            &["my-org".to_string()],
+            &gathered_orb(),
+            &gathered_extras(),
+            &existing,
             &[],
+        );
+        let orb = config.orb.as_ref().unwrap();
+        assert_eq!(
+            orb.apt_packages.as_deref(),
+            Some(&["gnupg".to_string()][..])
         );
         assert_eq!(
-            config.orb.as_ref().unwrap().orb_dir.as_deref(),
-            Some("custom-orb")
+            orb.cargo_tools.as_deref(),
+            Some(&["cargo-audit".to_string()][..])
         );
+        assert_eq!(
+            orb.custom_files.as_deref(),
+            Some(&["src/scripts/build-container.sh".to_string()][..])
+        );
+        assert_eq!(orb.allow_unparsed_help, Some(true));
+        assert_eq!(orb.crate_wait_attempts, 60);
+        assert_eq!(orb.crate_wait_seconds, 20);
+    }
+
+    // ── #271: the subcommand entries are merged, not rebuilt ───────────────
+
+    /// The dialogue owns `interactive` and nothing else. A curated `label`, a
+    /// `short_param` naming and a `param` override are all hand-authored, and
+    /// rebuilding the map deleted them on every re-run.
+    #[test]
+    fn re_running_init_keeps_hand_authored_subcommand_settings() {
+        use crate::orb_config::ParamOverride;
+        let mut short_param = IndexMap::new();
+        short_param.insert("f".to_string(), "force".to_string());
+        let mut param = IndexMap::new();
+        param.insert(
+            "orb_path".to_string(),
+            ParamOverride {
+                default: Some("src/@orb.yml".to_string()),
+            },
+        );
+        let mut recorded = IndexMap::new();
+        recorded.insert(
+            "generate".to_string(),
+            SubcommandConfig {
+                label: Some("Regenerate the orb source".to_string()),
+                short_param: Some(short_param.clone()),
+                param: Some(param.clone()),
+                ..SubcommandConfig::default()
+            },
+        );
+        let existing = OrbConfig {
+            subcommand: Some(recorded),
+            ..OrbConfig::default()
+        };
+
+        let config = build_bootstrap_config(
+            "mytool",
+            &["my-org".to_string()],
+            &gathered_orb(),
+            &gathered_extras(),
+            &existing,
+            &[("init".to_string(), true)],
+        );
+
+        let subcommands = config.subcommand.as_ref().expect("subcommand section lost");
+        let generate = subcommands
+            .get("generate")
+            .expect("hand-authored entry deleted by the re-run");
+        assert_eq!(generate.label.as_deref(), Some("Regenerate the orb source"));
+        assert_eq!(generate.short_param, Some(short_param));
+        assert_eq!(generate.param, Some(param));
+        assert_eq!(
+            subcommands.get("init").unwrap().interactive,
+            Some(true),
+            "the dialogue's own decision must still be applied"
+        );
+    }
+
+    /// …and the dialogue's answer wins over a stale recorded one for the field
+    /// it does own, so changing the answer on a re-run actually takes effect.
+    #[test]
+    fn the_dialogue_overrides_the_recorded_interactive_flag() {
+        let mut recorded = IndexMap::new();
+        recorded.insert(
+            "config".to_string(),
+            SubcommandConfig {
+                interactive: Some(true),
+                label: Some("Configure".to_string()),
+                ..SubcommandConfig::default()
+            },
+        );
+        let existing = OrbConfig {
+            subcommand: Some(recorded),
+            ..OrbConfig::default()
+        };
+        let config = build_bootstrap_config(
+            "mytool",
+            &["my-org".to_string()],
+            &gathered_orb(),
+            &gathered_extras(),
+            &existing,
+            &[("config".to_string(), false)],
+        );
+        let entry = config.subcommand.as_ref().unwrap().get("config").unwrap();
+        assert_eq!(entry.interactive, Some(false), "the new answer must win");
+        assert_eq!(
+            entry.label.as_deref(),
+            Some("Configure"),
+            "the fields the dialogue does not own are untouched"
+        );
+    }
+
+    // ── #269: the dialogue offers the detected repository URL ──────────────
+
+    #[test]
+    fn init_offers_the_detected_repository_url_for_home_and_source() {
+        let extras = make_init(true)
+            .gather_extras(
+                &[],
+                Some("https://github.com/my-org/mytool"),
+                &OrbConfig::default(),
+                false,
+            )
+            .unwrap();
+        assert_eq!(
+            extras.home_url.as_deref(),
+            Some("https://github.com/my-org/mytool")
+        );
+        assert_eq!(
+            extras.source_url.as_deref(),
+            Some("https://github.com/my-org/mytool")
+        );
+    }
+
+    #[test]
+    fn a_recorded_url_wins_over_the_detected_one() {
+        let existing = OrbConfig {
+            orb: Some(OrbSection {
+                home_url: Some("https://example.com/home".to_string()),
+                ..OrbSection::default()
+            }),
+            ..OrbConfig::default()
+        };
+        let extras = make_init(true)
+            .gather_extras(
+                &[],
+                Some("https://github.com/my-org/mytool"),
+                &existing,
+                false,
+            )
+            .unwrap();
+        assert_eq!(extras.home_url.as_deref(), Some("https://example.com/home"));
+        assert_eq!(
+            extras.source_url.as_deref(),
+            Some("https://github.com/my-org/mytool"),
+            "the unrecorded one still takes the detected value"
+        );
+    }
+
+    /// An explicit empty flag still means "no value" — detection must not
+    /// override an answer the caller gave.
+    #[test]
+    fn an_explicit_empty_url_flag_beats_detection() {
+        let mut init = make_init(true);
+        init.home_url = Some(String::new());
+        let extras = init
+            .gather_extras(
+                &[],
+                Some("https://github.com/my-org/mytool"),
+                &OrbConfig::default(),
+                false,
+            )
+            .unwrap();
+        assert_eq!(extras.home_url, None);
     }
 }

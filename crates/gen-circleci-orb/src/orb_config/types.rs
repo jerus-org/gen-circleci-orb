@@ -100,17 +100,45 @@ pub const DEFAULT_CRATE_WAIT_SECONDS: u32 = 15;
 /// beyond any propagation delay ever observed.
 pub const MAX_CRATE_WAIT_ATTEMPTS: u32 = 240;
 
+/// Directory the generated orb source is written to, relative to the repo root.
+pub const DEFAULT_ORB_DIR: &str = "orb";
+
+/// How the generated Dockerfile gets the binary into the image. One of
+/// `binstall`, `apt`, `local` — see `commands::generate::InstallMethod`.
+pub const DEFAULT_INSTALL_METHOD: &str = "binstall";
+
+/// Runtime stage image for the generated Dockerfile.
+pub const DEFAULT_BASE_IMAGE: &str = "debian:13-slim";
+
+/// Runtime stage image when the MCP feature is enabled. `build_mcp_server`
+/// compiles the MCP server at runtime via `gen-orb-mcp generate --format
+/// binary`, so the executor needs a Rust toolchain (cargo) present.
+pub const MCP_DEFAULT_BASE_IMAGE: &str = "rust:1-slim-trixie";
+
+/// Image for the Rust `builder` stage (Binstall method) that `cargo install`s
+/// the binary.
+pub const DEFAULT_BUILDER_IMAGE: &str = "rust:1-slim-trixie";
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(default)]
 pub struct OrbSection {
     pub binary: Option<String>,
     pub namespaces: Option<Vec<String>>,
-    pub orb_dir: Option<String>,
-    pub base_image: Option<String>,
+    /// Directory the orb source is generated into, relative to the repo root.
+    /// Carries [`DEFAULT_ORB_DIR`] rather than "unset" — see the note on
+    /// [`crate_wait_attempts`](Self::crate_wait_attempts).
+    pub orb_dir: String,
+    /// Runtime stage image for the generated Dockerfile. Set a pinned
+    /// `…@sha256:…` here so the digest survives regeneration (Renovate tracks
+    /// it in this file). Defaults to [`DEFAULT_BASE_IMAGE`], corrected to
+    /// [`MCP_DEFAULT_BASE_IMAGE`] when `[ci] mcp` is on and this still carries
+    /// the plain default — `build_mcp_server` needs cargo in the executor.
+    pub base_image: String,
     /// Image for the Rust `builder` stage (Binstall method) that `cargo install`s
     /// the binary. Set a pinned `rust:…@sha256:…` here so the digest survives
-    /// regeneration (Renovate tracks it in this file). Defaults to `rust:1-slim-trixie`.
-    pub builder_image: Option<String>,
+    /// regeneration (Renovate tracks it in this file). Defaults to
+    /// [`DEFAULT_BUILDER_IMAGE`].
+    pub builder_image: String,
     /// circleci-cli version to install into the generated Docker image. This is a
     /// version *override* only — it does not control *whether* the CLI is
     /// installed. Binaries that intrinsically need the CLI (those exposing a
@@ -118,8 +146,16 @@ pub struct OrbSection {
     /// `DEFAULT_CIRCLECI_CLI_VERSION` when this is unset — so removing this key
     /// cannot silently drop the CLI. Set it (Renovate-tracked) to pin/update the
     /// version, or to opt a consumer's own binary into bundling the CLI.
+    ///
+    /// Deliberately still `Option` while the settings around it carry real
+    /// defaults: because a recorded version is *also* an opt-in, materialising
+    /// one would bundle the CLI into every executor that never asked for it.
+    /// `init` records it only for a binary that intrinsically needs the CLI.
     pub circleci_cli_version: Option<String>,
-    pub install_method: Option<String>,
+    /// How the generated Dockerfile obtains the binary: `binstall`, `apt` or
+    /// `local`. Defaults to [`DEFAULT_INSTALL_METHOD`]; an unrecognised value
+    /// is warned about and treated as `binstall`.
+    pub install_method: String,
     /// Extra apt packages installed in the generated Docker image's runtime stage.
     /// Use for tools that need build dependencies at runtime (e.g. a tool that
     /// compiles code via `cargo` needs libssl-dev + pkg-config).
@@ -172,18 +208,20 @@ pub struct OrbSection {
 
 /// Hand-written because `derive(Default)` would give the crate-wait settings
 /// `u32::default()` — zero — which as an attempt count means "never wait" and
-/// as an interval means "spin". The defaults are the constants above, and this
-/// impl is what `#[serde(default)]` uses for a config that omits them.
+/// as an interval means "spin", and the image settings `String::default()` —
+/// empty — which is an unbuildable `FROM`. The defaults are the constants
+/// above, and this impl is what `#[serde(default)]` uses for a config that
+/// omits them.
 impl Default for OrbSection {
     fn default() -> Self {
         Self {
             binary: None,
             namespaces: None,
-            orb_dir: None,
-            base_image: None,
-            builder_image: None,
+            orb_dir: DEFAULT_ORB_DIR.to_string(),
+            base_image: DEFAULT_BASE_IMAGE.to_string(),
+            builder_image: DEFAULT_BUILDER_IMAGE.to_string(),
             circleci_cli_version: None,
-            install_method: None,
+            install_method: DEFAULT_INSTALL_METHOD.to_string(),
             apt_packages: None,
             cargo_tools: None,
             home_url: None,
