@@ -86,11 +86,14 @@ fn merge_into_document(existing: &str, rendered: &str) -> Result<String> {
     // the existing file through the same serde pass shows which keys this binary
     // *does* understand — anything outside that set is left alone rather than
     // swept away by an older generator writing a newer config.
-    let known: toml_edit::DocumentMut = toml::from_str::<OrbConfig>(existing)
-        .ok()
-        .and_then(|c| toml::to_string_pretty(&c).ok())
-        .and_then(|s| s.parse().ok())
-        .unwrap_or_default();
+    // Falling back to an empty document here would make every removal a no-op,
+    // so a key the caller cleared would silently persist while the command
+    // reported success. Fail as loudly as the parse above.
+    let known: OrbConfig = toml::from_str(existing)
+        .context("gen-circleci-orb.toml changed on disk and no longer reads as a config")?;
+    let known: toml_edit::DocumentMut = toml::to_string_pretty(&known)?
+        .parse()
+        .context("cannot determine which keys this version manages; refusing to write")?;
 
     merge_table(doc.as_table_mut(), incoming.as_table(), known.as_table());
     Ok(doc.to_string())
@@ -110,10 +113,7 @@ fn merge_table(target: &mut toml_edit::Table, source: &toml_edit::Table, known: 
         merge_entry(target, key, source_item, known, &mut reset_key_decor);
     }
     for key in reset_key_decor {
-        if let Some(mut k) = target.key_mut(&key) {
-            k.leaf_decor_mut().clear();
-            k.dotted_decor_mut().clear();
-        }
+        move_key_decor_to_section(target, &key);
     }
     remove_stale_keys(target, source, known);
 }
@@ -143,7 +143,14 @@ fn merge_entry(
         (
             Some(toml_edit::Item::ArrayOfTables(target_arr)),
             toml_edit::Item::ArrayOfTables(source_arr),
-        ) => merge_array_of_tables(target_arr, source_arr),
+        ) => {
+            let empty = toml_edit::ArrayOfTables::new();
+            let known_arr = known
+                .get(key)
+                .and_then(|i| i.as_array_of_tables())
+                .unwrap_or(&empty);
+            merge_array_of_tables(target_arr, source_arr, known_arr);
+        }
         // Present but not a matching pair: replace only if the value actually
         // changed. An untouched value keeps the formatting the user gave it —
         // otherwise every write reflows their inline arrays, which is the same
@@ -166,6 +173,43 @@ fn merge_entry(
     }
 }
 
+/// Move a key's decor onto the section that replaced it.
+///
+/// An inline `x = { … }` rendered as `[x]` leaves two artefacts: the space that
+/// sat before `=` shows up inside the header, and the comment above the key
+/// stays attached to the *previous* section, where it reads as a trailing note
+/// on something else. The suffix is dropped and the prefix moves to the section.
+fn move_key_decor_to_section(target: &mut toml_edit::Table, key: &str) {
+    let prefix = target
+        .key(key)
+        .and_then(|k| k.leaf_decor().prefix())
+        .and_then(|p| p.as_str())
+        .map(str::to_string);
+    if let Some(mut k) = target.key_mut(key) {
+        k.leaf_decor_mut().set_suffix("");
+        k.dotted_decor_mut().set_suffix("");
+        if prefix.is_some() {
+            k.leaf_decor_mut().set_prefix("");
+        }
+    }
+    let Some(prefix) = prefix.filter(|p| !p.trim().is_empty()) else {
+        return;
+    };
+    if let Some(toml_edit::Item::Table(table)) = target.get_mut(key) {
+        let existing = table
+            .decor()
+            .prefix()
+            .and_then(|p| p.as_str())
+            .unwrap_or("")
+            .to_string();
+        // Blank line first (from the section's own decor), then the comment,
+        // then the header — so the comment sits directly above what it heads.
+        table
+            .decor_mut()
+            .set_prefix(format!("{existing}{}", prefix.trim_start_matches('\n')));
+    }
+}
+
 /// Drop keys this binary models that `source` no longer has — an unrecognised
 /// key is left alone, since serde silently discards what it does not know.
 fn remove_stale_keys(
@@ -183,22 +227,57 @@ fn remove_stale_keys(
     }
 }
 
-/// Merge `[[section]]` entries positionally.
+/// Merge `[[section]]` entries, matching them by `name`.
 ///
-/// Entries are matched by index, which is how the serialiser emits them, so a
-/// change to one entry leaves the others — and their comments — untouched.
-fn merge_array_of_tables(target: &mut toml_edit::ArrayOfTables, source: &toml_edit::ArrayOfTables) {
-    while target.len() > source.len() {
-        target.remove(target.len() - 1);
-    }
+/// Every array-of-tables in this config (`[[job_group]]`, `[[extra_job]]`) keys
+/// its entries by `name`, so matching on it keeps an entry's comment with that
+/// entry when one is removed or the order changes. Matching by position instead
+/// would reattach the comments to whatever slid into the slot.
+///
+/// `known` is the matching array from the round-tripped document. Passing
+/// `source` here would make `remove_stale_keys`'s filter a contradiction —
+/// "absent from source AND present in source" — so a key cleared inside an
+/// entry would never actually be removed.
+fn merge_array_of_tables(
+    target: &mut toml_edit::ArrayOfTables,
+    source: &toml_edit::ArrayOfTables,
+    known: &toml_edit::ArrayOfTables,
+) {
+    let name_of = |t: &toml_edit::Table| t.get("name").and_then(|i| i.as_str()).map(str::to_string);
+
+    // Take the existing entries out so each can be matched to a source entry by
+    // name and put back in the source's order, carrying its formatting with it.
+    let existing: Vec<toml_edit::Table> = std::mem::take(target).into_iter().collect();
+    let mut by_name: Vec<(Option<String>, toml_edit::Table)> =
+        existing.into_iter().map(|t| (name_of(&t), t)).collect();
+
+    let empty = toml_edit::Table::new();
     for (i, source_tbl) in source.iter().enumerate() {
-        match target.get_mut(i) {
-            // Everything the serialiser emits here is modelled, so removals
-            // within an entry are genuine: pass `source` as the known set.
-            Some(target_tbl) => merge_table(target_tbl, source_tbl, source_tbl),
+        let wanted = name_of(source_tbl);
+        // Match by name where both sides have one; fall back to position for
+        // entries that do not (nothing in this schema, but the merge should not
+        // depend on that).
+        let found = wanted
+            .as_ref()
+            .and_then(|w| by_name.iter().position(|(n, _)| n.as_ref() == Some(w)))
+            .or_else(|| (wanted.is_none() && i < by_name.len()).then_some(i));
+
+        match found {
+            Some(pos) => {
+                let (_, mut existing_tbl) = by_name.remove(pos);
+                let known_tbl = known
+                    .iter()
+                    .find(|k| name_of(k) == wanted)
+                    .unwrap_or(&empty);
+                merge_table(&mut existing_tbl, source_tbl, known_tbl);
+                target.push(existing_tbl);
+            }
             None => target.push(source_tbl.clone()),
         }
     }
+    // Whatever is left in `by_name` had no counterpart in `source`: the caller
+    // removed those entries, and they leave with their own comments.
+    drop(by_name);
 }
 
 /// Overwrite `target` with `source`, keeping the decor (a trailing comment, the
@@ -206,8 +285,17 @@ fn merge_array_of_tables(target: &mut toml_edit::ArrayOfTables, source: &toml_ed
 fn replace_preserving_decor(target: &mut toml_edit::Item, source: &toml_edit::Item) {
     let decor = target.as_value().map(|v| v.decor().clone());
     *target = source.clone();
-    if let (Some(decor), Some(value)) = (decor, target.as_value_mut()) {
-        *value.decor_mut() = decor;
+    let Some(decor) = decor else { return };
+    match target {
+        toml_edit::Item::Value(value) => *value.decor_mut() = decor,
+        // An inline `x = { … }` rendered as a `[x]` section: the value's
+        // trailing comment belongs after the header, not lost.
+        toml_edit::Item::Table(table) => {
+            if let Some(suffix) = decor.suffix().and_then(|s| s.as_str()) {
+                table.decor_mut().set_suffix(suffix.to_string());
+            }
+        }
+        _ => {}
     }
 }
 
@@ -217,9 +305,13 @@ fn replace_preserving_decor(target: &mut toml_edit::Item, source: &toml_edit::It
 /// untouched value is left exactly as the user formatted it.
 fn same_value(a: &toml_edit::Item, b: &toml_edit::Item) -> bool {
     fn semantic(item: &toml_edit::Item) -> Option<toml::Value> {
-        // Wrap in a key so a bare value parses as TOML. Tables and arrays of
-        // tables do not parse this way; the caller handles those by recursion.
-        let wrapped = format!("x = {}", item.to_string().trim());
+        // A standard table has no standalone form, so convert it to the inline
+        // one first: otherwise an inline `x = { … }` in the file never compares
+        // equal to the section the serialiser emits, and is rewritten on every
+        // save even when nothing changed.
+        let as_value = item.clone().into_value().ok()?;
+        // Wrap in a key so a bare value parses as TOML.
+        let wrapped = format!("x = {}", as_value.to_string().trim());
         wrapped.parse::<toml::Table>().ok()?.get("x").cloned()
     }
     match (semantic(a), semantic(b)) {
@@ -780,7 +872,7 @@ steps:
         let path = dir.path().join("gen-circleci-orb.toml");
         std::fs::write(
             &path,
-            "[orb]\nbinary = \"mytool\"\n\n             # why the sync group exists\n             [[job_group]]\nname = \"sync\"\nsteps = [\"generate\"]\n\n             # why the publish group exists\n             [[job_group]]\nname = \"publish\"\nsteps = [\"validate\"]\n",
+            "[orb]\nbinary = \"mytool\"\n\n# why the sync group exists\n[[job_group]]\nname = \"sync\"\nsteps = [\"generate\"]\n\n# why the publish group exists\n[[job_group]]\nname = \"publish\"\nsteps = [\"validate\"]\n",
         )
         .unwrap();
 
@@ -811,7 +903,7 @@ steps:
         let path = dir.path().join("gen-circleci-orb.toml");
         std::fs::write(
             &path,
-            "[orb]\nbinary = \"mytool\"\n\n             # a section a newer version understands\n             [future_section]\nsetting = true\n",
+            "[orb]\nbinary = \"mytool\"\n\n# a section a newer version understands\n[future_section]\nsetting = true\n",
         )
         .unwrap();
 
@@ -884,6 +976,202 @@ steps:
         assert!(
             written.contains("new@2.0.0"),
             "the change must apply:\n{written}"
+        );
+    }
+
+    /// The comment above a key lives in that key's leaf-decor *prefix*. Clearing
+    /// the whole decor to tidy a section header therefore deletes it — the very
+    /// loss this module exists to prevent.
+    #[test]
+    fn converting_an_inline_table_keeps_the_comment_above_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gen-circleci-orb.toml");
+        std::fs::write(
+            &path,
+            "# keep pinned; Renovate updates these\norbs = { toolkit = \"jerus-org/circleci-toolkit@2.9.1\" }\n\n[orb]\nbinary = \"mytool\"\n",
+        )
+        .unwrap();
+
+        let mut config = load_config(&path).unwrap();
+        config.orbs.as_mut().unwrap().insert(
+            "toolkit".to_string(),
+            "jerus-org/circleci-toolkit@3.0.0".to_string(),
+        );
+        save_config(&path, &config).unwrap();
+
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            written.contains("# keep pinned; Renovate updates these"),
+            "the comment above the key must survive the conversion:\n{written}"
+        );
+        assert!(
+            !written.contains("[orbs "),
+            "stale key decor leaked:\n{written}"
+        );
+    }
+
+    /// A same-line comment on a value that becomes a section must survive too.
+    #[test]
+    fn converting_an_inline_table_keeps_its_trailing_comment() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gen-circleci-orb.toml");
+        std::fs::write(
+            &path,
+            "orbs = { toolkit = \"old@1.0.0\" } # renovate keeps this current\n\n[orb]\nbinary = \"mytool\"\n",
+        )
+        .unwrap();
+
+        let mut config = load_config(&path).unwrap();
+        config
+            .orbs
+            .as_mut()
+            .unwrap()
+            .insert("toolkit".to_string(), "new@2.0.0".to_string());
+        save_config(&path, &config).unwrap();
+
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            written.contains("# renovate keeps this current"),
+            "a trailing comment must survive the conversion:\n{written}"
+        );
+    }
+
+    /// Saving an unchanged config must not touch the file's shape at all.
+    #[test]
+    fn saving_an_unchanged_config_rewrites_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gen-circleci-orb.toml");
+        let original = "# keep pinned\norbs = { toolkit = \"pinned@2.9.1\" }\n\n[orb]\nbinary = \"mytool\"\nnamespaces = [\"my-org\"]\ncrate_wait_attempts = 40\ncrate_wait_seconds = 15\n";
+        std::fs::write(&path, original).unwrap();
+
+        let config = load_config(&path).unwrap();
+        save_config(&path, &config).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            original,
+            "a no-op save must leave the file byte-identical"
+        );
+    }
+
+    /// Clearing a field inside a `[[job_group]]` entry must actually remove the
+    /// key, not silently persist and reappear on the next load.
+    #[test]
+    fn removing_a_key_inside_an_array_of_tables_sticks() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gen-circleci-orb.toml");
+        std::fs::write(
+            &path,
+            "[orb]\nbinary = \"mytool\"\n\n[[job_group]]\nname = \"sync\"\nsteps = [\"generate\"]\nexecutor = \"custom-executor\"\n",
+        )
+        .unwrap();
+
+        let mut config = load_config(&path).unwrap();
+        config.job_group.as_mut().unwrap()[0].executor = None;
+        save_config(&path, &config).unwrap();
+
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !written.contains("custom-executor"),
+            "the cleared key must be removed:\n{written}"
+        );
+        assert_eq!(
+            load_config(&path).unwrap().job_group.unwrap()[0].executor,
+            None,
+            "and must not reappear on reload"
+        );
+    }
+
+    /// Entries matched by position reattach comments to the wrong entry the
+    /// moment one is removed or reordered.
+    #[test]
+    fn removing_an_array_of_tables_entry_keeps_comments_with_their_own_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gen-circleci-orb.toml");
+        std::fs::write(
+            &path,
+            "[orb]\nbinary = \"mytool\"\n\n# the sync group\n[[job_group]]\nname = \"sync\"\nsteps = [\"generate\"]\n\n# the middle group\n[[job_group]]\nname = \"middle\"\nsteps = [\"validate\"]\n\n# the publish group\n[[job_group]]\nname = \"publish\"\nsteps = [\"diff\"]\n",
+        )
+        .unwrap();
+
+        let mut config = load_config(&path).unwrap();
+        config.job_group.as_mut().unwrap().remove(1);
+        save_config(&path, &config).unwrap();
+
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !written.contains("# the middle group"),
+            "the removed entry's comment must go with it:\n{written}"
+        );
+        let publish = written
+            .find("name = \"publish\"")
+            .expect("publish entry kept");
+        let comment = written
+            .find("# the publish group")
+            .expect("publish comment kept");
+        assert!(
+            comment < publish && written[comment..publish].find("name =").is_none(),
+            "each comment must stay with its own entry:\n{written}"
+        );
+    }
+
+    /// The comment above a converted inline table must stay attached to it, not
+    /// drift up to read as a trailing comment on the previous section.
+    #[test]
+    fn a_converted_inline_tables_comment_stays_adjacent_to_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gen-circleci-orb.toml");
+        // concat! rather than a wrapped literal: rustfmt joins `\`-continued
+        // strings and bakes the indentation in as real spaces.
+        let original = concat!(
+            "# keep pinned; Renovate updates these\n",
+            "orbs = { toolkit = \"old@1.0.0\" }\n",
+            "\n",
+            "[orb]\n",
+            "binary = \"mytool\"\n",
+        );
+        std::fs::write(&path, original).unwrap();
+
+        let mut config = load_config(&path).unwrap();
+        config
+            .orbs
+            .as_mut()
+            .unwrap()
+            .insert("toolkit".to_string(), "new@2.0.0".to_string());
+        save_config(&path, &config).unwrap();
+
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            written.contains("# keep pinned; Renovate updates these\n[orbs]"),
+            "the comment must sit on the line directly above its section, not \
+             drift up to read as a trailing note on the previous one:\n{written}"
+        );
+    }
+
+    /// A config that no longer deserialises must not quietly turn the write
+    /// add-only; removals would silently stop applying.
+    #[test]
+    fn writing_fails_when_the_existing_file_no_longer_deserialises() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gen-circleci-orb.toml");
+        // Valid TOML, wrong type for a modelled field.
+        std::fs::write(
+            &path,
+            "[orb]\nbinary = \"mytool\"\ncrate_wait_attempts = \"forty\"\n",
+        )
+        .unwrap();
+
+        let config = OrbConfig {
+            orb: Some(OrbSection {
+                binary: Some("mytool".to_string()),
+                ..OrbSection::default()
+            }),
+            ..OrbConfig::default()
+        };
+        assert!(
+            save_config(&path, &config).is_err(),
+            "a config that cannot be re-read must abort the write, not silently \
+             stop removing keys"
         );
     }
 
