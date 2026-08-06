@@ -70,8 +70,12 @@ pub fn save_config(path: &Path, config: &OrbConfig) -> Result<()> {
 
 /// Apply `rendered` onto `existing`, preserving the latter's formatting.
 fn merge_into_document(existing: &str, rendered: &str) -> Result<String> {
+    // Every caller loads the config before saving it, so this text has already
+    // parsed once. Reaching here means the file changed on disk in between —
+    // report that rather than repeating the advice `load_config` already gave.
     let mut doc: toml_edit::DocumentMut = existing.parse().with_context(|| {
-        "existing gen-circleci-orb.toml is not valid TOML; fix or delete it and re-run"
+        "gen-circleci-orb.toml changed on disk and no longer parses; \
+         its comments cannot be preserved"
     })?;
     let incoming: toml_edit::DocumentMut = rendered
         .parse()
