@@ -33,6 +33,9 @@ regex = "1.13.1"
 
 # Configuration
 toml = "1.1.3"
+# Format-preserving TOML editing: `config`/`init` rewrite a file the user
+# annotates, so writes must keep comments (#248).
+toml_edit = "0.25.13"
 dialoguer = "0.12.0"
 console = "0.16.4"
 

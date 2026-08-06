@@ -13,7 +13,7 @@ from the dependency graph with [`cargo-about`](https://github.com/EmbarkStudios/
 
 ## Overview
 
-- **MIT License** — 357 crate(s)
+- **MIT License** — 358 crate(s)
 - **Unicode License v3** — 19 crate(s)
 - **Apache License 2.0** — 8 crate(s)
 - **ISC License** — 6 crate(s)
@@ -3894,6 +3894,7 @@ Used by:
 - serde_spanned 1.1.1
 - toml 1.1.4+spec-1.1.0
 - toml_datetime 1.1.1+spec-1.1.0
+- toml_edit 0.25.13+spec-1.1.0
 - toml_parser 1.1.3+spec-1.1.0
 - toml_writer 1.1.2+spec-1.1.0
 

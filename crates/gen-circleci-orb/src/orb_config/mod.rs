@@ -6,7 +6,7 @@ pub use types::{
     DEFAULT_CRATE_WAIT_SECONDS, MAX_CRATE_WAIT_ATTEMPTS,
 };
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::path::Path;
 
 /// Treat an empty string as absent.
@@ -25,18 +25,182 @@ pub fn load_config(path: &Path) -> Result<OrbConfig> {
     if !path.exists() {
         return Ok(OrbConfig::default());
     }
-    let content = std::fs::read_to_string(path)?;
-    let config: OrbConfig = toml::from_str(&content)?;
+    let content =
+        std::fs::read_to_string(path).with_context(|| format!("cannot read {}", path.display()))?;
+    let config: OrbConfig = toml::from_str(&content).with_context(|| {
+        format!(
+            "{} is not valid TOML — fix the syntax, or delete the file to start over",
+            path.display()
+        )
+    })?;
     Ok(config)
 }
 
+/// Write the config, keeping whatever the user wrote around it.
+///
+/// The file is hand-annotated and reviewed — this repo's own records why each
+/// image digest is pinned and which Renovate manager keeps it current — so a
+/// write that serialises the struct over the top loses that silently, in a diff
+/// that otherwise looks like a one-line change (#248). When the file already
+/// exists, the new values are merged into the parsed document instead, leaving
+/// comments, blank lines and key order intact.
 pub fn save_config(path: &Path, config: &OrbConfig) -> Result<()> {
-    let content = toml::to_string_pretty(config)?;
+    let rendered = toml::to_string_pretty(config)?;
+    let content = match std::fs::read_to_string(path) {
+        Ok(existing) => merge_into_document(&existing, &rendered)?,
+        // Only "no file yet" means there is nothing to preserve. Any other read
+        // failure — a non-UTF-8 byte in a comment, a permissions problem — must
+        // abort rather than overwrite the file this exists to protect.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => rendered,
+        Err(e) => {
+            return Err(e).with_context(|| {
+                format!(
+                    "cannot read {} to preserve its comments; refusing to overwrite it",
+                    path.display()
+                )
+            });
+        }
+    };
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
     std::fs::write(path, content)?;
     Ok(())
+}
+
+/// Apply `rendered` onto `existing`, preserving the latter's formatting.
+fn merge_into_document(existing: &str, rendered: &str) -> Result<String> {
+    let mut doc: toml_edit::DocumentMut = existing.parse().with_context(|| {
+        "existing gen-circleci-orb.toml is not valid TOML; fix or delete it and re-run"
+    })?;
+    let incoming: toml_edit::DocumentMut = rendered
+        .parse()
+        .context("failed to re-parse the serialised config")?;
+
+    // Keys this binary does not model are dropped by serde on load, so they are
+    // absent from `incoming` and would look deliberately removed. Round-tripping
+    // the existing file through the same serde pass shows which keys this binary
+    // *does* understand — anything outside that set is left alone rather than
+    // swept away by an older generator writing a newer config.
+    let known: toml_edit::DocumentMut = toml::from_str::<OrbConfig>(existing)
+        .ok()
+        .and_then(|c| toml::to_string_pretty(&c).ok())
+        .and_then(|s| s.parse().ok())
+        .unwrap_or_default();
+
+    merge_table(doc.as_table_mut(), incoming.as_table(), known.as_table());
+    Ok(doc.to_string())
+}
+
+/// Recursively copy `source` into `target`.
+///
+/// Keys present in both are updated in place, which is what keeps a comment
+/// attached to its key: the decor lives on the target's key entry, not on the
+/// value being replaced. Keys only in `source` are appended. A key is removed
+/// only when `known` says this binary understands it and `source` no longer has
+/// it — an unrecognised key is left as the user wrote it.
+fn merge_table(target: &mut toml_edit::Table, source: &toml_edit::Table, known: &toml_edit::Table) {
+    let mut reset_key_decor: Vec<String> = Vec::new();
+    for (key, source_item) in source.iter() {
+        let known_child = known.get(key).and_then(|i| i.as_table());
+        match (target.get_mut(key), source_item) {
+            // Both tables: recurse so nested comments survive too.
+            (Some(toml_edit::Item::Table(target_tbl)), toml_edit::Item::Table(source_tbl)) => {
+                // No counterpart in `known` means this binary models nothing
+                // here, so nothing below is removed.
+                let empty = toml_edit::Table::new();
+                merge_table(target_tbl, source_tbl, known_child.unwrap_or(&empty));
+            }
+            // Arrays of tables (`[[job_group]]`): merge element by element so an
+            // entry's comment survives a change to a sibling — or to itself.
+            (
+                Some(toml_edit::Item::ArrayOfTables(target_arr)),
+                toml_edit::Item::ArrayOfTables(source_arr),
+            ) => {
+                merge_array_of_tables(target_arr, source_arr);
+            }
+            // Present but not a matching pair: replace only if the value actually
+            // changed. An untouched value keeps the formatting the user gave it
+            // — otherwise every write reflows their inline arrays, which is the
+            // same "don't rewrite what I wrote" complaint in smaller form.
+            (Some(target_item), _) => {
+                if !same_value(target_item, source_item) {
+                    // An inline `x = { … }` becoming a `[x]` section carries its
+                    // old key decor into the header, rendering `[x ]`. Note it
+                    // and clear that decor once the borrow is released.
+                    if target_item.is_value() && !source_item.is_value() {
+                        reset_key_decor.push(key.to_string());
+                    }
+                    replace_preserving_decor(target_item, source_item);
+                }
+            }
+            // New key: append it.
+            (None, _) => {
+                target.insert(key, source_item.clone());
+            }
+        }
+    }
+
+    for key in reset_key_decor {
+        if let Some(mut k) = target.key_mut(&key) {
+            k.leaf_decor_mut().clear();
+            k.dotted_decor_mut().clear();
+        }
+    }
+
+    let removed: Vec<String> = target
+        .iter()
+        .map(|(k, _)| k.to_string())
+        .filter(|k| source.get(k).is_none() && known.get(k).is_some())
+        .collect();
+    for key in removed {
+        target.remove(&key);
+    }
+}
+
+/// Merge `[[section]]` entries positionally.
+///
+/// Entries are matched by index, which is how the serialiser emits them, so a
+/// change to one entry leaves the others — and their comments — untouched.
+fn merge_array_of_tables(target: &mut toml_edit::ArrayOfTables, source: &toml_edit::ArrayOfTables) {
+    while target.len() > source.len() {
+        target.remove(target.len() - 1);
+    }
+    for (i, source_tbl) in source.iter().enumerate() {
+        match target.get_mut(i) {
+            // Everything the serialiser emits here is modelled, so removals
+            // within an entry are genuine: pass `source` as the known set.
+            Some(target_tbl) => merge_table(target_tbl, source_tbl, source_tbl),
+            None => target.push(source_tbl.clone()),
+        }
+    }
+}
+
+/// Overwrite `target` with `source`, keeping the decor (a trailing comment, the
+/// surrounding spacing) that belonged to the value being replaced.
+fn replace_preserving_decor(target: &mut toml_edit::Item, source: &toml_edit::Item) {
+    let decor = target.as_value().map(|v| v.decor().clone());
+    *target = source.clone();
+    if let (Some(decor), Some(value)) = (decor, target.as_value_mut()) {
+        *value.decor_mut() = decor;
+    }
+}
+
+/// True when two items hold the same value, ignoring how it is written.
+///
+/// `["a", "b"]` and the same array spread over lines are equal here, so an
+/// untouched value is left exactly as the user formatted it.
+fn same_value(a: &toml_edit::Item, b: &toml_edit::Item) -> bool {
+    fn semantic(item: &toml_edit::Item) -> Option<toml::Value> {
+        // Wrap in a key so a bare value parses as TOML. Tables and arrays of
+        // tables do not parse this way; the caller handles those by recursion.
+        let wrapped = format!("x = {}", item.to_string().trim());
+        wrapped.parse::<toml::Table>().ok()?.get("x").cloned()
+    }
+    match (semantic(a), semantic(b)) {
+        (Some(x), Some(y)) => x == y,
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -388,6 +552,314 @@ steps:
         save_config(&path, &original).unwrap();
         let loaded = load_config(&path).unwrap();
         assert_eq!(original, loaded);
+    }
+
+    // ── comments survive a write (#248) ────────────────────────────────────
+
+    /// The config is hand-annotated and reviewed — this repo's own records why
+    /// each image digest is pinned and which Renovate manager keeps it current.
+    /// Serialising the struct over the file loses all of that silently.
+    #[test]
+    fn writing_preserves_comments_on_unchanged_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gen-circleci-orb.toml");
+        std::fs::write(
+            &path,
+            "[orb]\n\
+             binary = \"mytool\"\n\
+             # Pinned digest so it survives regeneration; Renovate updates it.\n\
+             builder_image = \"rust:1-slim-trixie@sha256:abc123\"\n",
+        )
+        .unwrap();
+
+        let mut config = load_config(&path).unwrap();
+        config.orb.as_mut().unwrap().orb_dir = Some("orb".to_string());
+        save_config(&path, &config).unwrap();
+
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            written.contains("# Pinned digest so it survives regeneration"),
+            "the comment must survive the write:\n{written}"
+        );
+        assert!(
+            written.contains("rust:1-slim-trixie@sha256:abc123"),
+            "the value it documents must survive too:\n{written}"
+        );
+    }
+
+    /// A comment attached to a section header, not a key.
+    #[test]
+    fn writing_preserves_section_comments() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gen-circleci-orb.toml");
+        std::fs::write(
+            &path,
+            "# Drives the generated validation workflow.\n\
+             [orb]\n\
+             binary = \"mytool\"\n",
+        )
+        .unwrap();
+
+        let config = load_config(&path).unwrap();
+        save_config(&path, &config).unwrap();
+
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            written.contains("# Drives the generated validation workflow."),
+            "a section comment must survive:\n{written}"
+        );
+    }
+
+    /// Adding a key elsewhere must not disturb an annotated one.
+    #[test]
+    fn writing_preserves_comments_when_adding_a_section() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gen-circleci-orb.toml");
+        std::fs::write(
+            &path,
+            "[orb]\n\
+             # why this is pinned\n\
+             base_image = \"debian:13-slim\"\n\
+             binary = \"mytool\"\n",
+        )
+        .unwrap();
+
+        let mut config = load_config(&path).unwrap();
+        let mut subs = IndexMap::new();
+        subs.insert(
+            "somecmd".to_string(),
+            SubcommandConfig {
+                generate_job: Some(false),
+                ..SubcommandConfig::default()
+            },
+        );
+        config.subcommand = Some(subs);
+        save_config(&path, &config).unwrap();
+
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            written.contains("# why this is pinned"),
+            "an unrelated addition must not drop a comment:\n{written}"
+        );
+        assert!(
+            written.contains("[subcommand.somecmd]"),
+            "the new section must still be written:\n{written}"
+        );
+    }
+
+    /// An untouched value keeps the formatting the user gave it. Rewriting an
+    /// inline array as a multi-line one is the same "don't rewrite what I wrote"
+    /// complaint as losing a comment, in smaller form.
+    #[test]
+    fn writing_leaves_unchanged_values_formatted_as_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gen-circleci-orb.toml");
+        std::fs::write(
+            &path,
+            "[orb]\nbinary = \"mytool\"\nnamespaces = [\"a\", \"b\", \"c\"]\n",
+        )
+        .unwrap();
+
+        let mut config = load_config(&path).unwrap();
+        config.orb.as_mut().unwrap().orb_dir = Some("orb".to_string());
+        save_config(&path, &config).unwrap();
+
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            written.contains(r#"namespaces = ["a", "b", "c"]"#),
+            "an untouched array must keep its inline form:\n{written}"
+        );
+    }
+
+    /// A value that did change is written out, formatting and all.
+    #[test]
+    fn writing_updates_a_changed_value() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gen-circleci-orb.toml");
+        std::fs::write(&path, "[orb]\n# keep me\nbinary = \"oldtool\"\n").unwrap();
+
+        let mut config = load_config(&path).unwrap();
+        config.orb.as_mut().unwrap().binary = Some("newtool".to_string());
+        save_config(&path, &config).unwrap();
+
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(written.contains(r#"binary = "newtool""#), "got:\n{written}");
+        assert!(
+            !written.contains("oldtool"),
+            "stale value left behind:\n{written}"
+        );
+        assert!(
+            written.contains("# keep me"),
+            "comment lost on update:\n{written}"
+        );
+    }
+
+    /// Values must still round-trip — preserving comments is worthless if the
+    /// data stops surviving.
+    #[test]
+    fn writing_over_an_annotated_file_still_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gen-circleci-orb.toml");
+        std::fs::write(
+            &path,
+            "# leading comment\n[orb]\nbinary = \"mytool\"\n# mid comment\nnamespaces = [\"my-org\"]\n",
+        )
+        .unwrap();
+
+        let mut config = load_config(&path).unwrap();
+        config.orb.as_mut().unwrap().orb_dir = Some("custom".to_string());
+        save_config(&path, &config).unwrap();
+
+        let reloaded = load_config(&path).unwrap();
+        assert_eq!(
+            reloaded, config,
+            "values must survive the comment-preserving write"
+        );
+    }
+
+    /// A read failure that is not "no such file" must not be treated as "nothing
+    /// to preserve" — that turns the one case this code exists to protect into a
+    /// silent clobber.
+    #[test]
+    fn writing_refuses_when_the_existing_file_cannot_be_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gen-circleci-orb.toml");
+        // A comment carrying a non-UTF-8 byte: readable as bytes, not as a String.
+        let mut bytes = b"[orb]\n# maintained by Jos\xe9\nbinary = \"mytool\"\n".to_vec();
+        bytes.push(b'\n');
+        std::fs::write(&path, &bytes).unwrap();
+
+        let config = OrbConfig {
+            orb: Some(OrbSection {
+                binary: Some("mytool".to_string()),
+                ..OrbSection::default()
+            }),
+            ..OrbConfig::default()
+        };
+        assert!(
+            save_config(&path, &config).is_err(),
+            "an unreadable existing file must abort the write, not overwrite it"
+        );
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            bytes,
+            "the file must be left exactly as it was"
+        );
+    }
+
+    /// `[[job_group]]` entries are arrays of tables; `config add-job-group`
+    /// rewrites them, so their comments have to survive like any other.
+    #[test]
+    fn writing_preserves_comments_in_arrays_of_tables() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gen-circleci-orb.toml");
+        std::fs::write(
+            &path,
+            "[orb]\nbinary = \"mytool\"\n\n             # why the sync group exists\n             [[job_group]]\nname = \"sync\"\nsteps = [\"generate\"]\n\n             # why the publish group exists\n             [[job_group]]\nname = \"publish\"\nsteps = [\"validate\"]\n",
+        )
+        .unwrap();
+
+        let mut config = load_config(&path).unwrap();
+        config.job_group.as_mut().unwrap()[1].steps = vec!["diff".to_string()];
+        save_config(&path, &config).unwrap();
+
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            written.contains("# why the sync group exists"),
+            "an untouched array-of-tables entry must keep its comment:\n{written}"
+        );
+        assert!(
+            written.contains("# why the publish group exists"),
+            "a changed array-of-tables entry must keep its comment:\n{written}"
+        );
+        assert!(
+            written.contains("diff"),
+            "the change must be applied:\n{written}"
+        );
+    }
+
+    /// serde drops keys it does not know, so a key from a newer generator must
+    /// not be swept away by an older binary writing the file.
+    #[test]
+    fn writing_keeps_keys_the_struct_does_not_model() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gen-circleci-orb.toml");
+        std::fs::write(
+            &path,
+            "[orb]\nbinary = \"mytool\"\n\n             # a section a newer version understands\n             [future_section]\nsetting = true\n",
+        )
+        .unwrap();
+
+        let mut config = load_config(&path).unwrap();
+        config.orb.as_mut().unwrap().orb_dir = Some("orb".to_string());
+        save_config(&path, &config).unwrap();
+
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            written.contains("[future_section]") && written.contains("setting = true"),
+            "an unrecognised section must survive:\n{written}"
+        );
+        assert!(
+            written.contains("# a section a newer version understands"),
+            "and so must its comment:\n{written}"
+        );
+    }
+
+    /// A comment on the same line as a changed value belongs to that value.
+    #[test]
+    fn writing_preserves_a_trailing_comment_on_a_changed_value() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gen-circleci-orb.toml");
+        std::fs::write(&path, "[orb]\nbinary = \"oldtool\" # the binary name\n").unwrap();
+
+        let mut config = load_config(&path).unwrap();
+        config.orb.as_mut().unwrap().binary = Some("newtool".to_string());
+        save_config(&path, &config).unwrap();
+
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            written.contains("newtool"),
+            "the change must apply:\n{written}"
+        );
+        assert!(
+            written.contains("# the binary name"),
+            "a same-line comment must survive a value change:\n{written}"
+        );
+    }
+
+    /// An inline `x = { … }` that the serialiser emits as a `[x]` section must
+    /// not carry its old key decor into the header, rendering `[x ]`.
+    #[test]
+    fn writing_converts_an_inline_table_without_leaking_decor() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gen-circleci-orb.toml");
+        std::fs::write(
+            &path,
+            "orbs = { toolkit = \"old@1.0.0\" }\n\n[orb]\nbinary = \"mytool\"\n",
+        )
+        .unwrap();
+
+        let mut config = load_config(&path).unwrap();
+        config
+            .orbs
+            .as_mut()
+            .unwrap()
+            .insert("toolkit".to_string(), "new@2.0.0".to_string());
+        save_config(&path, &config).unwrap();
+
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            written.contains("[orbs]"),
+            "the section header must render cleanly:\n{written}"
+        );
+        assert!(
+            !written.contains("[orbs "),
+            "stale key decor leaked into the header:\n{written}"
+        );
+        assert!(
+            written.contains("new@2.0.0"),
+            "the change must apply:\n{written}"
+        );
     }
 
     // ── crate-wait defaults live in the struct ─────────────────────────────
