@@ -114,6 +114,97 @@ pub(crate) fn build_record_config(
     }))
 }
 
+/// Resolve one gathered value.
+///
+/// The shape every field in the dialogue shares: take the flag if it was given,
+/// otherwise ask with the recorded value offered as the default, and when there
+/// is nobody to ask, take that same fallback. Writing it once is what keeps the
+/// interactive and non-interactive paths from drifting apart — they previously
+/// disagreed about whether an empty flag counted as a value.
+fn resolve_value(
+    flag: Option<String>,
+    fallback: String,
+    prompt: &str,
+    interactive: bool,
+) -> Result<String> {
+    // A flag that was supplied is an answer, even an empty one: a wrapper
+    // script passing an unset variable must not start blocking on stdin. Empty
+    // is not a usable value here, so it means "take the fallback".
+    if let Some(flag) = flag {
+        return Ok(non_empty(Some(flag)).unwrap_or(fallback));
+    }
+    if !interactive {
+        return Ok(fallback);
+    }
+    Ok(dialoguer::Input::<String>::new()
+        .with_prompt(prompt)
+        .default(fallback)
+        .interact_text()?)
+}
+
+/// As [`resolve_value`], for a value that may legitimately be absent: an empty
+/// answer means "not set" rather than an empty string.
+fn resolve_optional(
+    flag: Option<String>,
+    fallback: Option<String>,
+    prompt: &str,
+    interactive: bool,
+) -> Result<Option<String>> {
+    // As above, a supplied flag is an answer — and here an empty one is a
+    // meaningful answer: "no value", which is exactly how it read before the
+    // resolvers were shared.
+    if let Some(flag) = flag {
+        return Ok(non_empty(Some(flag)));
+    }
+    if !interactive {
+        return Ok(non_empty(fallback));
+    }
+    let answer = dialoguer::Input::<String>::new()
+        .with_prompt(prompt)
+        .default(fallback.unwrap_or_default())
+        .allow_empty(true)
+        .interact_text()?;
+    Ok(non_empty(Some(answer)))
+}
+
+/// As [`resolve_value`], for a comma-separated list.
+fn resolve_list(
+    flag: &[String],
+    fallback: Vec<String>,
+    prompt: &str,
+    interactive: bool,
+) -> Result<Vec<String>> {
+    // Flag values go through the same normalisation as a typed answer: the
+    // generator matches subcommand names exactly, so `--flag "save, push"`
+    // leaving a leading space would silently drop the step it asked for.
+    if !flag.is_empty() {
+        let cleaned = split_list(&flag.join(","));
+        return Ok(if cleaned.is_empty() {
+            fallback
+        } else {
+            cleaned
+        });
+    }
+    if !interactive {
+        return Ok(fallback);
+    }
+    let answer = dialoguer::Input::<String>::new()
+        .with_prompt(prompt)
+        .default(fallback.join(","))
+        .allow_empty(true)
+        .interact_text()?;
+    Ok(split_list(&answer))
+}
+
+/// Split a comma-separated answer, discarding blanks.
+fn split_list(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
 /// Detect leaf subcommands that have a required `orb_path` parameter.
 /// These should receive `default = "src/@orb.yml"` in the config so
 /// orb consumers don't have to supply the path on every invocation.
@@ -643,201 +734,82 @@ impl Init {
         existing: &OrbConfig,
         interactive: bool,
     ) -> Result<GatheredExtras> {
-        // Resolution order: CLI flag > existing config > auto-detected / hardcoded default.
-        let existing_ci = existing.ci.as_ref();
-        let existing_orb = existing.orb.as_ref();
+        // Resolution order, for every field: CLI flag > existing config >
+        // auto-detected or hardcoded default. Interactive runs offer that
+        // fallback as the prompt default rather than taking it silently.
+        let ci = existing.ci.as_ref();
+        let orb = existing.orb.as_ref();
         let record = self.gather_record(existing, interactive)?;
 
-        let effective_push = if !self.git_push_subcommands.is_empty() {
-            self.git_push_subcommands.clone()
+        let home_url = resolve_optional(
+            self.home_url.clone(),
+            orb.and_then(|o| o.home_url.clone()),
+            "Home URL for orb registry (Enter to skip)",
+            interactive,
+        )?;
+        let source_url = resolve_optional(
+            self.source_url.clone(),
+            orb.and_then(|o| o.source_url.clone()),
+            "Source URL for orb registry (Enter to skip)",
+            interactive,
+        )?;
+
+        // The recorded list wins over detection; detection seeds the prompt when
+        // nothing has been recorded yet.
+        let configured_push = orb
+            .and_then(|o| o.git_push_subcommands.clone())
+            .filter(|v| !v.is_empty());
+        let push_prompt = if configured_push.is_none() && !detected.is_empty() {
+            format!(
+                "Push-capable subcommands detected: {} — confirm or override (comma-separated)",
+                detected.join(", ")
+            )
         } else {
-            existing_orb
-                .and_then(|o| o.git_push_subcommands.clone())
+            "Subcommands that push to git, comma-separated (e.g. save)".to_string()
+        };
+        let git_push_subcommands = resolve_list(
+            &self.git_push_subcommands,
+            configured_push.unwrap_or_else(|| detected.to_vec()),
+            &push_prompt,
+            interactive,
+        )?;
+
+        let docker_context = resolve_value(
+            self.docker_context.clone(),
+            non_empty(ci.and_then(|c| c.docker_context.clone()))
+                .unwrap_or_else(|| DEFAULT_DOCKER_CONTEXT.to_string()),
+            "Docker context name (needs: DOCKER_LOGIN, DOCKER_PASSWORD)",
+            interactive,
+        )?;
+        let orb_context = resolve_value(
+            self.orb_context.clone(),
+            non_empty(ci.and_then(|c| c.orb_context.clone()))
+                .unwrap_or_else(|| DEFAULT_ORB_CONTEXT.to_string()),
+            "Orb publishing context name (needs: CIRCLECI_CLI_TOKEN)",
+            interactive,
+        )?;
+
+        // The MCP settings only matter when MCP wiring was asked for, so they
+        // are never prompted for otherwise — the value is still resolved so the
+        // config records something sensible either way.
+        let ask_mcp = interactive && self.mcp;
+        let mcp_context = resolve_list(
+            &self.mcp_context,
+            ci.and_then(|c| c.mcp_context.clone())
                 .filter(|v| !v.is_empty())
-                .unwrap_or_else(|| detected.to_vec())
-        };
-
-        if !interactive {
-            return Ok(GatheredExtras {
-                home_url: self
-                    .home_url
-                    .clone()
-                    .or_else(|| existing_orb.and_then(|o| o.home_url.clone())),
-                source_url: self
-                    .source_url
-                    .clone()
-                    .or_else(|| existing_orb.and_then(|o| o.source_url.clone())),
-                git_push_subcommands: effective_push,
-                docker_context: self
-                    .docker_context
-                    .clone()
-                    .or_else(|| existing_ci.and_then(|ci| ci.docker_context.clone()))
-                    .unwrap_or_else(|| DEFAULT_DOCKER_CONTEXT.to_string()),
-                orb_context: self
-                    .orb_context
-                    .clone()
-                    .or_else(|| existing_ci.and_then(|ci| ci.orb_context.clone()))
-                    .unwrap_or_else(|| DEFAULT_ORB_CONTEXT.to_string()),
-                mcp_context: if !self.mcp_context.is_empty() {
-                    self.mcp_context.clone()
-                } else {
-                    existing_ci
-                        .and_then(|ci| ci.mcp_context.clone())
-                        .filter(|v| !v.is_empty())
-                        .unwrap_or_else(|| vec![DEFAULT_MCP_CONTEXT.to_string()])
-                },
-                mcp_earliest_version: self
-                    .mcp_earliest_version
-                    .clone()
-                    .or_else(|| existing_ci.and_then(|ci| ci.mcp_earliest_version.clone()))
-                    .unwrap_or_else(|| DEFAULT_MCP_EARLIEST_VERSION.to_string()),
-                record,
-            });
-        }
-
-        // Interactive mode — prompt only for fields not already provided via CLI flag.
-        // For un-set fields, the existing config value becomes the prompt default.
-        use dialoguer::Input;
-
-        let home_url = if let Some(v) = self.home_url.clone() {
-            Some(v).filter(|s| !s.is_empty())
-        } else {
-            let default = existing_orb
-                .and_then(|o| o.home_url.clone())
-                .unwrap_or_default();
-            let val = Input::<String>::new()
-                .with_prompt("Home URL for orb registry (Enter to skip)")
-                .default(default)
-                .allow_empty(true)
-                .interact_text()?;
-            if val.is_empty() {
-                None
-            } else {
-                Some(val)
-            }
-        };
-
-        let source_url = if let Some(v) = self.source_url.clone() {
-            Some(v).filter(|s| !s.is_empty())
-        } else {
-            let default = existing_orb
-                .and_then(|o| o.source_url.clone())
-                .unwrap_or_default();
-            let val = Input::<String>::new()
-                .with_prompt("Source URL for orb registry (Enter to skip)")
-                .default(default)
-                .allow_empty(true)
-                .interact_text()?;
-            if val.is_empty() {
-                None
-            } else {
-                Some(val)
-            }
-        };
-
-        let git_push_subcommands = if !self.git_push_subcommands.is_empty() {
-            effective_push
-        } else {
-            let cfg_push = existing_orb
-                .and_then(|o| o.git_push_subcommands.clone())
-                .unwrap_or_default();
-            let current = if !cfg_push.is_empty() {
-                cfg_push.join(",")
-            } else {
-                detected.join(",")
-            };
-            let prompt = if !detected.is_empty() && cfg_push.is_empty() {
-                format!(
-                    "Push-capable subcommands detected: {} — confirm or override (comma-separated)",
-                    detected.join(", ")
-                )
-            } else {
-                "Subcommands that push to git, comma-separated (e.g. save)".to_string()
-            };
-            let val = Input::<String>::new()
-                .with_prompt(prompt)
-                .default(current)
-                .allow_empty(true)
-                .interact_text()?;
-            val.split(',')
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(str::to_string)
-                .collect()
-        };
-
-        let docker_context = if let Some(v) = self.docker_context.clone() {
-            v
-        } else {
-            let default = existing_ci
-                .and_then(|ci| ci.docker_context.clone())
-                .unwrap_or_else(|| DEFAULT_DOCKER_CONTEXT.to_string());
-            Input::<String>::new()
-                .with_prompt("Docker context name (needs: DOCKER_LOGIN, DOCKER_PASSWORD)")
-                .default(default)
-                .interact_text()?
-        };
-
-        let orb_context = if let Some(v) = self.orb_context.clone() {
-            v
-        } else {
-            let default = existing_ci
-                .and_then(|ci| ci.orb_context.clone())
-                .unwrap_or_else(|| DEFAULT_ORB_CONTEXT.to_string());
-            Input::<String>::new()
-                .with_prompt("Orb publishing context name (needs: CIRCLECI_CLI_TOKEN)")
-                .default(default)
-                .interact_text()?
-        };
-
-        let mcp_context = if self.mcp {
-            if !self.mcp_context.is_empty() {
-                self.mcp_context.clone()
-            } else {
-                let default = existing_ci
-                    .and_then(|ci| ci.mcp_context.as_ref())
-                    .filter(|v| !v.is_empty())
-                    .map(|v| v.join(","))
-                    .unwrap_or_else(|| DEFAULT_MCP_CONTEXT.to_string());
-                let val = Input::<String>::new()
-                    .with_prompt(
-                        "MCP context names, comma-separated (needs: GITHUB_TOKEN with contents:write + bypass branch protection, BOT_GPG_KEY, BOT_TRUST, BOT_USER_NAME, BOT_USER_EMAIL, BOT_SIGN_KEY)",
-                    )
-                    .default(default)
-                    .interact_text()?;
-                val.split(',')
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty())
-                    .map(str::to_string)
-                    .collect()
-            }
-        } else if !self.mcp_context.is_empty() {
-            self.mcp_context.clone()
-        } else {
-            existing_ci
-                .and_then(|ci| ci.mcp_context.clone())
-                .filter(|v| !v.is_empty())
-                .unwrap_or_else(|| vec![DEFAULT_MCP_CONTEXT.to_string()])
-        };
-
-        let mcp_earliest_version = if self.mcp {
-            if let Some(v) = self.mcp_earliest_version.clone() {
-                v
-            } else {
-                let default = existing_ci
-                    .and_then(|ci| ci.mcp_earliest_version.clone())
-                    .unwrap_or_else(|| DEFAULT_MCP_EARLIEST_VERSION.to_string());
-                Input::<String>::new()
-                    .with_prompt("Earliest orb version to include in MCP snapshots")
-                    .default(default)
-                    .interact_text()?
-            }
-        } else {
-            self.mcp_earliest_version
-                .clone()
-                .or_else(|| existing_ci.and_then(|ci| ci.mcp_earliest_version.clone()))
-                .unwrap_or_else(|| DEFAULT_MCP_EARLIEST_VERSION.to_string())
-        };
+                .unwrap_or_else(|| vec![DEFAULT_MCP_CONTEXT.to_string()]),
+            "MCP context names, comma-separated (needs: GITHUB_TOKEN with contents:write \
+             + bypass branch protection, BOT_GPG_KEY, BOT_TRUST, BOT_USER_NAME, \
+             BOT_USER_EMAIL, BOT_SIGN_KEY)",
+            ask_mcp,
+        )?;
+        let mcp_earliest_version = resolve_value(
+            self.mcp_earliest_version.clone(),
+            non_empty(ci.and_then(|c| c.mcp_earliest_version.clone()))
+                .unwrap_or_else(|| DEFAULT_MCP_EARLIEST_VERSION.to_string()),
+            "Earliest orb version to include in MCP snapshots",
+            ask_mcp,
+        )?;
 
         Ok(GatheredExtras {
             home_url,
@@ -1540,6 +1512,69 @@ mod tests {
             record_push_ssh_fingerprint: None,
             record_contexts: vec![],
         }
+    }
+
+    // ── the shared resolvers ───────────────────────────────────────────────
+
+    /// A flag that was given — even as an empty string — is an answer. Falling
+    /// through to a prompt would block a wrapper script passing an unset
+    /// variable, which previously just proceeded.
+    ///
+    /// `interactive = true` here is the assertion: with no terminal attached a
+    /// prompt fails, so returning `Ok` proves none was issued.
+    #[test]
+    fn an_explicitly_empty_flag_is_answered_not_prompted() {
+        assert_eq!(
+            resolve_optional(Some(String::new()), Some("recorded".into()), "?", true).unwrap(),
+            None,
+            "an empty optional flag means 'none', without asking"
+        );
+        assert_eq!(
+            resolve_value(Some(String::new()), "fallback".into(), "?", true).unwrap(),
+            "fallback",
+            "an empty required flag falls back, without asking"
+        );
+        assert_eq!(
+            resolve_list(&[String::new()], vec!["recorded".into()], "?", true).unwrap(),
+            vec!["recorded".to_string()],
+            "an empty list flag falls back, without asking"
+        );
+    }
+
+    /// A blank recorded value is not a value: the hardcoded default must still
+    /// apply, or `[ci] docker_context = ""` silently yields a job with no
+    /// context and a registry push that cannot authenticate.
+    #[test]
+    fn a_blank_recorded_value_does_not_defeat_the_default() {
+        let existing = OrbConfig {
+            ci: Some(CiSection {
+                docker_context: Some(String::new()),
+                orb_context: Some("   ".to_string()),
+                ..CiSection::default()
+            }),
+            ..OrbConfig::default()
+        };
+        let init = Init {
+            docker_context: None,
+            orb_context: None,
+            ..make_init(false)
+        };
+        let extras = init.gather_extras(&[], &existing, false).unwrap();
+        assert_eq!(extras.docker_context, DEFAULT_DOCKER_CONTEXT);
+        assert_eq!(extras.orb_context, DEFAULT_ORB_CONTEXT);
+    }
+
+    /// Flag values and prompt answers must be normalised the same way — the
+    /// generator matches subcommand names exactly, so a stray space silently
+    /// drops the step the entry was asking for.
+    #[test]
+    fn list_flag_values_are_trimmed_like_prompt_answers() {
+        let flags = vec!["save".to_string(), " push".to_string(), String::new()];
+        assert_eq!(
+            resolve_list(&flags, vec![], "?", false).unwrap(),
+            vec!["save".to_string(), "push".to_string()],
+            "flag values must be trimmed and blanks dropped, as answers are"
+        );
     }
 
     // ── gather_core: the values init cannot run without (#226) ─────────────
