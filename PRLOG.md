@@ -26,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - widen the crates.io propagation gate to ten minutes(pr [#245])
 - let init gather its required values interactively(pr [#246])
 - split the over-long RUN instructions in the Dockerfile(pr [#263])
+- keep comments when writing gen-circleci-orb.toml(pr [#264])
 
 ## [0.1.4] - 2026-07-27
 
@@ -841,6 +842,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#259]: https://github.com/jerus-org/gen-circleci-orb/pull/259
 [#261]: https://github.com/jerus-org/gen-circleci-orb/pull/261
 [#263]: https://github.com/jerus-org/gen-circleci-orb/pull/263
+[#264]: https://github.com/jerus-org/gen-circleci-orb/pull/264
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.4...HEAD
 [0.1.4]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.2...v0.1.3
