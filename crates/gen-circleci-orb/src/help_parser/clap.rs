@@ -132,14 +132,16 @@ fn commands_block(text: &str) -> impl Iterator<Item = &str> {
         // header is absent this consumes the lot, which is the empty case.
         .skip_while(|line| line.trim() != "Commands:")
         .skip(1)
-        // Blank lines are spacing within the block, not the end of it — clap
-        // emits one between groups.
+        // Blank lines are spacing, not the end of the block.
         .filter(|line| !line.trim().is_empty())
-        // Tested on the *untrimmed* line: what separates a header from a
-        // command line is that the header is not indented. Trimming first
-        // discards exactly that, so any description ending in a colon looked
-        // like a header and truncated the block (#278).
-        .take_while(|line| !is_top_level_section(line))
+        // An entry in the block is indented; a section header and any
+        // after-help prose are at column 0. Indentation is therefore the whole
+        // rule, and testing it on the *untrimmed* line is the point — trimming
+        // first discards exactly the thing that distinguishes them, which is
+        // how a description ending in a colon came to look like a header and
+        // truncate the block (#278), and how prose following a trailing
+        // `Commands:` section came to be read as subcommands (#280).
+        .take_while(|line| leading_spaces(line) > 0)
         .map(str::trim)
 }
 
@@ -994,6 +996,25 @@ Commands:
   run   Run the thing
 Options:
   -h, --help  Print help
+"#;
+        assert_eq!(extract_subcommand_names(help), vec!["run"]);
+    }
+
+    /// When `Commands:` is the last section, clap's after-help line follows it
+    /// at column 0. Reading that as a command produced a fully-formed bogus job
+    /// in the published orb (#280) — the prose's first word, `Run`, became a
+    /// subcommand whose help text was clap's own "unrecognized subcommand"
+    /// error.
+    #[test]
+    fn after_help_prose_following_the_block_is_not_read_as_commands() {
+        let help = r#"A tool
+
+Usage: tool <COMMAND>
+
+Commands:
+  run   Run the thing
+
+Run `tool help <cmd>` for more information.
 "#;
         assert_eq!(extract_subcommand_names(help), vec!["run"]);
     }
