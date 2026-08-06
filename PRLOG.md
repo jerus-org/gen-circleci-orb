@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - docs-escape [orb] and metavars in doc comments(pr [#259])
 - chore-depend on pcu without its attest feature(pr [#261])
 - refactor-resolve init's gathered values through shared helpers(pr [#270])
+- refactor-split strip_managed's walk from its rules(pr [#274])
 
 ### Fixed
 
@@ -847,6 +848,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#264]: https://github.com/jerus-org/gen-circleci-orb/pull/264
 [#270]: https://github.com/jerus-org/gen-circleci-orb/pull/270
 [#272]: https://github.com/jerus-org/gen-circleci-orb/pull/272
+[#274]: https://github.com/jerus-org/gen-circleci-orb/pull/274
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.4...HEAD
 [0.1.4]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.2...v0.1.3
