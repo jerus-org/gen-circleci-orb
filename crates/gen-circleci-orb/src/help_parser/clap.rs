@@ -120,27 +120,27 @@ pub fn extract_subcommand_names(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// The non-empty lines of the `Commands:` block, in order.
+/// The `Commands:` block's entries, trimmed, in order. Empty when the help text
+/// has no such block.
 ///
-/// Empty when the help text has no such block. Locating the block is kept
-/// separate from reading names out of it so neither has to be understood while
-/// following the other — the two were interleaved in one walk, and the nesting
-/// that produced was the whole of its complexity (#257).
+/// Membership is decided by indentation alone: clap indents every entry, while
+/// a following section header or after-help paragraph returns to column 0. The
+/// test must therefore run on the *untrimmed* line — trimming first discards
+/// the only thing that separates an entry from what follows it.
+///
+/// The `Options:`/`Arguments:` parser deliberately does not use this rule: an
+/// option's description wraps across several indented lines, so it needs
+/// `collect_block`'s declaration-boundary test rather than indentation. Command
+/// entries never wrap, which is what makes the simpler rule sound here.
 fn commands_block(text: &str) -> impl Iterator<Item = &str> {
     text.lines()
         // Everything up to and including the header is preamble. When the
         // header is absent this consumes the lot, which is the empty case.
         .skip_while(|line| line.trim() != "Commands:")
         .skip(1)
-        // Blank lines are spacing, not the end of the block.
+        // Blank lines are spacing within the block. Filtered before the
+        // terminator, which would otherwise stop on one.
         .filter(|line| !line.trim().is_empty())
-        // An entry in the block is indented; a section header and any
-        // after-help prose are at column 0. Indentation is therefore the whole
-        // rule, and testing it on the *untrimmed* line is the point — trimming
-        // first discards exactly the thing that distinguishes them, which is
-        // how a description ending in a colon came to look like a header and
-        // truncate the block (#278), and how prose following a trailing
-        // `Commands:` section came to be read as subcommands (#280).
         .take_while(|line| leading_spaces(line) > 0)
         .map(str::trim)
 }
@@ -924,8 +924,8 @@ Options:
         assert!(extract_subcommand_names(help).is_empty());
     }
 
-    /// The block ends at the next section header, so anything after it — an
-    /// option, a value — must never be mistaken for a subcommand.
+    /// The block ends at the next unindented line, so a following section and
+    /// its contents — options, values — are never mistaken for subcommands.
     #[test]
     fn the_block_ends_at_the_next_section_header() {
         let help = r#"Usage: tool <COMMAND>
@@ -966,11 +966,8 @@ Commands:
         assert_eq!(extract_subcommand_names(help), vec!["run", "verify"]);
     }
 
-    /// A description ending in a colon must not be mistaken for a section
-    /// header (#278). It was: the terminator test ran on the trimmed line, so
-    /// the indentation that tells a command line from a header had already been
-    /// removed — truncating the block and silently dropping that subcommand and
-    /// every one after it from the generated orb.
+    /// An entry is indented whatever its description ends in, so a
+    /// colon-terminated one is still an entry and not a section header (#278).
     #[test]
     fn a_description_ending_in_a_colon_does_not_end_the_block() {
         let help = r#"Usage: tool <COMMAND>
@@ -986,25 +983,8 @@ Commands:
         );
     }
 
-    /// The guard that distinguishes them is indentation, so a real header at
-    /// column 0 must still end the block.
-    #[test]
-    fn an_unindented_header_still_ends_the_block() {
-        let help = r#"Usage: tool <COMMAND>
-
-Commands:
-  run   Run the thing
-Options:
-  -h, --help  Print help
-"#;
-        assert_eq!(extract_subcommand_names(help), vec!["run"]);
-    }
-
     /// When `Commands:` is the last section, clap's after-help line follows it
-    /// at column 0. Reading that as a command produced a fully-formed bogus job
-    /// in the published orb (#280) — the prose's first word, `Run`, became a
-    /// subcommand whose help text was clap's own "unrecognized subcommand"
-    /// error.
+    /// at column 0 — outside the block, and so not a subcommand (#280).
     #[test]
     fn after_help_prose_following_the_block_is_not_read_as_commands() {
         let help = r#"A tool
