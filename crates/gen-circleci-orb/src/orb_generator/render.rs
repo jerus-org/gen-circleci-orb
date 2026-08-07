@@ -3098,15 +3098,43 @@ mod tests {
         );
     }
 
-    /// The Dockerfile as Docker will run it: `\`-continuations joined and runs
-    /// of whitespace collapsed. Assertions about a *command* belong here so they
-    /// survive a reflow; assertions about layout belong on the raw text.
+    /// The Dockerfile as Docker will read it: `\`-continuations joined, runs of
+    /// whitespace collapsed, line structure otherwise preserved. Assertions
+    /// about a *command* belong here so they survive a reflow; assertions about
+    /// layout belong on the raw text.
+    ///
+    /// Only real continuations are joined, because an unmarked break is not one:
+    /// Docker ends the instruction there and reads the next line as a new one.
+    /// Leaving that newline in place is what lets an assertion tell the two
+    /// apart.
     fn joined_commands(dockerfile: &str) -> String {
         dockerfile
             .replace("\\\n", " ")
-            .split_whitespace()
+            .lines()
+            .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
             .collect::<Vec<_>>()
-            .join(" ")
+            .join("\n")
+    }
+
+    /// The property #262 is about, on the helper itself rather than only through
+    /// the assertions that use it: a command split *without* a `\` must not read
+    /// like a continued one.
+    #[test]
+    fn joined_commands_keeps_an_unmarked_line_break_visible() {
+        let continued = "RUN foo \\\n    --bar baz\n";
+        let broken = "RUN foo\n    --bar baz\n";
+
+        assert_eq!(
+            joined_commands(continued),
+            "RUN foo --bar baz",
+            "a real continuation is joined"
+        );
+        assert_eq!(
+            joined_commands(broken),
+            "RUN foo\n--bar baz",
+            "an unmarked break stays where Docker would see it, so it cannot \
+             match an assertion written for the continued form"
+        );
     }
 
     /// The `cargo binstall` tool list as emitted, one tool per line.
