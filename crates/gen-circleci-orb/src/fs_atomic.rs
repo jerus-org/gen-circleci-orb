@@ -11,19 +11,15 @@ use std::path::{Path, PathBuf};
 ///
 /// A sibling, because `rename` is only atomic within one filesystem.
 ///
-/// The suffix carries the process id and a nanosecond clock reading to keep
-/// concurrent writers apart: if two staged to one path, the second would
-/// truncate the first's bytes and the first would rename and report success
-/// having published the second's contents. Process ids alone are not enough —
-/// containers sharing a bind-mounted workspace number theirs independently.
-/// This makes a collision improbable rather than impossible.
+/// The suffix is a v4 UUID, so concurrent writers cannot stage to one path: if
+/// they did, the second would truncate the first's bytes and the first would
+/// rename and report success having published the second's contents. Neither a
+/// process id nor a clock reading is sufficient — containers sharing a
+/// bind-mounted workspace number their processes independently, and can read
+/// the same instant.
 pub(crate) fn write_temp_path(path: &Path) -> PathBuf {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.subsec_nanos())
-        .unwrap_or_default();
     let mut name = path.file_name().unwrap_or_default().to_os_string();
-    name.push(format!(".{}.{nanos}.tmp", std::process::id()));
+    name.push(format!(".{}.tmp", uuid::Uuid::new_v4()));
     path.with_file_name(name)
 }
 
@@ -113,6 +109,17 @@ mod tests {
         let temp = write_temp_path(path);
         assert_eq!(temp.parent(), path.parent());
         assert_ne!(temp.file_name(), path.file_name());
+    }
+
+    /// Two writers must never stage to one path — the second would truncate the
+    /// first's bytes, and the first would rename and publish the second's
+    /// contents while reporting success.
+    #[test]
+    fn each_staging_path_is_distinct() {
+        let path = Path::new("/some/where/gen-circleci-orb.toml");
+        let paths: std::collections::HashSet<_> =
+            (0..1000).map(|_| write_temp_path(path)).collect();
+        assert_eq!(paths.len(), 1000, "staging paths must not repeat");
     }
 
     #[test]
