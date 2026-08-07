@@ -106,33 +106,43 @@ fn extract_description(text: &str) -> String {
 }
 
 /// Extract subcommand names from the `Commands:` section, skipping `help`.
+///
+/// `help` is excluded because clap synthesises it for every command that has
+/// subcommands; it is not part of the CLI's own surface and has no place in the
+/// generated orb.
 pub fn extract_subcommand_names(text: &str) -> Vec<String> {
-    let mut in_commands = false;
-    let mut names = Vec::new();
+    commands_block(text)
+        // Each command line starts with the name, optionally followed by a
+        // description.
+        .filter_map(|line| line.split_whitespace().next())
+        .filter(|name| *name != "help")
+        .map(str::to_string)
+        .collect()
+}
 
-    for line in text.lines() {
-        let trimmed = line.trim();
-        if trimmed == "Commands:" {
-            in_commands = true;
-            continue;
-        }
-        if in_commands {
-            if trimmed.is_empty() {
-                continue;
-            }
-            // A new section header ends the commands block
-            if is_section_header(trimmed) {
-                break;
-            }
-            // Each command line starts with the command name, optionally followed by description
-            if let Some(name) = trimmed.split_whitespace().next() {
-                if name != "help" {
-                    names.push(name.to_string());
-                }
-            }
-        }
-    }
-    names
+/// The `Commands:` block's entries, trimmed, in order. Empty when the help text
+/// has no such block.
+///
+/// Membership is decided by indentation alone: clap indents every entry, while
+/// a following section header or after-help paragraph returns to column 0. The
+/// test must therefore run on the *untrimmed* line — trimming first discards
+/// the only thing that separates an entry from what follows it.
+///
+/// The `Options:`/`Arguments:` parser deliberately does not use this rule: an
+/// option's description wraps across several indented lines, so it needs
+/// `collect_block`'s declaration-boundary test rather than indentation. Command
+/// entries never wrap, which is what makes the simpler rule sound here.
+fn commands_block(text: &str) -> impl Iterator<Item = &str> {
+    text.lines()
+        // Everything up to and including the header is preamble. When the
+        // header is absent this consumes the lot, which is the empty case.
+        .skip_while(|line| line.trim() != "Commands:")
+        .skip(1)
+        // Blank lines are spacing within the block. Filtered before the
+        // terminator, which would otherwise stop on one.
+        .filter(|line| !line.trim().is_empty())
+        .take_while(|line| leading_spaces(line) > 0)
+        .map(str::trim)
 }
 
 /// Parse the Usage line to find flags listed outside any `[...]` group.
@@ -900,6 +910,117 @@ Commands:
 "#;
         let names = extract_subcommand_names(help);
         assert_eq!(names, vec!["run"]);
+    }
+
+    // ── #257: the edges of the Commands: block ─────────────────────────────
+
+    #[test]
+    fn no_commands_section_yields_nothing() {
+        let help = r#"Usage: tool [OPTIONS]
+
+Options:
+  -h, --help  Print help
+"#;
+        assert!(extract_subcommand_names(help).is_empty());
+    }
+
+    /// The block ends at the next unindented line, so a following section and
+    /// its contents — options, values — are never mistaken for subcommands.
+    #[test]
+    fn the_block_ends_at_the_next_section_header() {
+        let help = r#"Usage: tool <COMMAND>
+
+Commands:
+  run   Run the thing
+
+Options:
+  -h, --help     Print help
+  -V, --version  Print version
+"#;
+        assert_eq!(extract_subcommand_names(help), vec!["run"]);
+    }
+
+    /// A blank line inside the block is spacing, not a terminator: clap emits
+    /// one between groups of commands.
+    #[test]
+    fn a_blank_line_inside_the_block_does_not_end_it() {
+        let help = r#"Usage: tool <COMMAND>
+
+Commands:
+  run     Run the thing
+
+  verify  Verify the thing
+"#;
+        assert_eq!(extract_subcommand_names(help), vec!["run", "verify"]);
+    }
+
+    /// Only the name is taken, however widely the description is spaced.
+    #[test]
+    fn only_the_first_word_of_each_line_is_taken() {
+        let help = r#"Usage: tool <COMMAND>
+
+Commands:
+  run             Run the thing
+  verify   Verify it
+"#;
+        assert_eq!(extract_subcommand_names(help), vec!["run", "verify"]);
+    }
+
+    /// An entry is indented whatever its description ends in, so a
+    /// colon-terminated one is still an entry and not a section header (#278).
+    #[test]
+    fn a_description_ending_in_a_colon_does_not_end_the_block() {
+        let help = r#"Usage: tool <COMMAND>
+
+Commands:
+  run     Run the thing
+  verify  Verify it, including:
+  deploy  Deploy the thing
+"#;
+        assert_eq!(
+            extract_subcommand_names(help),
+            vec!["run", "verify", "deploy"]
+        );
+    }
+
+    /// When `Commands:` is the last section, clap's after-help line follows it
+    /// at column 0 — outside the block, and so not a subcommand (#280).
+    #[test]
+    fn after_help_prose_following_the_block_is_not_read_as_commands() {
+        let help = r#"A tool
+
+Usage: tool <COMMAND>
+
+Commands:
+  run   Run the thing
+
+Run `tool help <cmd>` for more information.
+"#;
+        assert_eq!(extract_subcommand_names(help), vec!["run"]);
+    }
+
+    /// A `Commands:` block that runs to the end of the help text has no
+    /// terminating header, so the walk has to stop at end of input.
+    #[test]
+    fn a_block_running_to_end_of_input_is_read_whole() {
+        let help = "Usage: tool <COMMAND>\n\nCommands:\n  run   Run it\n  stop  Stop it";
+        assert_eq!(extract_subcommand_names(help), vec!["run", "stop"]);
+    }
+
+    /// Everything before the header is skipped, even a line that looks like a
+    /// command listing.
+    #[test]
+    fn lines_before_the_commands_header_are_ignored() {
+        let help = r#"A tool that does things
+
+  looks-like-a-command  but is prose
+
+Usage: tool <COMMAND>
+
+Commands:
+  run   Run the thing
+"#;
+        assert_eq!(extract_subcommand_names(help), vec!["run"]);
     }
 
     // ── parameter parsing ──────────────────────────────────────────────────
