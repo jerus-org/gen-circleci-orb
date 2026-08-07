@@ -76,33 +76,59 @@ fn parse_subcommand(
     })
 }
 
-/// Extract the first non-empty paragraph before any section header as the description.
+/// The heading that opens the subcommand list.
+const COMMANDS_HEADING: &str = "Commands:";
+
+/// Section headings clap renders after the usage line.
+///
+/// Only these end a description, and only when there is no usage line to end it
+/// first. A description sentence may itself end in a colon, so "ends in a colon"
+/// cannot be the test — and unlike in the `Commands:` block, indentation cannot
+/// tell them apart either, because clap sets the `about` text at column 0
+/// exactly as it does a heading.
+///
+/// A closed list rather than [`is_section_header`]'s general test: the two are
+/// separate on purpose, so a heading added here needs no change there and vice
+/// versa. A heading clap emits that is missing from this list is only reachable
+/// on the no-usage-line path, where it would be read as description text.
+///
+/// Both spellings are listed because the wrapped binary is whatever the consumer
+/// configured, which need not be clap 4: clap 2 and 3 named these sections
+/// differently and rendered them upper case. Matching is case-insensitive.
+const CLAP_SECTION_HEADINGS: &[&str] = &[
+    // clap 4
+    COMMANDS_HEADING,
+    "Arguments:",
+    "Options:",
+    // clap 2 / 3
+    "Subcommands:",
+    "Args:",
+    "Flags:",
+];
+
+/// True when `line` is where the description stops.
+fn ends_description(line: &str) -> bool {
+    // The usage line is the boundary clap actually guarantees. clap 4 puts the
+    // usage on it and clap 2/3 on the line below, so match on the prefix.
+    line.get(..6)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("Usage:"))
+        // The headings are the fallback for help text that has no usage line.
+        || CLAP_SECTION_HEADINGS
+            .iter()
+            .any(|heading| line.eq_ignore_ascii_case(heading))
+}
+
+/// Extract the leading paragraph — clap's `about` text — as the description.
+///
+/// Blank lines are dropped wherever they fall, not only at the ends: a paragraph
+/// break is one separator between sentences, not two.
 fn extract_description(text: &str) -> String {
-    let mut lines = Vec::new();
-    for line in text.lines() {
-        let trimmed = line.trim();
-        // Stop at section headers (capitalised word followed by colon)
-        if is_section_header(trimmed) {
-            break;
-        }
-        // Skip "Usage:" lines
-        if trimmed.starts_with("Usage:") {
-            break;
-        }
-        lines.push(trimmed.to_string());
-    }
-    // Drop leading/trailing blanks and join
-    let joined: Vec<&str> = lines
-        .iter()
-        .map(|s| s.as_str())
-        .skip_while(|s| s.is_empty())
-        .collect();
-    // Trim trailing empty lines
-    let end = joined
-        .iter()
-        .rposition(|s| !s.is_empty())
-        .map_or(0, |i| i + 1);
-    joined[..end].join(" ")
+    text.lines()
+        .map(str::trim)
+        .take_while(|line| !ends_description(line))
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Extract subcommand names from the `Commands:` section, skipping `help`.
@@ -136,7 +162,7 @@ fn commands_block(text: &str) -> impl Iterator<Item = &str> {
     text.lines()
         // Everything up to and including the header is preamble. When the
         // header is absent this consumes the lot, which is the empty case.
-        .skip_while(|line| line.trim() != "Commands:")
+        .skip_while(|line| line.trim() != COMMANDS_HEADING)
         .skip(1)
         // Blank lines are spacing within the block. Filtered before the
         // terminator, which would otherwise stop on one.
@@ -839,10 +865,15 @@ fn clean_annotations(text: &str) -> String {
     candidate.trim().to_string()
 }
 
-/// True only for top-level section headers (no leading whitespace).
-/// `Possible values:` appears indented inside option blocks and is NOT a section header.
+/// True when `line` reads as a heading: a trailing colon on something that is
+/// not an option declaration.
+///
+/// Says nothing about indentation. `Possible values:` inside an option block
+/// satisfies this just as `Options:` does, so a caller that needs a *top-level*
+/// heading must test the indentation of the untrimmed line itself — which is
+/// what [`is_top_level_section`] is for.
 fn is_section_header(line: &str) -> bool {
-    line.ends_with(':') && !line.starts_with(' ') && !line.starts_with('-')
+    line.ends_with(':') && !line.starts_with('-')
 }
 
 /// True when the untrimmed `line` is a top-level section header.
@@ -873,6 +904,99 @@ Options:
 "#;
         let desc = extract_description(help);
         assert_eq!(desc, "Generate MCP servers from CircleCI orb definitions");
+    }
+
+    // ── #281: where a description ends ─────────────────────────────────────
+
+    /// A description sentence may itself end in a colon, and must not be read
+    /// as a section heading. The stakes are the whole description: it is the
+    /// orb's registry text and every job's, so losing it is silent and total.
+    #[test]
+    fn a_description_whose_first_line_ends_in_a_colon_survives() {
+        let help = r#"This tool supports the following backends:
+
+binary and source.
+
+Usage: tool <COMMAND>
+
+Commands:
+  run   Run the thing
+"#;
+        assert_eq!(
+            extract_description(help),
+            "This tool supports the following backends: binary and source."
+        );
+    }
+
+    /// Fallback for help text with no usage line: a heading clap emits still
+    /// ends the description.
+    #[test]
+    fn a_description_stops_at_a_clap_heading_when_there_is_no_usage_line() {
+        let help = r#"A tool that does things
+
+Commands:
+  run   Run the thing
+"#;
+        assert_eq!(extract_description(help), "A tool that does things");
+    }
+
+    /// The wrapped binary is whatever the consumer configured and need not be
+    /// clap 4. clap 2 and 3 upper-case their headings, and matching only the
+    /// clap 4 spelling left such help text with no boundary at all — the whole
+    /// of it, usage and options included, became the description.
+    #[test]
+    fn an_upper_case_usage_heading_still_ends_the_description() {
+        let help = r#"mytool 1.0
+Does things
+
+USAGE:
+    mytool [OPTIONS]
+
+OPTIONS:
+    -h, --help    Print help
+"#;
+        assert_eq!(extract_description(help), "mytool 1.0 Does things");
+    }
+
+    /// The same for the fallback path, where there is no usage line to stop at.
+    #[test]
+    fn an_upper_case_heading_ends_the_description_without_a_usage_line() {
+        let help = r#"mytool 1.0
+Does things
+
+SUBCOMMANDS:
+    run    Run it
+"#;
+        assert_eq!(extract_description(help), "mytool 1.0 Does things");
+    }
+
+    /// …but only those headings. An ordinary sentence ending in a colon is not
+    /// one, even without a usage line to stop at first.
+    #[test]
+    fn a_colon_line_is_not_a_heading_without_a_usage_line() {
+        let help = r#"Supported backends:
+
+binary and source.
+
+Options:
+  -h, --help  Print help
+"#;
+        assert_eq!(
+            extract_description(help),
+            "Supported backends: binary and source."
+        );
+    }
+
+    /// `is_section_header` says nothing about indentation. Its one caller,
+    /// `is_top_level_section`, hands it a trimmed line and applies the
+    /// indentation test itself on the untrimmed one — so a guard inside
+    /// `is_section_header` could never fire, and a caller needing the
+    /// distinction must go through `is_top_level_section`.
+    #[test]
+    fn indentation_is_judged_by_is_top_level_section_alone() {
+        assert!(is_section_header("Possible values:"));
+        assert!(!is_top_level_section("      Possible values:"));
+        assert!(is_top_level_section("Options:"));
     }
 
     #[test]
