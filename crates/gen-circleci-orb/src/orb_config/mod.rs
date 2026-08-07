@@ -65,77 +65,7 @@ pub fn save_config(path: &Path, config: &OrbConfig) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    write_atomically(path, &content)
-}
-
-/// Where the new contents are staged before replacing `path`.
-///
-/// A sibling, deliberately: `rename` is only atomic within one filesystem, so a
-/// temporary elsewhere — `/tmp`, say — could be on another and turn the rename
-/// back into a copy.
-///
-/// Named per process so two saves running at once stage separately. Sharing one
-/// name would let the second overwrite the first's staged content before the
-/// first renames, and the first would then report success having published the
-/// second's config.
-fn write_temp_path(path: &Path) -> std::path::PathBuf {
-    let mut name = path.file_name().unwrap_or_default().to_os_string();
-    name.push(format!(".{}.tmp", std::process::id()));
-    path.with_file_name(name)
-}
-
-/// Write `content` to `path` by staging it beside the target and renaming over.
-///
-/// This file holds comments that exist nowhere else — why each image digest is
-/// pinned, which Renovate manager maintains it — and every save rewrites the
-/// only copy. Writing in place would mean an interruption between truncate and
-/// flush leaves a partial file with nothing to recover from. `rename` within a
-/// filesystem is atomic, so a reader sees either the old contents or the new,
-/// never a half-written mix.
-/// Because the rename installs a *new* inode where an in-place write reused the
-/// existing one, two properties have to be carried over deliberately: the
-/// target's permissions, and the fact that it may be a symlink.
-fn write_atomically(path: &Path, content: &str) -> Result<()> {
-    use std::io::Write;
-
-    // Write *through* a symlink, not over it. Renaming onto the link's own path
-    // would replace it with a regular file and leave the file it pointed at
-    // holding the previous config — a config the user is still editing.
-    let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    let temp = write_temp_path(&target);
-
-    let staged = || -> std::io::Result<()> {
-        let mut file = std::fs::File::create(&temp)?;
-        file.write_all(content.as_bytes())?;
-        // Get the bytes to stable storage before the rename commits. Without
-        // this the rename's metadata can reach disk first, so a machine that
-        // dies moments later comes back to a present, empty config — the exact
-        // loss this exists to prevent, with the old contents already unlinked.
-        file.sync_all()
-    }();
-    staged.with_context(|| format!("cannot stage the new contents at {}", temp.display()))?;
-
-    // A config may have been chmodded deliberately: it can name CircleCI
-    // contexts and pinned images. The staged file is created at the umask
-    // default, so without this a save silently widens the permissions.
-    if let Ok(existing) = std::fs::metadata(&target) {
-        let _ = std::fs::set_permissions(&temp, existing.permissions());
-    }
-
-    if let Err(e) = std::fs::rename(&temp, &target) {
-        // Leave no litter beside the config when the replace itself fails.
-        let _ = std::fs::remove_file(&temp);
-        return Err(e).with_context(|| format!("cannot replace {}", target.display()));
-    }
-
-    // The rename itself is durable only once the directory entry is. Best
-    // effort: not every platform lets a directory be opened this way.
-    if let Some(parent) = target.parent() {
-        if let Ok(dir) = std::fs::File::open(parent) {
-            let _ = dir.sync_all();
-        }
-    }
-    Ok(())
+    crate::fs_atomic::write_atomically(path, &content)
 }
 
 /// Apply `rendered` onto `existing`, preserving the latter's formatting.
@@ -1122,42 +1052,26 @@ steps:
         load_config(path).unwrap()
     }
 
-    #[test]
-    fn a_successful_write_leaves_no_temporary_behind() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("gen-circleci-orb.toml");
-        let mut config = annotated_config(&path);
-        config.orb.as_mut().unwrap().binary = Some("renamed".to_string());
-
-        save_config(&path, &config).unwrap();
-
-        let entries: Vec<_> = std::fs::read_dir(dir.path())
-            .unwrap()
-            .map(|e| e.unwrap().file_name())
-            .collect();
-        assert_eq!(
-            entries.len(),
-            1,
-            "stray files in the directory: {entries:?}"
-        );
-    }
-
     /// The file carries comments that exist nowhere else, so a write that fails
     /// part-way must leave the previous contents intact rather than a truncated
     /// or empty file. Writing to a sibling temporary and renaming over the
     /// target is what buys that: the target is only ever replaced whole.
     ///
-    /// The failure is induced by occupying the staging path with a directory:
-    /// deterministic, and needing no permissions games that would behave
-    /// differently for root in a CI container.
+    /// The failure is induced with a read-only target — a real, supported
+    /// refusal rather than a contrived one, and it reads the mode bits rather
+    /// than attempting a write, so it behaves the same for root in a CI
+    /// container.
+    #[cfg(unix)]
     #[test]
     fn a_failed_write_leaves_the_original_untouched() {
+        use std::os::unix::fs::PermissionsExt;
+
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("gen-circleci-orb.toml");
         let mut config = annotated_config(&path);
         let before = std::fs::read_to_string(&path).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o444)).unwrap();
 
-        std::fs::create_dir(write_temp_path(&path)).unwrap();
         config.orb.as_mut().unwrap().binary = Some("renamed".to_string());
 
         assert!(
@@ -1169,78 +1083,6 @@ steps:
             before,
             "the original must survive a failed write byte-for-byte"
         );
-    }
-
-    /// A config may be chmodded deliberately — it names CircleCI contexts and
-    /// pinned images. The staged file is created at the umask default, so
-    /// without carrying the mode across, a save silently widens it.
-    #[test]
-    fn a_save_keeps_the_permissions_the_config_had() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("gen-circleci-orb.toml");
-        let mut config = annotated_config(&path);
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
-
-        config.orb.as_mut().unwrap().binary = Some("renamed".to_string());
-        save_config(&path, &config).unwrap();
-
-        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o600, "got {mode:o}");
-    }
-
-    /// A config reached through a symlink — a shared or dotfile-managed one —
-    /// must be written *through* the link. Renaming onto the link's own path
-    /// replaces it with a regular file and leaves the real file holding the
-    /// previous config.
-    #[test]
-    fn a_save_writes_through_a_symlinked_config() {
-        let dir = tempfile::tempdir().unwrap();
-        let real = dir.path().join("real.toml");
-        let link = dir.path().join("gen-circleci-orb.toml");
-        let mut config = annotated_config(&real);
-        std::os::unix::fs::symlink(&real, &link).unwrap();
-
-        config.orb.as_mut().unwrap().binary = Some("renamed".to_string());
-        save_config(&link, &config).unwrap();
-
-        assert!(
-            std::fs::symlink_metadata(&link).unwrap().is_symlink(),
-            "the symlink must survive the save"
-        );
-        assert!(
-            std::fs::read_to_string(&real).unwrap().contains("renamed"),
-            "the file the link points at must be the one updated"
-        );
-    }
-
-    /// A replace that fails must not leave the staged file beside the config.
-    ///
-    /// Reached by renaming onto a directory, which is the one way the staging
-    /// write can succeed and the replace still fail.
-    #[test]
-    fn a_failed_replace_removes_the_staged_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let target = dir.path().join("occupied-by-a-directory");
-        std::fs::create_dir(&target).unwrap();
-
-        assert!(
-            write_atomically(&target, "new contents").is_err(),
-            "renaming over a directory must fail"
-        );
-        assert!(
-            !write_temp_path(&target).exists(),
-            "the staged file must not survive a failed replace"
-        );
-    }
-
-    /// The temporary must be a sibling: `rename` is only atomic within one
-    /// filesystem, and a temp directory elsewhere could be on another.
-    #[test]
-    fn the_temporary_is_a_sibling_of_the_target() {
-        let path = std::path::Path::new("/some/where/gen-circleci-orb.toml");
-        assert_eq!(write_temp_path(path).parent(), path.parent());
     }
 
     /// Saving an unchanged config must not touch the file's shape at all.

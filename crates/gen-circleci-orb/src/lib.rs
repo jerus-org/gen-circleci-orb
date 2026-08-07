@@ -7,6 +7,7 @@ use clap::Parser;
 
 pub mod ci_patcher;
 pub mod commands;
+mod fs_atomic;
 pub mod help_parser;
 pub mod orb_config;
 pub mod orb_generator;
