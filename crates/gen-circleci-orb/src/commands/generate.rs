@@ -247,6 +247,51 @@ pub(crate) fn resolve_binary(
         })
 }
 
+/// Cargo profiles searched for a locally built copy of the binary.
+const WORKSPACE_PROFILES: &[&str] = &["debug", "release"];
+
+/// A locally built copy of `name` under `root/target/`, newest first, if any.
+///
+/// Returns `None` when nothing is built — which is the CI case. There is no
+/// `target/` directory there: the binary is attached from the workspace onto
+/// `PATH`, so the freshly built copy is already what resolution finds.
+pub(crate) fn workspace_binary(root: &Path, name: &str) -> Option<PathBuf> {
+    WORKSPACE_PROFILES
+        .iter()
+        .map(|profile| root.join("target").join(profile).join(name))
+        .filter(|path| path.is_file())
+        .filter_map(|path| Some((std::fs::metadata(&path).ok()?.modified().ok()?, path)))
+        // Newest wins: a developer who has just built one profile means that one.
+        // On a tie the later profile in `WORKSPACE_PROFILES` is taken, which is
+        // arbitrary but deterministic — the two are equally current.
+        .max_by_key(|(modified, _)| *modified)
+        .map(|(_, path)| path)
+}
+
+/// The executable to introspect for `binary`.
+///
+/// `generate` reads the CLI surface out of the binary's `--help`, so running the
+/// copy on `PATH` — the last *released* build — answers a question nobody asked:
+/// whether the committed orb matches the last release, rather than the branch in
+/// hand. It is wrong in both directions, passing on a stale orb and failing on a
+/// correct one (#254).
+///
+/// Every repo that generates its orb from its own binary hits this, not just this
+/// one: `gen-orb-mcp` records `binary = "gen-orb-mcp"` and does the same. So the
+/// rule keys on a local build existing, not on any particular crate name.
+///
+/// A value that already names a path is an explicit instruction and is returned
+/// verbatim.
+pub(crate) fn introspection_target(root: &Path, binary: &str) -> String {
+    // This tool targets x86_64-unknown-linux-gnu only, so `/` is the separator.
+    if binary.contains('/') {
+        return binary.to_string();
+    }
+    workspace_binary(root, binary)
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| binary.to_string())
+}
+
 /// Resolve namespaces: CLI flags take precedence, then `[orb].namespaces` in config.
 /// Returns an error with a helpful message when neither is provided.
 pub(crate) fn resolve_namespaces(
@@ -591,8 +636,16 @@ impl Generate {
         let orb_root = self.output.join(&orb_dir);
         check_orb_dir(&orb_root)?;
 
-        tracing::info!("Parsing {} --help", binary);
-        let cli_def = help_parser::parse_binary(&binary, &parse_options(&orb_config))?;
+        // Which executable this reads decides what the whole run is about, so say
+        // it — the disagreement in #254 was invisible because the log named the
+        // binary and not the copy of it. The orb still carries the bare name:
+        // `parse_top_level` takes it from the file stem.
+        let introspect = introspection_target(&self.output, &binary);
+        if introspect != binary {
+            tracing::info!("Using locally built `{introspect}` rather than `{binary}` on PATH");
+        }
+        tracing::info!("Parsing {introspect} --help");
+        let cli_def = help_parser::parse_binary(&introspect, &parse_options(&orb_config))?;
 
         tracing::info!("Discovered {} subcommand(s)", cli_def.subcommands.len());
 
@@ -1301,6 +1354,80 @@ mod tests {
             "must error when no binary in CLI or config"
         );
         assert!(result.unwrap_err().to_string().contains("binary"));
+    }
+
+    // ── #254: which binary gets introspected ───────────────────────────────
+
+    fn built(root: &std::path::Path, profile: &str, name: &str) -> std::path::PathBuf {
+        let dir = root.join("target").join(profile);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(name);
+        std::fs::write(&path, "#!/bin/sh\n").unwrap();
+        path
+    }
+
+    #[test]
+    fn a_locally_built_binary_is_found() {
+        let root = tempfile::tempdir().unwrap();
+        let path = built(root.path(), "debug", "mytool");
+        assert_eq!(workspace_binary(root.path(), "mytool"), Some(path));
+    }
+
+    /// Nothing built is the CI case: there is no `target/` there, and the
+    /// freshly built binary is already first on PATH.
+    #[test]
+    fn no_build_means_no_workspace_binary() {
+        let root = tempfile::tempdir().unwrap();
+        assert_eq!(workspace_binary(root.path(), "mytool"), None);
+    }
+
+    /// With both profiles present the newer wins — a developer who just ran
+    /// `cargo build --release` means that one.
+    #[test]
+    fn the_newer_profile_wins() {
+        let root = tempfile::tempdir().unwrap();
+        built(root.path(), "debug", "mytool");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let release = built(root.path(), "release", "mytool");
+        assert_eq!(workspace_binary(root.path(), "mytool"), Some(release));
+    }
+
+    #[test]
+    fn a_bare_name_resolves_to_the_local_build() {
+        let root = tempfile::tempdir().unwrap();
+        let path = built(root.path(), "debug", "mytool");
+        assert_eq!(
+            introspection_target(root.path(), "mytool"),
+            path.display().to_string()
+        );
+    }
+
+    #[test]
+    fn a_bare_name_falls_back_to_path_when_nothing_is_built() {
+        let root = tempfile::tempdir().unwrap();
+        assert_eq!(introspection_target(root.path(), "mytool"), "mytool");
+    }
+
+    /// A value that already names a path is an explicit instruction and is never
+    /// reinterpreted under `target/`.
+    ///
+    /// The fixture is deliberately awkward: a *relative* path that also exists
+    /// beneath a profile directory. An explicit path pointing somewhere the
+    /// workspace does not have would pass whether or not the guard exists —
+    /// `workspace_binary` would look for it under `target/<profile>/` and find
+    /// nothing — so only this shape can tell the two apart.
+    #[test]
+    fn an_explicit_path_is_never_reinterpreted_under_target() {
+        let root = tempfile::tempdir().unwrap();
+        let nested = root.path().join("target/debug/bin");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join("mytool"), "#!/bin/sh\n").unwrap();
+
+        assert_eq!(
+            introspection_target(root.path(), "bin/mytool"),
+            "bin/mytool",
+            "an explicit relative path must not resolve to target/debug/bin/mytool"
+        );
     }
 
     #[test]

@@ -1045,9 +1045,18 @@ impl Init {
         // Parse binary early: detect push-capable subcommands (for dialogue default),
         // subcommands with a required orb_path param (for config defaults), and
         // whether the binary shells out to `circleci` (for the CLI version prompt).
+        //
+        // Resolved the same way `generate` resolves it, because `generate` runs a
+        // moment later against the same binary: reading a different copy here
+        // would let the config record one CLI surface while the orb carries
+        // another — the exact disagreement #254 is about.
+        let introspect = crate::commands::generate::introspection_target(
+            std::path::Path::new("."),
+            &core.binary,
+        );
         let (detected_push, detected_orb_path, present_interactive, needs_circleci_cli) =
             match crate::help_parser::parse_binary(
-                &core.binary,
+                &introspect,
                 &crate::commands::generate::parse_options(&existing_config),
             ) {
                 Ok(cli) => (
@@ -1061,7 +1070,7 @@ impl Init {
                     // and fails properly. But the binary may have just been typed
                     // at a prompt, so say why it could not be read, rather than
                     // letting it surface one step downstream as a generate error.
-                    tracing::warn!("could not introspect `{}`: {e:#}", core.binary);
+                    tracing::warn!("could not introspect `{introspect}`: {e:#}");
                     (vec![], vec![], vec![], false)
                 }
             };
