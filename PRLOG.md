@@ -34,6 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - stop a colon-terminated description truncating the Commands: block(pr [#279])
 - introspect the locally built binary, not the released one(pr [#283])
 - let joined_commands see a missing line continuation(pr [#285])
+- stop a colon in a description ending it(pr [#286])
 
 ## [0.1.4] - 2026-07-27
 
@@ -857,6 +858,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#279]: https://github.com/jerus-org/gen-circleci-orb/pull/279
 [#283]: https://github.com/jerus-org/gen-circleci-orb/pull/283
 [#285]: https://github.com/jerus-org/gen-circleci-orb/pull/285
+[#286]: https://github.com/jerus-org/gen-circleci-orb/pull/286
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.4...HEAD
 [0.1.4]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.2...v0.1.3
