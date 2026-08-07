@@ -32,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - split the over-long RUN instructions in the Dockerfile(pr [#263])
 - keep comments when writing gen-circleci-orb.toml(pr [#264])
 - stop a colon-terminated description truncating the Commands: block(pr [#279])
+- introspect the locally built binary, not the released one(pr [#283])
 
 ## [0.1.4] - 2026-07-27
 
@@ -853,6 +854,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#274]: https://github.com/jerus-org/gen-circleci-orb/pull/274
 [#277]: https://github.com/jerus-org/gen-circleci-orb/pull/277
 [#279]: https://github.com/jerus-org/gen-circleci-orb/pull/279
+[#283]: https://github.com/jerus-org/gen-circleci-orb/pull/283
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.4...HEAD
 [0.1.4]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.2...v0.1.3
