@@ -428,6 +428,11 @@ pub fn patch_release(content: &str, _opts: &PatchOpts) -> (String, PatchReport) 
 }
 
 /// Apply patches to CI config files on disk (or dry-run).
+///
+/// Each file is replaced atomically, but the set is not: an interruption can
+/// leave one patched and another not. What makes that safe is that patching is
+/// idempotent — every insertion checks whether it is already present — so the
+/// answer to a half-finished run is to run it again.
 pub fn apply_patches(
     ci_dir: &std::path::Path,
     opts: &PatchOpts,
@@ -461,7 +466,8 @@ pub fn apply_patches(
         }
 
         if !dry_run && patched != content {
-            std::fs::write(&path, &patched)?;
+            // Same file, same reason as `update`: the consumer wrote most of it.
+            crate::fs_atomic::write_atomically(&path, &patched)?;
         }
     }
 

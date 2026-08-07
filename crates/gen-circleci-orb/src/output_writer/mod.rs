@@ -101,6 +101,9 @@ fn apply(
     if let Some(parent) = abs_path.parent() {
         fs::create_dir_all(parent)?;
     }
+    // A plain write, unlike the files `fs_atomic` guards: this tree is generated
+    // in full from the binary's `--help` and never hand-edited, so a torn write
+    // costs a re-run rather than something nobody can reconstruct.
     fs::write(abs_path, content)?;
     Ok(())
 }

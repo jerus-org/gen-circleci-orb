@@ -73,7 +73,9 @@ impl Update {
         }
 
         if resynced != current {
-            std::fs::write(&config_path, &resynced)
+            // The consumer's own jobs and comments live in this file and are
+            // rewritten wholesale, so it is replaced rather than truncated.
+            crate::fs_atomic::write_atomically(&config_path, &resynced)
                 .with_context(|| format!("writing {}", config_path.display()))?;
             println!("Re-synced CI wiring in {}", config_path.display());
         } else {

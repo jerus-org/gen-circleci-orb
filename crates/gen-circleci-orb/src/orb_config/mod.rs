@@ -65,8 +65,7 @@ pub fn save_config(path: &Path, config: &OrbConfig) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(path, content)?;
-    Ok(())
+    crate::fs_atomic::write_atomically(path, &content)
 }
 
 /// Apply `rendered` onto `existing`, preserving the latter's formatting.
@@ -1034,6 +1033,55 @@ steps:
         assert!(
             written.contains("# renovate keeps this current"),
             "a trailing comment must survive the conversion:\n{written}"
+        );
+    }
+
+    // ── #267: the write itself ─────────────────────────────────────────────
+
+    fn annotated_config(path: &std::path::Path) -> OrbConfig {
+        std::fs::write(
+            path,
+            concat!(
+                "[orb]\n",
+                "# renovate keeps this digest current\n",
+                "builder_image = \"rust:1-slim-trixie@sha256:abc123\"\n",
+                "binary = \"mytool\"\n",
+            ),
+        )
+        .unwrap();
+        load_config(path).unwrap()
+    }
+
+    /// The file carries comments that exist nowhere else, so a write that fails
+    /// part-way must leave the previous contents intact rather than a truncated
+    /// or empty file. Writing to a sibling temporary and renaming over the
+    /// target is what buys that: the target is only ever replaced whole.
+    ///
+    /// The failure is induced with a read-only target — a real, supported
+    /// refusal rather than a contrived one, and it reads the mode bits rather
+    /// than attempting a write, so it behaves the same for root in a CI
+    /// container.
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_write_leaves_the_original_untouched() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gen-circleci-orb.toml");
+        let mut config = annotated_config(&path);
+        let before = std::fs::read_to_string(&path).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o444)).unwrap();
+
+        config.orb.as_mut().unwrap().binary = Some("renamed".to_string());
+
+        assert!(
+            save_config(&path, &config).is_err(),
+            "a write that cannot complete must report it"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            before,
+            "the original must survive a failed write byte-for-byte"
         );
     }
 
