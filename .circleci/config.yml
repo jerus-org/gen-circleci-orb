@@ -42,6 +42,7 @@ workflows:
             branches:
               ignore: main
       - toolkit/idiomatic_rust:
+          clippy_report: true
           filters:
             branches:
               ignore: main
@@ -55,7 +56,10 @@ workflows:
               only: /pull\/[0-9]+/
       - toolkit/security:
           name: security with sonarcloud
+          clippy_report: true
           context: SonarCloud
+          requires: 
+            - idiomatic_rust
           filters:
             branches:
               ignore: /pull\/[0-9]+/
