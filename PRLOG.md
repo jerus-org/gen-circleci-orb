@@ -39,6 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - stop sonar clippy sensor OOM on audit_env(pr [#289])
 - stop update reformatting blank lines it does not own(pr [#291])
 - prune orphans at any depth(pr [#293])
+- deps: update rust crate clap to 4.6.6(pr [#295])
 
 ## [0.1.4] - 2026-07-27
 
@@ -867,6 +868,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#289]: https://github.com/jerus-org/gen-circleci-orb/pull/289
 [#291]: https://github.com/jerus-org/gen-circleci-orb/pull/291
 [#293]: https://github.com/jerus-org/gen-circleci-orb/pull/293
+[#295]: https://github.com/jerus-org/gen-circleci-orb/pull/295
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.4...HEAD
 [0.1.4]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.2...v0.1.3
