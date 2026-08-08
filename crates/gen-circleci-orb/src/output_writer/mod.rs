@@ -131,25 +131,85 @@ fn prune_orphans(
     dry_run: bool,
     report: &mut WriteReport,
 ) -> Result<()> {
-    // Keep set: everything generated this run, plus the hand-authored files the
-    // config authorises. Anything else in the owned dirs is an orphan.
-    let mut keep: HashSet<PathBuf> = files.keys().cloned().collect();
-    keep.extend(custom_files.iter().map(PathBuf::from));
+    let keep = Keep::new(files.keys().cloned().collect(), custom_files);
 
     for dir in GENERATOR_OWNED_DIRS {
         let abs_dir = root.join(dir);
-        if !abs_dir.is_dir() {
-            continue;
+        if abs_dir.is_dir() {
+            prune_dir(&abs_dir, Path::new(dir), &keep, dry_run, report)?;
         }
-        for entry in fs::read_dir(&abs_dir)? {
-            let entry = entry?;
-            if !entry.file_type()?.is_file() {
-                continue;
-            }
-            let rel = Path::new(dir).join(entry.file_name());
-            if keep.contains(&rel) {
-                continue;
-            }
+    }
+    Ok(())
+}
+
+/// What survives a prune: this run's output, and what the config authorises.
+struct Keep {
+    generated: HashSet<PathBuf>,
+    authorised: Vec<PathBuf>,
+}
+
+impl Keep {
+    fn new(generated: HashSet<PathBuf>, custom_files: &[String]) -> Self {
+        let authorised = custom_files
+            .iter()
+            .map(|entry| entry.trim())
+            // An empty entry is a prefix of everything, so one blank array
+            // element would exempt the whole tree — and `verify_no_drift`,
+            // which reads the removal count, would pass on a drifted orb.
+            .filter(|entry| !entry.is_empty())
+            .map(PathBuf::from)
+            .inspect(|entry| {
+                if GENERATOR_OWNED_DIRS
+                    .iter()
+                    .any(|d| Path::new(d).starts_with(entry))
+                {
+                    tracing::warn!(
+                        "[orb] custom_files entry {} covers a whole generator-owned \
+                         directory, so nothing in it will be pruned",
+                        entry.display()
+                    );
+                }
+            })
+            .collect();
+        Self {
+            generated,
+            authorised,
+        }
+    }
+
+    /// An authorised entry covers the path it names *and everything beneath
+    /// it*, so a consumer can protect `src/scripts/lib` without listing each
+    /// file in it. Before the prune recursed, nested files were immune by
+    /// accident; naming the directory is how that intent is now expressed.
+    fn covers(&self, rel: &Path) -> bool {
+        self.generated.contains(rel) || self.authorised.iter().any(|entry| rel.starts_with(entry))
+    }
+}
+
+/// Prune one directory and everything below it.
+///
+/// Recursive because `apply` creates whatever parents a generated path needs,
+/// so an orphan can sit at any depth, and a nested one left behind is invisible
+/// to `verify_no_drift` (#275). Empty directories are left where they fall —
+/// deleting them would widen the reach for something that is not drift.
+///
+/// A symlink is never followed — `file_type` does not resolve it, so it is not
+/// a directory here — but an unauthorised one is still removed. `orb pack`
+/// reads through links, so leaving one would publish content that `--check`
+/// reported no drift for. Unlinking removes the link, never its target.
+fn prune_dir(
+    abs_dir: &Path,
+    rel_dir: &Path,
+    keep: &Keep,
+    dry_run: bool,
+    report: &mut WriteReport,
+) -> Result<()> {
+    for entry in fs::read_dir(abs_dir)? {
+        let entry = entry?;
+        let rel = rel_dir.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            prune_dir(&entry.path(), &rel, keep, dry_run, report)?;
+        } else if !keep.covers(&rel) {
             discard(&entry.path(), &rel, dry_run)?;
             report.removed += 1;
         }
@@ -169,9 +229,7 @@ mod tests {
     }
 
     /// Also covers parent-directory creation: the root is empty, so `src/` has
-    /// to be made on the way. Depth is deliberately left untested — the writer
-    /// would create nested parents happily, but `prune_orphans` reads the owned
-    /// directories non-recursively and could never clean them up (#275).
+    /// to be made on the way.
     #[test]
     fn new_file_is_created() {
         let dir = TempDir::new().unwrap();
@@ -212,6 +270,115 @@ mod tests {
             fs::read_to_string(dir.path().join("src/foo.yml")).unwrap(),
             "new content"
         );
+    }
+
+    /// `write_tree` will create a nested path, so an orphan can be nested too —
+    /// and one that survives is invisible to `verify_no_drift`.
+    #[test]
+    fn a_nested_orphan_is_pruned() {
+        let dir = TempDir::new().unwrap();
+        let deep = dir.path().join("src/scripts/deep");
+        fs::create_dir_all(&deep).unwrap();
+        fs::write(deep.join("stale.sh"), "stale").unwrap();
+
+        let files = single_file("src/scripts/flat.sh", "x");
+        let report = write_tree(dir.path(), &files, &[], false).unwrap();
+
+        assert_eq!(report.removed, 1);
+        assert!(!deep.join("stale.sh").exists());
+    }
+
+    /// Recursion must not reach authorised files: `custom_files` paths are
+    /// relative to the root and may name a nested one.
+    #[test]
+    fn a_nested_custom_file_is_preserved() {
+        let dir = TempDir::new().unwrap();
+        let deep = dir.path().join("src/scripts/deep");
+        fs::create_dir_all(&deep).unwrap();
+        fs::write(deep.join("keep.sh"), "custom").unwrap();
+        fs::write(deep.join("stale.sh"), "stale").unwrap();
+
+        let files = single_file("src/scripts/flat.sh", "x");
+        let custom = ["src/scripts/deep/keep.sh".to_string()];
+        let report = write_tree(dir.path(), &files, &custom, false).unwrap();
+
+        assert_eq!(report.removed, 1, "only the unauthorised one");
+        assert!(deep.join("keep.sh").exists());
+        assert!(!deep.join("stale.sh").exists());
+    }
+
+    /// Authorising a directory covers what is under it, so a consumer need not
+    /// list every nested helper to keep it.
+    #[test]
+    fn authorising_a_directory_covers_what_is_under_it() {
+        let dir = TempDir::new().unwrap();
+        let lib = dir.path().join("src/scripts/lib");
+        fs::create_dir_all(&lib).unwrap();
+        fs::write(lib.join("common.sh"), "helper").unwrap();
+        fs::write(lib.join("more.sh"), "helper").unwrap();
+        fs::write(dir.path().join("src/scripts/stale.sh"), "stale").unwrap();
+
+        let files = single_file("src/scripts/flat.sh", "x");
+        let custom = ["src/scripts/lib".to_string()];
+        let report = write_tree(dir.path(), &files, &custom, false).unwrap();
+
+        assert_eq!(report.removed, 1, "only the unauthorised one");
+        assert!(lib.join("common.sh").exists());
+        assert!(lib.join("more.sh").exists());
+    }
+
+    #[test]
+    fn nested_files_outside_owned_dirs_are_not_pruned() {
+        let dir = TempDir::new().unwrap();
+        let deep = dir.path().join("src/examples/nested");
+        fs::create_dir_all(&deep).unwrap();
+        fs::write(deep.join("example.yml").as_path(), "ex").unwrap();
+
+        let files = single_file("src/commands/keep.yml", "new");
+        let report = write_tree(dir.path(), &files, &[], false).unwrap();
+
+        assert_eq!(report.removed, 0);
+        assert!(deep.join("example.yml").exists());
+    }
+
+    /// An orphaned link is removed like any other orphan — `orb pack` reads
+    /// through links, so leaving one publishes content `--check` called clean.
+    /// Only the link goes: what it points at is not ours.
+    #[cfg(unix)]
+    #[test]
+    fn an_orphaned_symlink_is_unlinked_but_its_target_is_not() {
+        let outside = TempDir::new().unwrap();
+        let elsewhere = outside.path().join("precious.txt");
+        fs::write(&elsewhere, "not ours").unwrap();
+
+        let dir = TempDir::new().unwrap();
+        let scripts = dir.path().join("src/scripts");
+        fs::create_dir_all(&scripts).unwrap();
+        std::os::unix::fs::symlink(outside.path(), scripts.join("to-dir")).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, scripts.join("to-file")).unwrap();
+
+        let files = single_file("src/scripts/flat.sh", "x");
+        let report = write_tree(dir.path(), &files, &[], false).unwrap();
+
+        assert_eq!(report.removed, 2, "both links are orphans");
+        assert!(elsewhere.exists(), "the target must be untouched");
+        assert!(outside.path().is_dir(), "the linked directory must survive");
+    }
+
+    /// A blank entry is a prefix of every path, so one would exempt the whole
+    /// tree — and leave `verify_no_drift` green on a drifted orb.
+    #[test]
+    fn a_blank_custom_files_entry_does_not_exempt_everything() {
+        let dir = TempDir::new().unwrap();
+        let cmds = dir.path().join("src/commands");
+        fs::create_dir_all(&cmds).unwrap();
+        fs::write(cmds.join("orphan.yml"), "stale").unwrap();
+
+        let files = single_file("src/commands/keep.yml", "new");
+        let report = write_tree(dir.path(), &files, &["  ".to_string()], false).unwrap();
+
+        assert_eq!(report.removed, 1);
+        assert!(!cmds.join("orphan.yml").exists());
     }
 
     #[test]
