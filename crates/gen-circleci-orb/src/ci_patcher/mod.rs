@@ -162,30 +162,51 @@ pub fn resync_build(content: &str, opts: &PatchOpts) -> (String, PatchReport) {
 /// missing marker can never cause us to consume adjacent user content. Anything
 /// kept while inside a marker region that we did not recognise is reported as a
 /// warning (preserved, but flagged for review).
+///
+/// Spacing follows the same rule: a removal closes the one blank it left, and
+/// every other blank is the consumer's. `update --check` compares byte for
+/// byte, so any reflow reads as drift nobody caused (#273).
 fn strip_managed(content: &str) -> (String, Vec<String>) {
     let lines: Vec<&str> = content.lines().collect();
     let mut out: Vec<String> = Vec::with_capacity(lines.len());
     let mut warnings: Vec<String> = Vec::new();
     let mut in_marked_region = false;
+    let mut gap_open = false;
     let mut i = 0;
     while i < lines.len() {
-        // Three outcomes per line, in order: it toggles a marker, it opens a
-        // block we own, or it is the consumer's and we keep it. Each is decided
-        // by its own function so the walk does not also have to hold the rules.
+        // A marker, a block we own, or the consumer's — each decided elsewhere.
         if let Some(region_open) = marker_toggle(lines[i]) {
             in_marked_region = region_open;
+            gap_open |= ends_blank(&out);
             i += 1;
         } else if let Some(next) = managed_item_end(&lines, i) {
+            gap_open |= ends_blank(&out);
             i = next;
         } else {
-            keep_line(lines[i], in_marked_region, &mut out, &mut warnings);
+            // Any kept line shuts the gap, so a run of blanks loses only its first.
+            if !(gap_open && is_blank(lines[i])) {
+                keep_line(lines[i], in_marked_region, &mut out, &mut warnings);
+            }
+            gap_open = false;
             i += 1;
         }
     }
-    (
-        normalize_blanks(&out.join("\n"), content.ends_with('\n')),
-        warnings,
-    )
+    if gap_open && ends_blank(&out) {
+        out.pop();
+    }
+    let mut stripped = out.join("\n");
+    if content.ends_with('\n') {
+        stripped.push('\n');
+    }
+    (stripped, warnings)
+}
+
+fn is_blank(line: &str) -> bool {
+    line.trim().is_empty()
+}
+
+fn ends_blank(out: &[String]) -> bool {
+    out.last().is_some_and(|line| is_blank(line))
 }
 
 /// `Some(true)` for a begin marker, `Some(false)` for an end marker.
@@ -268,28 +289,6 @@ fn block_is_managed_validation(block: &[&str]) -> bool {
             .iter()
             .any(|n| t == format!("name: {n}"))
     })
-}
-
-/// Collapse runs of >1 blank line (left by removals) and trim trailing blanks.
-fn normalize_blanks(content: &str, trailing_newline: bool) -> String {
-    let mut out: Vec<&str> = Vec::new();
-    let mut prev_blank = false;
-    for l in content.lines() {
-        let blank = l.trim().is_empty();
-        if blank && prev_blank {
-            continue;
-        }
-        out.push(l);
-        prev_blank = blank;
-    }
-    while out.last().map(|l| l.trim().is_empty()).unwrap_or(false) {
-        out.pop();
-    }
-    let mut s = out.join("\n");
-    if trailing_newline {
-        s.push('\n');
-    }
-    s
 }
 
 fn patch_step0_gen_circleci_orb_orb(
@@ -2793,20 +2792,41 @@ workflows:
         assert_eq!(stripped, "version: 2.1");
     }
 
-    /// Deleting a marker-wrapped block leaves the blank line above it next to
-    /// the blank line below it, and those runs are collapsed.
-    ///
-    /// The fixture has to be a wrapped block: removing a single line, as an
-    /// earlier version of this test did, cannot put two blanks together, so the
-    /// assertion held even with collapsing deleted outright.
-    ///
-    /// What collapsing ultimately protects — `patch_build` staying a fixed
-    /// point of `resync_build`, so `update --check` does not fail consumer CI
-    /// on a change nobody made — is already covered by
-    /// `patch_build_output_is_a_fixed_point_of_resync` and its siblings. This
-    /// test pins the mechanism; those pin the consequence.
+    // ── #273: only the gap a removal leaves is closed ──────────────────────
+
+    /// Spacing the operator chose is theirs.
     #[test]
-    fn blank_runs_left_by_a_removal_are_collapsed() {
+    fn blank_lines_the_consumer_added_are_left_alone() {
+        let content = concat!(
+            "version: 2.1\n",
+            "\n",
+            "\n",
+            "orbs:\n",
+            "  toolkit: my-org/toolkit@2.9.1\n",
+        );
+        assert_eq!(strip(content), content);
+    }
+
+    /// Only the one. The rest of the run is the consumer's spacing.
+    #[test]
+    fn a_removal_closes_one_blank_and_leaves_the_rest() {
+        let content = format!(
+            "a\n\n  {MANAGED_BEGIN}\n  gen-circleci-orb: my-org/x@1\n  {MANAGED_END}\n\n\n\nb\n"
+        );
+        // One blank above, three below; the removal takes one of the four.
+        assert_eq!(strip(&content), "a\n\n\n\nb\n");
+    }
+
+    #[test]
+    fn a_trailing_blank_line_is_left_alone() {
+        let content = "version: 2.1\n\n";
+        assert_eq!(strip(content), content);
+    }
+
+    /// A wrapped block, because removing a single line cannot put two blanks
+    /// together — the assertion would hold with gap-closing deleted outright.
+    #[test]
+    fn a_removal_closes_the_blank_it_left() {
         let content = format!(
             "\
 orbs:
@@ -2826,7 +2846,7 @@ workflows:
         let stripped = strip(&content);
         assert!(
             !stripped.contains("\n\n\n"),
-            "the gap left by the removed block must be collapsed:\n{stripped:?}"
+            "the two blanks the removal left adjacent must become one:\n{stripped:?}"
         );
         assert!(stripped.contains("toolkit: my-org/toolkit@2.9.1"));
         assert!(stripped.contains("name: mine"));
