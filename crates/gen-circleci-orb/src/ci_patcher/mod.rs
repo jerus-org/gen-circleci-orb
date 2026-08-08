@@ -163,25 +163,18 @@ pub fn resync_build(content: &str, opts: &PatchOpts) -> (String, PatchReport) {
 /// kept while inside a marker region that we did not recognise is reported as a
 /// warning (preserved, but flagged for review).
 ///
-/// Spacing follows the same rule as content: a removal closes the single blank
-/// it left dangling, and every other blank line stays exactly as the consumer
-/// wrote it. `update --check` compares the whole round-trip byte for byte, so
-/// any reflow here reads as drift in a file nobody changed (#273).
+/// Spacing follows the same rule: a removal closes the one blank it left, and
+/// every other blank is the consumer's. `update --check` compares byte for
+/// byte, so any reflow reads as drift nobody caused (#273).
 fn strip_managed(content: &str) -> (String, Vec<String>) {
     let lines: Vec<&str> = content.lines().collect();
     let mut out: Vec<String> = Vec::with_capacity(lines.len());
     let mut warnings: Vec<String> = Vec::new();
     let mut in_marked_region = false;
-    // Set when a removal has left a blank line above it and the content below
-    // may now close up against that blank. Exactly one blank is then dropped —
-    // enough to shut the gap, and no more, because every other blank line in
-    // the file is the consumer's spacing and not ours to reflow (#273).
     let mut gap_open = false;
     let mut i = 0;
     while i < lines.len() {
-        // Three outcomes per line, in order: it toggles a marker, it opens a
-        // block we own, or it is the consumer's and we keep it. Each is decided
-        // by its own function so the walk does not also have to hold the rules.
+        // A marker, a block we own, or the consumer's — each decided elsewhere.
         if let Some(region_open) = marker_toggle(lines[i]) {
             in_marked_region = region_open;
             gap_open |= ends_blank(&out);
@@ -190,8 +183,7 @@ fn strip_managed(content: &str) -> (String, Vec<String>) {
             gap_open |= ends_blank(&out);
             i = next;
         } else {
-            // One line closes the gap whether or not it was the blank: a run of
-            // consumer blanks below a removal keeps all but its first.
+            // Any kept line shuts the gap, so a run of blanks loses only its first.
             if !(gap_open && is_blank(lines[i])) {
                 keep_line(lines[i], in_marked_region, &mut out, &mut warnings);
             }
@@ -199,8 +191,6 @@ fn strip_managed(content: &str) -> (String, Vec<String>) {
             i += 1;
         }
     }
-    // A removal that ran to the end of the file leaves its opening blank
-    // trailing. Again just the one.
     if gap_open && ends_blank(&out) {
         out.pop();
     }
@@ -2804,9 +2794,7 @@ workflows:
 
     // ── #273: only the gap a removal leaves is closed ──────────────────────
 
-    /// Spacing the operator chose is theirs. Collapsing it made `update --check`
-    /// fail on a blank line nobody's change introduced, and `update` reformat a
-    /// file the tool does not own.
+    /// Spacing the operator chose is theirs.
     #[test]
     fn blank_lines_the_consumer_added_are_left_alone() {
         let content = concat!(
@@ -2819,8 +2807,7 @@ workflows:
         assert_eq!(strip(content), content);
     }
 
-    /// Only the one blank. A run below a removal is the consumer's spacing, and
-    /// swallowing all of it is the same overreach as reflowing the whole file.
+    /// Only the one. The rest of the run is the consumer's spacing.
     #[test]
     fn a_removal_closes_one_blank_and_leaves_the_rest() {
         let content = format!(
@@ -2836,18 +2823,8 @@ workflows:
         assert_eq!(strip(content), content);
     }
 
-    /// Deleting a marker-wrapped block leaves the blank above it next to the
-    /// blank below it, and one of the two goes.
-    ///
-    /// The fixture has to be a wrapped block: removing a single line cannot put
-    /// two blanks together, so the assertion would hold even with gap-closing
-    /// deleted outright.
-    ///
-    /// What gap-closing ultimately protects — `patch_build` staying a fixed
-    /// point of `resync_build`, so `update --check` does not fail consumer CI
-    /// on a change nobody made — is covered by
-    /// `patch_build_output_is_a_fixed_point_of_resync` and its siblings. This
-    /// test pins the mechanism; those pin the consequence.
+    /// A wrapped block, because removing a single line cannot put two blanks
+    /// together — the assertion would hold with gap-closing deleted outright.
     #[test]
     fn a_removal_closes_the_blank_it_left() {
         let content = format!(
