@@ -43,6 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - deps: update pinned containers(pr [#294])
 - deps: update rust crate thiserror to 2.0.20(pr [#296])
 - deps: update rust crate toml to 1.1.4(pr [#297])
+- deps: update dependency orb-tools to v12.5.0(pr [#298])
 
 ## [0.1.4] - 2026-07-27
 
@@ -875,6 +876,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#294]: https://github.com/jerus-org/gen-circleci-orb/pull/294
 [#296]: https://github.com/jerus-org/gen-circleci-orb/pull/296
 [#297]: https://github.com/jerus-org/gen-circleci-orb/pull/297
+[#298]: https://github.com/jerus-org/gen-circleci-orb/pull/298
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.4...HEAD
 [0.1.4]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.2...v0.1.3
