@@ -583,176 +583,202 @@ fn render_apt_install(pkgs: &[&str]) -> String {
 }
 
 fn render_dockerfile(binary: &str, opts: &GenerateOpts) -> String {
-    let GenerateOpts {
-        install_method: method,
-        base_image,
-        builder_image,
-        apt_packages,
-        cargo_tools,
-        crate_wait,
-        ..
-    } = opts;
-    let circleci_cli_version = opts.circleci_cli_version.as_deref();
-    match method {
-        InstallMethod::Binstall => {
-            let runtime_pkgs = sorted_packages(apt_packages);
-            let mut out = String::new();
-            out.push_str(&format!("FROM {builder_image} AS builder\n"));
-            // CRATE_VERSION pins the exact released version passed by build-container.sh
-            // (from CIRCLE_TAG). An unpinned `cargo install` resolves the PREVIOUS
-            // version while the crates.io sparse index lags the publish API by minutes,
-            // shipping a container whose binary version != its own tag (#200). The ARG
-            // must precede the RUN that consumes it.
-            out.push_str("ARG CRATE_VERSION\n");
-            out.push_str("RUN apt-get update \\\n");
-            out.push_str(&render_apt_install(&[
-                "build-essential",
-                "ca-certificates",
-                "clang",
-                "cmake",
-                "libssl-dev",
-                "pkg-config",
-            ]));
-            out.push_str("    && rm -rf /var/lib/apt/lists/* \\\n");
-            // --locked builds the exact dependency set the crate was published/tested
-            // with (its bundled Cargo.lock), not a fresh resolve — so the container
-            // never diverges from CI. clang (libclang) + cmake cover native crates
-            // using bindgen / cmake (e.g. openssl-sys on newer OpenSSL, aws-lc-sys),
-            // so the builder is self-sufficient regardless of the base image's age.
-            //
-            // The install is wrapped in a bounded retry: the retry loop IS the
-            // crates.io propagation gate (cargo-only — the builder image has no
-            // curl/wget/python), waiting out sparse-index lag and failing LOUD on
-            // timeout instead of silently installing the prior version (#200).
-            //
-            // The window is deliberately generous. A gate that expires while the
-            // crate is published but not yet served leaves the release
-            // half-published — crate on crates.io, no container, no orb — and
-            // recovering means re-running the tag's workflow by hand (#236).
-            // Every emitted line stays inside the Dockerfile line-length limit
-            // (docker:S7020) — including for a consumer whose binary name is far
-            // longer than this crate's — so the shell statements are split over
-            // `\` continuations and the error file is held in `$err`.
-            let CrateWait { attempts, seconds } = crate_wait;
-            out.push_str("    && { err=/tmp/cargo-install.err; n=0; \\\n");
-            out.push_str(&format!(
-                "       until cargo install {binary} --locked \\\n"
-            ));
-            out.push_str("             --version \"${CRATE_VERSION}\" 2>\"$err\"; do \\\n");
-            out.push_str("         cat \"$err\" >&2; \\\n");
-            // Only an index miss is worth waiting out. A build failure is
-            // deterministic: retrying it recompiles the whole crate every
-            // attempt and buries the compiler error N repetitions deep, so stop
-            // at the first one.
-            out.push_str("         grep -q \"failed to compile\" \"$err\" \\\n");
-            out.push_str(
-                "           && echo \"build failed, not an index delay\" >&2 && exit 1; \\\n",
-            );
-            out.push_str("         n=$((n+1)); \\\n");
-            out.push_str(&format!("         [ \"$n\" -ge {attempts} ] \\\n"));
-            out.push_str(
-                "           && echo \"crates.io index never served ${CRATE_VERSION}\" >&2 \\\n",
-            );
-            out.push_str("           && exit 1; \\\n");
-            out.push_str(
-                "         echo \"waiting for crates.io index: ${CRATE_VERSION} (try $n)\"; \\\n",
-            );
-            // Drop cargo's LOCAL sparse-index cache, so the next attempt makes a
-            // full request instead of a conditional one. Cargo revalidates per
-            // invocation anyway, and this cannot touch staleness at the CDN edge
-            // — it is cheap insurance on the one layer we control, not the fix.
-            out.push_str(
-                "         rm -rf \"${CARGO_HOME:-/usr/local/cargo}\"/registry/index/*/.cache; \\\n",
-            );
-            out.push_str(&format!("         sleep {seconds}; \\\n"));
-            out.push_str("       done; }\n");
-            // Extra cargo tools the executor orchestrates (cargo_tools): install
-            // them into the builder here, then COPY their binaries into the
-            // runtime below. cargo-binstall fetches prebuilt release binaries (no
-            // source compile); it is itself installed from crates.io (--locked)
-            // rather than via a curl|bash installer, keeping the supply chain on
-            // the same registry as every other dependency. Plain sort — do NOT use
-            // sorted_packages(), which injects the apt baseline (ca-certificates, git).
-            let mut sorted_tools = cargo_tools.to_vec();
-            sorted_tools.sort();
-            if !sorted_tools.is_empty() {
-                // One tool per line: the joined list grows with [orb] cargo_tools
-                // and would otherwise run past the line limit (docker:S7020),
-                // exactly as the apt package list does.
-                out.push_str("RUN cargo install cargo-binstall --locked \\\n");
-                out.push_str("    && cargo binstall --no-confirm \\\n");
-                let last = sorted_tools.len() - 1;
-                for (i, tool) in sorted_tools.iter().enumerate() {
-                    let cont = if i == last { "" } else { " \\" };
-                    out.push_str(&format!("    {tool}{cont}\n"));
-                }
-            }
-            if let Some(ver) = circleci_cli_version {
-                out.push('\n');
-                out.push_str(&render_cli_installer_stage(ver));
-            }
-            out.push('\n');
-            out.push_str(&format!("FROM {base_image}\n"));
-            out.push_str("RUN apt-get update \\\n");
-            out.push_str(&render_apt_install(&runtime_pkgs));
-            out.push_str("    && rm -rf /var/lib/apt/lists/* \\\n");
-            out.push_str("    && useradd -ms /bin/bash circleci\n");
-            out.push_str(&format!(
-                "COPY --from=builder /usr/local/cargo/bin/{binary} /usr/local/bin/{binary}\n"
-            ));
-            // Each cargo tool's binary is assumed to share its crate name (true
-            // for cargo-audit, cargo-deny, and cargo-* tools generally). They land
-            // on PATH as standalone binaries, so the runtime needs no cargo/Rust
-            // toolchain to invoke them.
-            for tool in &sorted_tools {
-                out.push_str(&format!(
-                    "COPY --from=builder /usr/local/cargo/bin/{tool} /usr/local/bin/{tool}\n"
-                ));
-            }
-            if circleci_cli_version.is_some() {
-                out.push_str(
-                    "COPY --from=cli-installer /usr/local/bin/circleci /usr/local/bin/circleci\n",
-                );
-            }
-            out.push_str("USER circleci\n");
-            out.push_str("WORKDIR /home/circleci/project\n");
-            out
-        }
-        InstallMethod::Local => {
-            let runtime_pkgs = sorted_packages(apt_packages);
-            let mut out = String::new();
-            if let Some(ver) = circleci_cli_version {
-                out.push_str(&render_cli_installer_stage(ver));
-                out.push('\n');
-            }
-            out.push_str(&format!("FROM {base_image}\n"));
-            out.push_str("RUN apt-get update \\\n");
-            out.push_str(&render_apt_install(&runtime_pkgs));
-            out.push_str("    && rm -rf /var/lib/apt/lists/* \\\n");
-            out.push_str("    && useradd -ms /bin/bash circleci\n");
-            out.push_str(&format!("COPY {binary} /usr/local/bin/{binary}\n"));
-            if circleci_cli_version.is_some() {
-                out.push_str(
-                    "COPY --from=cli-installer /usr/local/bin/circleci /usr/local/bin/circleci\n",
-                );
-            }
-            out.push_str("USER circleci\n");
-            out.push_str("WORKDIR /home/circleci/project\n");
-            out
-        }
-        InstallMethod::Apt => {
-            let mut all_pkgs: Vec<&str> = vec!["git", binary];
-            all_pkgs.extend(apt_packages.iter().map(String::as_str));
-            all_pkgs.sort_unstable();
-            all_pkgs.dedup();
-            let mut out = String::new();
-            out.push_str(&format!("FROM {base_image}\n"));
-            out.push_str("RUN apt-get update \\\n");
-            out.push_str(&render_apt_install(&all_pkgs));
-            out.push_str("    && rm -rf /var/lib/apt/lists/*\n");
-            out
-        }
+    match opts.install_method {
+        InstallMethod::Binstall => render_binstall_dockerfile(binary, opts),
+        InstallMethod::Local => render_local_dockerfile(binary, opts),
+        InstallMethod::Apt => render_apt_dockerfile(binary, opts),
     }
+}
+
+/// A self-sufficient build toolchain: clang (libclang) and cmake cover native
+/// crates using bindgen or cmake, so the builder does not depend on the base
+/// image's age.
+const BUILDER_PACKAGES: &[&str] = &[
+    "build-essential",
+    "ca-certificates",
+    "clang",
+    "cmake",
+    "libssl-dev",
+    "pkg-config",
+];
+
+const CLI_COPY: &str =
+    "COPY --from=cli-installer /usr/local/bin/circleci /usr/local/bin/circleci\n";
+
+/// Build from crates.io in a builder stage, then copy the binary into a slim
+/// runtime.
+fn render_binstall_dockerfile(binary: &str, opts: &GenerateOpts) -> String {
+    // One read, because the installer stage below and the COPY that pulls from
+    // it must never disagree — a COPY from a stage that was not emitted fails
+    // the container build in the release pipeline.
+    let cli = opts.circleci_cli_version.as_deref();
+
+    // Plain sort — not `sorted_packages`, which prepends the apt baseline and
+    // would put `ca-certificates` and `git` in the COPY list below.
+    let mut tools = opts.cargo_tools.to_vec();
+    tools.sort();
+
+    let mut out = format!("FROM {} AS builder\n", opts.builder_image);
+    // CRATE_VERSION pins the exact released version passed by build-container.sh
+    // (from CIRCLE_TAG), and must precede the RUN that consumes it.
+    out.push_str("ARG CRATE_VERSION\n");
+    out.push_str("RUN apt-get update \\\n");
+    out.push_str(&render_apt_install(BUILDER_PACKAGES));
+    out.push_str("    && rm -rf /var/lib/apt/lists/* \\\n");
+    out.push_str(&render_propagation_gate(binary, &opts.crate_wait));
+    out.push_str(&render_cargo_tools_install(&tools));
+
+    if let Some(ver) = cli {
+        out.push('\n');
+        out.push_str(&render_cli_installer_stage(ver));
+    }
+    out.push('\n');
+
+    // Each cargo tool's binary shares its crate name, and lands on PATH as a
+    // standalone binary — the runtime needs no cargo or Rust toolchain to run it.
+    let mut copies = vec![format!(
+        "COPY --from=builder /usr/local/cargo/bin/{binary} /usr/local/bin/{binary}\n"
+    )];
+    copies.extend(tools.iter().map(|tool| {
+        format!("COPY --from=builder /usr/local/cargo/bin/{tool} /usr/local/bin/{tool}\n")
+    }));
+    out.push_str(&render_runtime_stage(
+        &opts.base_image,
+        &opts.apt_packages,
+        &copies,
+        cli.is_some(),
+    ));
+    out
+}
+
+/// `cargo install`, wrapped in a bounded retry that waits out crates.io sparse
+/// index lag.
+///
+/// The retry *is* the propagation gate — cargo-only, because the builder image
+/// has no curl or wget. An unpinned or ungated install resolves the previous
+/// version while the index lags the publish API, shipping a container whose
+/// binary version does not match its own tag (#200). The window is deliberately
+/// generous: a gate that expires leaves the release half-published, with the
+/// crate up and no container, recoverable only by re-running the tag's workflow
+/// by hand (#236).
+///
+/// `--locked` installs the dependency set the crate was published with, from
+/// its bundled `Cargo.lock`, rather than resolving afresh — so the container
+/// cannot diverge from what CI tested.
+///
+/// Split over `\` continuations so every line stays inside the Dockerfile line
+/// limit (docker:S7020), even for a binary name far longer than this crate's.
+fn render_propagation_gate(binary: &str, crate_wait: &CrateWait) -> String {
+    let CrateWait { attempts, seconds } = crate_wait;
+    let mut out = String::new();
+    out.push_str("    && { err=/tmp/cargo-install.err; n=0; \\\n");
+    out.push_str(&format!(
+        "       until cargo install {binary} --locked \\\n"
+    ));
+    out.push_str("             --version \"${CRATE_VERSION}\" 2>\"$err\"; do \\\n");
+    out.push_str("         cat \"$err\" >&2; \\\n");
+    // A build failure is deterministic: retrying recompiles the whole crate and
+    // buries the compiler error N repetitions deep. Only an index miss is worth
+    // waiting out.
+    out.push_str("         grep -q \"failed to compile\" \"$err\" \\\n");
+    out.push_str("           && echo \"build failed, not an index delay\" >&2 && exit 1; \\\n");
+    out.push_str("         n=$((n+1)); \\\n");
+    out.push_str(&format!("         [ \"$n\" -ge {attempts} ] \\\n"));
+    out.push_str("           && echo \"crates.io index never served ${CRATE_VERSION}\" >&2 \\\n");
+    out.push_str("           && exit 1; \\\n");
+    out.push_str("         echo \"waiting for crates.io index: ${CRATE_VERSION} (try $n)\"; \\\n");
+    // Drop cargo's local index cache so the next attempt makes a full request.
+    // Cheap insurance on the one layer we control; it cannot touch CDN edge
+    // staleness.
+    out.push_str(
+        "         rm -rf \"${CARGO_HOME:-/usr/local/cargo}\"/registry/index/*/.cache; \\\n",
+    );
+    out.push_str(&format!("         sleep {seconds}; \\\n"));
+    out.push_str("       done; }\n");
+    out
+}
+
+/// Extra tools the executor orchestrates, installed into the builder.
+///
+/// `cargo-binstall` fetches prebuilt binaries rather than compiling, and is
+/// itself installed from crates.io rather than a `curl | bash` installer — the
+/// supply chain stays on the same registry as every other dependency. One tool
+/// per line, because the list grows with `[orb] cargo_tools` and would run past
+/// the line limit.
+fn render_cargo_tools_install(tools: &[String]) -> String {
+    if tools.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("RUN cargo install cargo-binstall --locked \\\n");
+    out.push_str("    && cargo binstall --no-confirm \\\n");
+    let last = tools.len() - 1;
+    for (i, tool) in tools.iter().enumerate() {
+        let cont = if i == last { "" } else { " \\" };
+        out.push_str(&format!("    {tool}{cont}\n"));
+    }
+    out
+}
+
+/// The stage binstall and local both end with: a slim image carrying the
+/// binary, owned by an unprivileged user.
+///
+/// `with_cli` copies the circleci CLI in from the installer stage — both
+/// callers gate that on the same condition.
+fn render_runtime_stage(
+    base_image: &str,
+    apt_packages: &[String],
+    copies: &[String],
+    with_cli: bool,
+) -> String {
+    let mut out = format!("FROM {base_image}\n");
+    out.push_str("RUN apt-get update \\\n");
+    out.push_str(&render_apt_install(&sorted_packages(apt_packages)));
+    out.push_str("    && rm -rf /var/lib/apt/lists/* \\\n");
+    out.push_str("    && useradd -ms /bin/bash circleci\n");
+    for line in copies {
+        out.push_str(line);
+    }
+    if with_cli {
+        out.push_str(CLI_COPY);
+    }
+    out.push_str("USER circleci\n");
+    out.push_str("WORKDIR /home/circleci/project\n");
+    out
+}
+
+/// The binary is already built and sits in the Docker build context.
+fn render_local_dockerfile(binary: &str, opts: &GenerateOpts) -> String {
+    // One read, as in the binstall path: the installer stage and the COPY that
+    // pulls from it must not disagree.
+    let cli = opts.circleci_cli_version.as_deref();
+
+    let mut out = String::new();
+    if let Some(ver) = cli {
+        out.push_str(&render_cli_installer_stage(ver));
+        out.push('\n');
+    }
+    let copies = vec![format!("COPY {binary} /usr/local/bin/{binary}\n")];
+    out.push_str(&render_runtime_stage(
+        &opts.base_image,
+        &opts.apt_packages,
+        &copies,
+        cli.is_some(),
+    ));
+    out
+}
+
+/// The binary is packaged for apt, so one stage installs everything.
+fn render_apt_dockerfile(binary: &str, opts: &GenerateOpts) -> String {
+    let mut all_pkgs: Vec<&str> = vec!["git", binary];
+    all_pkgs.extend(opts.apt_packages.iter().map(String::as_str));
+    all_pkgs.sort_unstable();
+    all_pkgs.dedup();
+
+    let mut out = format!("FROM {}\n", opts.base_image);
+    out.push_str("RUN apt-get update \\\n");
+    out.push_str(&render_apt_install(&all_pkgs));
+    out.push_str("    && rm -rf /var/lib/apt/lists/*\n");
+    out
 }
 
 fn render_set_https_remote_command() -> String {
