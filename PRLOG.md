@@ -45,6 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - deps: update rust crate toml to 1.1.4(pr [#297])
 - deps: update dependency orb-tools to v12.5.0(pr [#298])
 - deps: update dependency circleci-public/circleci-cli to v1(pr [#299])
+- deps: lock file maintenance(pr [#300])
 
 ## [0.1.4] - 2026-07-27
 
@@ -879,6 +880,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#297]: https://github.com/jerus-org/gen-circleci-orb/pull/297
 [#298]: https://github.com/jerus-org/gen-circleci-orb/pull/298
 [#299]: https://github.com/jerus-org/gen-circleci-orb/pull/299
+[#300]: https://github.com/jerus-org/gen-circleci-orb/pull/300
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.4...HEAD
 [0.1.4]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.2...v0.1.3
