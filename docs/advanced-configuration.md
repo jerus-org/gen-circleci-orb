@@ -282,6 +282,20 @@ label = "Generate and compile MCP server"
   custom_files = ["src/commands/build_container.yml", "src/jobs/build_container.yml"]
   ```
 
+  The prune reaches **every depth** of those directories, not just the top level. An entry
+  authorises the path it names *and everything beneath it*, so a nested set of helpers needs one
+  entry rather than one per file:
+
+  ```toml
+  custom_files = ["src/scripts/lib"]   # keeps src/scripts/lib/ and all of its contents
+  ```
+
+  > **Changed in the release following 0.1.4.** The prune previously read those directories one
+  > level deep, so a hand-authored file in a *subdirectory* survived without being listed. It is
+  > now removed unless `custom_files` covers it. If you keep nested files under `src/commands`,
+  > `src/jobs` or `src/scripts`, add an entry for them before upgrading — run
+  > `gen-circleci-orb generate --dry-run` to see what would be removed.
+
 ## See Also
 
 - [Configuration Guide](configuration-guide.md) — the `gen-circleci-orb.toml` basics
