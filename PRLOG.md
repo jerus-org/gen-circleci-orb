@@ -38,6 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - write the config atomically(pr [#288])
 - stop sonar clippy sensor OOM on audit_env(pr [#289])
 - stop update reformatting blank lines it does not own(pr [#291])
+- prune orphans at any depth(pr [#293])
 
 ## [0.1.4] - 2026-07-27
 
@@ -865,6 +866,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#288]: https://github.com/jerus-org/gen-circleci-orb/pull/288
 [#289]: https://github.com/jerus-org/gen-circleci-orb/pull/289
 [#291]: https://github.com/jerus-org/gen-circleci-orb/pull/291
+[#293]: https://github.com/jerus-org/gen-circleci-orb/pull/293
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.4...HEAD
 [0.1.4]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.2...v0.1.3
