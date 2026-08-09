@@ -168,7 +168,7 @@ pub struct Generate {
     /// created, updated, or removed — i.e. the committed orb is out of sync with
     /// the CLI. Use this to gate packing/publishing so a drifted or hand-edited
     /// orb is never published.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "dry_run")]
     pub check: bool,
 }
 
@@ -712,14 +712,17 @@ impl Generate {
             .as_ref()
             .and_then(|o| o.custom_files.clone())
             .unwrap_or_default();
-        // --check (and --dry-run) write nothing; write_tree still computes the
-        // create/update/remove delta against the committed files.
-        let report = output_writer::write_tree(
-            &orb_root,
-            &files,
-            &custom_files,
-            self.dry_run || self.check,
-        )?;
+        // --check and --dry-run both write nothing, but for different reasons
+        // (see WriteMode): --check wants a verdict with no narration, --dry-run
+        // wants the narration.
+        let mode = if self.check {
+            output_writer::WriteMode::Verify
+        } else if self.dry_run {
+            output_writer::WriteMode::Preview
+        } else {
+            output_writer::WriteMode::Commit
+        };
+        let report = output_writer::write_tree(&orb_root, &files, &custom_files, mode)?;
 
         println!(
             "Done: {} created, {} updated, {} unchanged, {} removed",
@@ -737,8 +740,11 @@ impl Generate {
         // not suppressed by --no-record / --dry-run. The branch policy is
         // centralized here so the orb "just works" — we only record on a regular
         // PR branch, never on `main` or a forked-PR build (see
-        // should_record_on_branch).
-        if !self.no_record && !self.dry_run {
+        // should_record_on_branch). `--check` already returned above, so `mode`
+        // can only be `Preview` or `Commit` here — reading it instead of
+        // `self.dry_run` keeps this decision derived from the same value that
+        // decided whether anything was written.
+        if !self.no_record && mode == output_writer::WriteMode::Commit {
             if let Some(record) = orb_config.record.as_ref().filter(|r| r.enabled) {
                 if should_record_on_branch(|k| std::env::var(k).ok()) {
                     record_orb(&orb_root, record)?;
@@ -940,6 +946,19 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+
+    /// `--check` and `--dry-run` used to be safe to pass together — both just
+    /// meant "write nothing" — but WriteMode gives them different narration,
+    /// so an invocation carrying both is now ambiguous rather than redundant.
+    #[test]
+    fn check_and_dry_run_are_mutually_exclusive() {
+        let cmd = clap::Command::new("generate");
+        let cmd = <Generate as clap::Args>::augment_args(cmd);
+        let err = cmd
+            .try_get_matches_from(["generate", "--check", "--dry-run"])
+            .expect_err("--check and --dry-run together must be rejected");
+        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
 
     #[test]
     fn regenerate_commit_does_not_skip_ci() {
