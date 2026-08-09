@@ -3193,6 +3193,45 @@ mod tests {
         tools
     }
 
+    /// The lines Docker reads as one `RUN` instruction — the `RUN` line and the
+    /// continuations after it — each with its 1-based line number.
+    ///
+    /// The instruction ends at the first line not marked with a trailing `\`, so
+    /// a continuation belonging to some other instruction is never picked up.
+    fn run_instruction_lines(dockerfile: &str) -> Vec<(usize, &str)> {
+        let mut in_run = false;
+        let mut found = Vec::new();
+        for (n, line) in dockerfile.lines().enumerate() {
+            if line.starts_with("RUN ") {
+                in_run = true;
+            }
+            if in_run {
+                found.push((n + 1, line));
+            }
+            if !line.trim_end().ends_with('\\') {
+                in_run = false;
+            }
+        }
+        found
+    }
+
+    #[test]
+    fn run_instruction_lines_spans_continuations_and_stops_at_the_end() {
+        let dockerfile = "FROM scratch\n\
+                          RUN one \\\n    two \\\n    three\nCOPY a b \\\n    c\nRUN solo\n";
+
+        assert_eq!(
+            run_instruction_lines(dockerfile),
+            vec![
+                (2, "RUN one \\"),
+                (3, "    two \\"),
+                (4, "    three"),
+                (7, "RUN solo"),
+            ],
+            "a continued COPY is not part of a RUN, and the RUN ends at `three`"
+        );
+    }
+
     /// docker:S7020 — "Too long RUN instruction should be split into multiple
     /// lines". Scoped to `RUN`, which is what the rule covers: `COPY` and `FROM`
     /// can exceed the width without being flagged, and this repo's own
@@ -3237,25 +3276,13 @@ mod tests {
                 };
                 let dockerfile = render_dockerfile(binary, &opts);
 
-                // A RUN instruction spans its continuation lines, so track
-                // whether the previous line ended with `\`.
-                let mut in_run = false;
-                for (n, line) in dockerfile.lines().enumerate() {
-                    if line.starts_with("RUN ") {
-                        in_run = true;
-                    }
-                    if in_run {
-                        assert!(
-                            line.chars().count() <= MAX,
-                            "RUN line {} is {} chars (limit {MAX}) for `{binary}` \
-                             with {method:?}:\n{line}",
-                            n + 1,
-                            line.chars().count()
-                        );
-                    }
-                    if !line.trim_end().ends_with('\\') {
-                        in_run = false;
-                    }
+                for (n, line) in run_instruction_lines(&dockerfile) {
+                    assert!(
+                        line.chars().count() <= MAX,
+                        "RUN line {n} is {} chars (limit {MAX}) for `{binary}` \
+                         with {method:?}:\n{line}",
+                        line.chars().count()
+                    );
                 }
             }
         }
