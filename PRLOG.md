@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - chore-idiomatic rust result to sonarcloud(pr [#303])
 - refactor-split render_dockerfile by install method(pr [#302])
 - refactor-extract run_instruction_lines test helper(pr [#304])
+- refactor-replace write_tree's dry_run bool with WriteMode(pr [#306])
 
 ### Fixed
 
@@ -889,6 +890,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#303]: https://github.com/jerus-org/gen-circleci-orb/pull/303
 [#302]: https://github.com/jerus-org/gen-circleci-orb/pull/302
 [#304]: https://github.com/jerus-org/gen-circleci-orb/pull/304
+[#306]: https://github.com/jerus-org/gen-circleci-orb/pull/306
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.4...HEAD
 [0.1.4]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.2...v0.1.3
