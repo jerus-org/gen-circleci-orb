@@ -19,10 +19,35 @@ pub struct WriteReport {
     pub removed: usize,
 }
 
+/// What `write_tree` should do with the changes it computes.
+///
+/// `Preview` and `Verify` both write nothing, but for different reasons: a
+/// `--dry-run` operator wants a description, while `--check` wants a verdict
+/// that gates orb publishing and has no reason to narrate to stderr.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WriteMode {
+    /// Write the files.
+    Commit,
+    /// Change nothing; describe what would happen.
+    Preview,
+    /// Change nothing; the report is a verdict, not a description.
+    Verify,
+}
+
+impl WriteMode {
+    fn writes(self) -> bool {
+        matches!(self, WriteMode::Commit)
+    }
+
+    fn narrates(self) -> bool {
+        matches!(self, WriteMode::Preview)
+    }
+}
+
 /// Write `files` (relative path → content) under `root`.
 ///
 /// Diff-aware: files whose content is identical to what's on disk are skipped.
-/// When `dry_run` is true nothing is written; instead a summary is printed to stderr.
+/// Under `WriteMode::Preview` or `WriteMode::Verify` nothing is written.
 ///
 /// After writing, prunes orphans in the generator-owned dirs. `custom_files` lists
 /// hand-authored paths (relative to `root`) that are kept even though they are not
@@ -32,17 +57,17 @@ pub fn write_tree(
     root: &Path,
     files: &HashMap<PathBuf, String>,
     custom_files: &[String],
-    dry_run: bool,
+    mode: WriteMode,
 ) -> Result<WriteReport> {
     let mut report = WriteReport::default();
 
     for (rel_path, content) in files {
         let abs_path = root.join(rel_path);
-        // Decide, act, count. `classify` is not given `dry_run`, so the report
+        // Decide, act, count. `classify` is not given `mode`, so the report
         // cannot come to depend on whether anything was written — which is what
         // `--check` gates orb publishing on.
         let action = classify(&abs_path, content)?;
-        apply(action, &abs_path, rel_path, content, dry_run)?;
+        apply(action, &abs_path, rel_path, content, mode)?;
         match action {
             FileAction::Create => report.created += 1,
             FileAction::Update => report.updated += 1,
@@ -50,7 +75,7 @@ pub fn write_tree(
         }
     }
 
-    prune_orphans(root, files, custom_files, dry_run, &mut report)?;
+    prune_orphans(root, files, custom_files, mode, &mut report)?;
 
     Ok(report)
 }
@@ -81,21 +106,23 @@ fn classify(abs_path: &Path, content: &str) -> Result<FileAction> {
     })
 }
 
-/// Carry out `action` — or, under `dry_run`, describe it and change nothing.
+/// Carry out `action` under `mode` — narrating and/or writing per [`WriteMode`].
 fn apply(
     action: FileAction,
     abs_path: &Path,
     rel_path: &Path,
     content: &str,
-    dry_run: bool,
+    mode: WriteMode,
 ) -> Result<()> {
     let verb = match action {
         FileAction::Unchanged => return Ok(()),
         FileAction::Create => "create",
         FileAction::Update => "update",
     };
-    if dry_run {
+    if mode.narrates() {
         eprintln!("[dry-run] would {verb}: {}", rel_path.display());
+    }
+    if !mode.writes() {
         return Ok(());
     }
     if let Some(parent) = abs_path.parent() {
@@ -108,12 +135,13 @@ fn apply(
     Ok(())
 }
 
-/// Delete `abs_path` — or, under `dry_run`, describe it and change nothing.
-/// The removal counterpart of [`apply`], so both halves of the writer describe
-/// and act through the same shape.
-fn discard(abs_path: &Path, rel_path: &Path, dry_run: bool) -> Result<()> {
-    if dry_run {
+/// Delete `abs_path` under `mode` — the removal counterpart of [`apply`], so
+/// both halves of the writer narrate and act through the same shape.
+fn discard(abs_path: &Path, rel_path: &Path, mode: WriteMode) -> Result<()> {
+    if mode.narrates() {
         eprintln!("[dry-run] would remove: {}", rel_path.display());
+    }
+    if !mode.writes() {
         return Ok(());
     }
     fs::remove_file(abs_path)?;
@@ -123,12 +151,13 @@ fn discard(abs_path: &Path, rel_path: &Path, dry_run: bool) -> Result<()> {
 /// Delete files under the generator-owned directories that are not in the
 /// freshly generated set (`files`). Treats `commands/`, `jobs/`, `scripts/` as
 /// owned by the generator so suppressing/renaming/removing a subcommand does not
-/// leave orphan files behind. Respects `dry_run` (reports, writes nothing).
+/// leave orphan files behind. Respects `mode` (reports, writes nothing unless
+/// `WriteMode::Commit`).
 fn prune_orphans(
     root: &Path,
     files: &HashMap<PathBuf, String>,
     custom_files: &[String],
-    dry_run: bool,
+    mode: WriteMode,
     report: &mut WriteReport,
 ) -> Result<()> {
     let keep = Keep::new(files.keys().cloned().collect(), custom_files);
@@ -136,7 +165,7 @@ fn prune_orphans(
     for dir in GENERATOR_OWNED_DIRS {
         let abs_dir = root.join(dir);
         if abs_dir.is_dir() {
-            prune_dir(&abs_dir, Path::new(dir), &keep, dry_run, report)?;
+            prune_dir(&abs_dir, Path::new(dir), &keep, mode, report)?;
         }
     }
     Ok(())
@@ -201,16 +230,16 @@ fn prune_dir(
     abs_dir: &Path,
     rel_dir: &Path,
     keep: &Keep,
-    dry_run: bool,
+    mode: WriteMode,
     report: &mut WriteReport,
 ) -> Result<()> {
     for entry in fs::read_dir(abs_dir)? {
         let entry = entry?;
         let rel = rel_dir.join(entry.file_name());
         if entry.file_type()?.is_dir() {
-            prune_dir(&entry.path(), &rel, keep, dry_run, report)?;
+            prune_dir(&entry.path(), &rel, keep, mode, report)?;
         } else if !keep.covers(&rel) {
-            discard(&entry.path(), &rel, dry_run)?;
+            discard(&entry.path(), &rel, mode)?;
             report.removed += 1;
         }
     }
@@ -234,7 +263,7 @@ mod tests {
     fn new_file_is_created() {
         let dir = TempDir::new().unwrap();
         let files = single_file("src/foo.yml", "hello");
-        let report = write_tree(dir.path(), &files, &[], false).unwrap();
+        let report = write_tree(dir.path(), &files, &[], WriteMode::Commit).unwrap();
         assert_eq!(report.created, 1);
         assert_eq!(report.updated, 0);
         assert_eq!(report.unchanged, 0);
@@ -251,7 +280,7 @@ mod tests {
         fs::write(dir.path().join("src/foo.yml"), "hello").unwrap();
 
         let files = single_file("src/foo.yml", "hello");
-        let report = write_tree(dir.path(), &files, &[], false).unwrap();
+        let report = write_tree(dir.path(), &files, &[], WriteMode::Commit).unwrap();
         assert_eq!(report.unchanged, 1);
         assert_eq!(report.created, 0);
         assert_eq!(report.updated, 0);
@@ -264,7 +293,7 @@ mod tests {
         fs::write(dir.path().join("src/foo.yml"), "old content").unwrap();
 
         let files = single_file("src/foo.yml", "new content");
-        let report = write_tree(dir.path(), &files, &[], false).unwrap();
+        let report = write_tree(dir.path(), &files, &[], WriteMode::Commit).unwrap();
         assert_eq!(report.updated, 1);
         assert_eq!(
             fs::read_to_string(dir.path().join("src/foo.yml")).unwrap(),
@@ -282,7 +311,7 @@ mod tests {
         fs::write(deep.join("stale.sh"), "stale").unwrap();
 
         let files = single_file("src/scripts/flat.sh", "x");
-        let report = write_tree(dir.path(), &files, &[], false).unwrap();
+        let report = write_tree(dir.path(), &files, &[], WriteMode::Commit).unwrap();
 
         assert_eq!(report.removed, 1);
         assert!(!deep.join("stale.sh").exists());
@@ -300,7 +329,7 @@ mod tests {
 
         let files = single_file("src/scripts/flat.sh", "x");
         let custom = ["src/scripts/deep/keep.sh".to_string()];
-        let report = write_tree(dir.path(), &files, &custom, false).unwrap();
+        let report = write_tree(dir.path(), &files, &custom, WriteMode::Commit).unwrap();
 
         assert_eq!(report.removed, 1, "only the unauthorised one");
         assert!(deep.join("keep.sh").exists());
@@ -320,7 +349,7 @@ mod tests {
 
         let files = single_file("src/scripts/flat.sh", "x");
         let custom = ["src/scripts/lib".to_string()];
-        let report = write_tree(dir.path(), &files, &custom, false).unwrap();
+        let report = write_tree(dir.path(), &files, &custom, WriteMode::Commit).unwrap();
 
         assert_eq!(report.removed, 1, "only the unauthorised one");
         assert!(lib.join("common.sh").exists());
@@ -335,7 +364,7 @@ mod tests {
         fs::write(deep.join("example.yml").as_path(), "ex").unwrap();
 
         let files = single_file("src/commands/keep.yml", "new");
-        let report = write_tree(dir.path(), &files, &[], false).unwrap();
+        let report = write_tree(dir.path(), &files, &[], WriteMode::Commit).unwrap();
 
         assert_eq!(report.removed, 0);
         assert!(deep.join("example.yml").exists());
@@ -358,7 +387,7 @@ mod tests {
         std::os::unix::fs::symlink(&elsewhere, scripts.join("to-file")).unwrap();
 
         let files = single_file("src/scripts/flat.sh", "x");
-        let report = write_tree(dir.path(), &files, &[], false).unwrap();
+        let report = write_tree(dir.path(), &files, &[], WriteMode::Commit).unwrap();
 
         assert_eq!(report.removed, 2, "both links are orphans");
         assert!(elsewhere.exists(), "the target must be untouched");
@@ -375,7 +404,8 @@ mod tests {
         fs::write(cmds.join("orphan.yml"), "stale").unwrap();
 
         let files = single_file("src/commands/keep.yml", "new");
-        let report = write_tree(dir.path(), &files, &["  ".to_string()], false).unwrap();
+        let report =
+            write_tree(dir.path(), &files, &["  ".to_string()], WriteMode::Commit).unwrap();
 
         assert_eq!(report.removed, 1);
         assert!(!cmds.join("orphan.yml").exists());
@@ -391,7 +421,7 @@ mod tests {
 
         // Generation only produces keep.yml.
         let files = single_file("src/commands/keep.yml", "new");
-        let report = write_tree(dir.path(), &files, &[], false).unwrap();
+        let report = write_tree(dir.path(), &files, &[], WriteMode::Commit).unwrap();
 
         assert_eq!(report.removed, 1, "orphan must be pruned");
         assert!(cmds.join("keep.yml").exists(), "generated file kept");
@@ -412,7 +442,7 @@ mod tests {
 
         let files = single_file("src/commands/generate.yml", "gen");
         let custom = ["src/commands/build_container.yml".to_string()];
-        let report = write_tree(dir.path(), &files, &custom, false).unwrap();
+        let report = write_tree(dir.path(), &files, &custom, WriteMode::Commit).unwrap();
 
         assert_eq!(report.removed, 1, "only the unauthorised orphan is pruned");
         assert!(
@@ -433,7 +463,7 @@ mod tests {
         fs::write(jobs.join("orphan.yml"), "stale").unwrap();
 
         let files = single_file("src/jobs/keep.yml", "new");
-        let report = write_tree(dir.path(), &files, &[], true).unwrap();
+        let report = write_tree(dir.path(), &files, &[], WriteMode::Preview).unwrap();
 
         assert_eq!(report.removed, 1, "dry_run still counts would-be removals");
         assert!(
@@ -452,7 +482,7 @@ mod tests {
         fs::write(dir.path().join("src/examples/example.yml"), "ex").unwrap();
 
         let files = single_file("src/commands/keep.yml", "new");
-        let report = write_tree(dir.path(), &files, &[], false).unwrap();
+        let report = write_tree(dir.path(), &files, &[], WriteMode::Commit).unwrap();
 
         assert_eq!(report.removed, 0, "non-owned files must be left alone");
         assert!(dir.path().join("src/@orb.yml").exists());
@@ -463,7 +493,7 @@ mod tests {
     fn dry_run_writes_nothing() {
         let dir = TempDir::new().unwrap();
         let files = single_file("src/foo.yml", "hello");
-        let report = write_tree(dir.path(), &files, &[], true).unwrap();
+        let report = write_tree(dir.path(), &files, &[], WriteMode::Preview).unwrap();
         assert_eq!(report.created, 1, "dry_run should still count created");
         assert!(
             !dir.path().join("src/foo.yml").exists(),
@@ -502,7 +532,7 @@ mod tests {
     fn every_outcome_is_counted_in_one_run() {
         let dir = TempDir::new().unwrap();
         let files = mixed_tree(&dir);
-        let report = write_tree(dir.path(), &files, &[], false).unwrap();
+        let report = write_tree(dir.path(), &files, &[], WriteMode::Commit).unwrap();
         assert_eq!(
             report,
             WriteReport {
@@ -523,26 +553,34 @@ mod tests {
     fn a_dry_run_reports_exactly_what_a_real_write_does() {
         let wet = TempDir::new().unwrap();
         let dry = TempDir::new().unwrap();
+        let verify = TempDir::new().unwrap();
         let wet_files = mixed_tree(&wet);
         let dry_files = mixed_tree(&dry);
+        let verify_files = mixed_tree(&verify);
 
-        let wet_report = write_tree(wet.path(), &wet_files, &[], false).unwrap();
-        let dry_report = write_tree(dry.path(), &dry_files, &[], true).unwrap();
+        let wet_report = write_tree(wet.path(), &wet_files, &[], WriteMode::Commit).unwrap();
+        let dry_report = write_tree(dry.path(), &dry_files, &[], WriteMode::Preview).unwrap();
+        let verify_report =
+            write_tree(verify.path(), &verify_files, &[], WriteMode::Verify).unwrap();
 
         assert_eq!(
             dry_report, wet_report,
             "a dry run must produce the same report as the write it previews"
         );
+        assert_eq!(
+            verify_report, wet_report,
+            "a verify run must produce the same report as the write it verifies against"
+        );
     }
 
-    /// …and it must leave the tree exactly as it found it.
+    /// …and neither must leave the tree any different from how it found it.
     #[test]
     fn a_dry_run_touches_nothing_at_all() {
         let dir = TempDir::new().unwrap();
         let files = mixed_tree(&dir);
         let cmds = dir.path().join("src/commands");
 
-        write_tree(dir.path(), &files, &[], true).unwrap();
+        write_tree(dir.path(), &files, &[], WriteMode::Preview).unwrap();
 
         assert_eq!(fs::read_to_string(cmds.join("stale.yml")).unwrap(), "old");
         assert_eq!(
@@ -553,6 +591,32 @@ mod tests {
         assert!(!cmds.join("fresh.yml").exists(), "no creation in a dry run");
     }
 
+    /// A `--check` run that wrote anything would defeat the entire point of
+    /// the drift gate: a CI job passing while it silently repaired the orb it
+    /// was supposed to be verifying against.
+    #[test]
+    fn verify_mode_touches_nothing_at_all() {
+        let dir = TempDir::new().unwrap();
+        let files = mixed_tree(&dir);
+        let cmds = dir.path().join("src/commands");
+
+        write_tree(dir.path(), &files, &[], WriteMode::Verify).unwrap();
+
+        assert_eq!(fs::read_to_string(cmds.join("stale.yml")).unwrap(), "old");
+        assert_eq!(
+            fs::read_to_string(cmds.join("current.yml")).unwrap(),
+            "same"
+        );
+        assert!(
+            cmds.join("orphan.yml").exists(),
+            "no pruning in a verify run"
+        );
+        assert!(
+            !cmds.join("fresh.yml").exists(),
+            "no creation in a verify run"
+        );
+    }
+
     /// The counts have to describe the filesystem, not merely each other.
     #[test]
     fn the_counts_match_what_actually_happened_on_disk() {
@@ -560,7 +624,7 @@ mod tests {
         let files = mixed_tree(&dir);
         let cmds = dir.path().join("src/commands");
 
-        let report = write_tree(dir.path(), &files, &[], false).unwrap();
+        let report = write_tree(dir.path(), &files, &[], WriteMode::Commit).unwrap();
 
         assert_eq!(
             fs::read_to_string(cmds.join("fresh.yml")).unwrap(),
@@ -587,8 +651,8 @@ mod tests {
     fn writing_twice_leaves_the_second_run_with_nothing_to_do() {
         let dir = TempDir::new().unwrap();
         let files = mixed_tree(&dir);
-        write_tree(dir.path(), &files, &[], false).unwrap();
-        let second = write_tree(dir.path(), &files, &[], false).unwrap();
+        write_tree(dir.path(), &files, &[], WriteMode::Commit).unwrap();
+        let second = write_tree(dir.path(), &files, &[], WriteMode::Commit).unwrap();
         assert_eq!(
             second,
             WriteReport {
