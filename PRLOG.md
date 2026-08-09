@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - refactor-resolve init's gathered values through shared helpers(pr [#270])
 - refactor-split strip_managed's walk from its rules(pr [#274])
 - refactor-split write_tree's decision from its action(pr [#277])
+- chore-idiomatic rust result to sonarcloud(pr [#303])
 
 ### Fixed
 
@@ -39,6 +40,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - stop sonar clippy sensor OOM on audit_env(pr [#289])
 - stop update reformatting blank lines it does not own(pr [#291])
 - prune orphans at any depth(pr [#293])
+- deps: update rust crate clap to 4.6.6(pr [#295])
+- deps: update pinned containers(pr [#294])
+- deps: update rust crate thiserror to 2.0.20(pr [#296])
+- deps: update rust crate toml to 1.1.4(pr [#297])
+- deps: update dependency orb-tools to v12.5.0(pr [#298])
+- deps: update dependency circleci-public/circleci-cli to v1(pr [#299])
+- deps: lock file maintenance(pr [#300])
+- deps: update dependency toolkit to v7.1.0(pr [#301])
 
 ## [0.1.4] - 2026-07-27
 
@@ -867,6 +876,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#289]: https://github.com/jerus-org/gen-circleci-orb/pull/289
 [#291]: https://github.com/jerus-org/gen-circleci-orb/pull/291
 [#293]: https://github.com/jerus-org/gen-circleci-orb/pull/293
+[#295]: https://github.com/jerus-org/gen-circleci-orb/pull/295
+[#294]: https://github.com/jerus-org/gen-circleci-orb/pull/294
+[#296]: https://github.com/jerus-org/gen-circleci-orb/pull/296
+[#297]: https://github.com/jerus-org/gen-circleci-orb/pull/297
+[#298]: https://github.com/jerus-org/gen-circleci-orb/pull/298
+[#299]: https://github.com/jerus-org/gen-circleci-orb/pull/299
+[#300]: https://github.com/jerus-org/gen-circleci-orb/pull/300
+[#301]: https://github.com/jerus-org/gen-circleci-orb/pull/301
+[#303]: https://github.com/jerus-org/gen-circleci-orb/pull/303
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.4...HEAD
 [0.1.4]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.2...v0.1.3

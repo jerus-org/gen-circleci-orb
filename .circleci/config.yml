@@ -6,8 +6,8 @@ parameters:
     default: "1.89"
 
 orbs:
-  toolkit: jerus-org/circleci-toolkit@7.0.0
-  orb-tools: circleci/orb-tools@12.4.0
+  toolkit: jerus-org/circleci-toolkit@7.1.0
+  orb-tools: circleci/orb-tools@12.5.0
   # Consumed by the orb-release workflow's build_mcp_server job (Mechanism A:
   # gen-orb-mcp owns the MCP build). Declared here (not in a managed block) so
   # `update` skips re-inserting it and stays round-trip stable.
@@ -42,6 +42,7 @@ workflows:
             branches:
               ignore: main
       - toolkit/idiomatic_rust:
+          clippy_report: true
           filters:
             branches:
               ignore: main
@@ -55,7 +56,10 @@ workflows:
               only: /pull\/[0-9]+/
       - toolkit/security:
           name: security with sonarcloud
+          clippy_report: true
           context: SonarCloud
+          requires: 
+            - toolkit/idiomatic_rust
           filters:
             branches:
               ignore: /pull\/[0-9]+/
@@ -84,7 +88,7 @@ workflows:
       - gen-circleci-orb/build_rust_binary:
           name: build-binary
           package: gen-circleci-orb
-          rust_image: jerusdp/ci-rust:rolling-6mo@sha256:36aacfbf82036d7ae47c004f2844220a7fe7d9882b13a4bf741af99d7ded97b6
+          rust_image: jerusdp/ci-rust:rolling-6mo@sha256:ac7fa7e1e811f24211f70ac0ebe87c7a27db118535582ef3bb70557f233ab28a
       - gen-circleci-orb/generate:
           name: regenerate-orb
           binary: gen-circleci-orb
