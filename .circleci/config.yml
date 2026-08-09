@@ -59,7 +59,7 @@ workflows:
           clippy_report: true
           context: SonarCloud
           requires: 
-            - toolkit/idiomatic_rust          filters:
+            - toolkit/idiomatic_rust
           filters:
             branches:
               ignore: /pull\/[0-9]+/
