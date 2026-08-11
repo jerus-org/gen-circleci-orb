@@ -1,5 +1,7 @@
 use anyhow::Result;
 
+use crate::output_writer;
+
 pub struct PatchOpts {
     pub binary: String,
     /// One or more CircleCI namespaces to publish the orb under.
@@ -426,7 +428,9 @@ pub fn patch_release(content: &str, _opts: &PatchOpts) -> (String, PatchReport) 
     (content.to_string(), report)
 }
 
-/// Apply patches to CI config files on disk (or dry-run).
+/// Apply patches to CI config files on disk. Under `WriteMode::Preview` or
+/// `WriteMode::Verify`, nothing is written — the returned summary is the same
+/// either way.
 ///
 /// Each file is replaced atomically, but the set is not: an interruption can
 /// leave one patched and another not. What makes that safe is that patching is
@@ -435,7 +439,7 @@ pub fn patch_release(content: &str, _opts: &PatchOpts) -> (String, PatchReport) 
 pub fn apply_patches(
     ci_dir: &std::path::Path,
     opts: &PatchOpts,
-    dry_run: bool,
+    mode: output_writer::WriteMode,
 ) -> Result<Vec<String>> {
     let mut summary = vec![];
 
@@ -464,7 +468,7 @@ pub fn apply_patches(
             summary.push(format!("{filename}: skipped {sk} (already present)"));
         }
 
-        if !dry_run && patched != content {
+        if mode.writes() && patched != content {
             // Same file, same reason as `update`: the consumer wrote most of it.
             crate::fs_atomic::write_atomically(&path, &patched)?;
         }
@@ -791,6 +795,8 @@ fn push_mcp_workflow_steps(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::output_writer::WriteMode;
+    use tempfile::TempDir;
 
     fn make_opts() -> PatchOpts {
         PatchOpts {
@@ -2515,6 +2521,42 @@ workflows:
           source_dir: orb/src
           requires: [pack-orb]
 ";
+
+    /// The property being preserved across #305's refactor: the summary
+    /// `apply_patches` returns must not depend on whether anything was
+    /// written, the same invariant `write_tree` holds for its report.
+    #[test]
+    fn apply_patches_reports_but_does_not_write_under_preview() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("config.yml"), BUILD_FIXTURE).unwrap();
+
+        let summary = apply_patches(dir.path(), &make_opts(), WriteMode::Preview).unwrap();
+
+        assert!(
+            summary.iter().any(|s| s.contains("gen-circleci-orb orb")),
+            "preview must still report the insertion: {summary:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("config.yml")).unwrap(),
+            BUILD_FIXTURE,
+            "preview must not write the file"
+        );
+    }
+
+    #[test]
+    fn apply_patches_writes_under_commit() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("config.yml"), BUILD_FIXTURE).unwrap();
+
+        apply_patches(dir.path(), &make_opts(), WriteMode::Commit).unwrap();
+
+        let written = std::fs::read_to_string(dir.path().join("config.yml")).unwrap();
+        assert_ne!(
+            written, BUILD_FIXTURE,
+            "commit must write the patched content"
+        );
+        assert!(written.contains("gen-circleci-orb: jerus-org/gen-circleci-orb@0.0.1"));
+    }
 }
 
 /// Characterisation tests for [`strip_managed`], written before the refactor in

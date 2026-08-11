@@ -9,6 +9,7 @@ use crate::{
         non_empty, CiSection, OrbConfig, OrbSection, RecordConfig, DEFAULT_CRATE_WAIT_ATTEMPTS,
         DEFAULT_CRATE_WAIT_SECONDS,
     },
+    output_writer,
 };
 
 pub const DEFAULT_DOCKER_ORB_VERSION: &str = "3.0.1";
@@ -1153,7 +1154,12 @@ impl Init {
                 .unwrap_or_default(),
         };
 
-        let summary = ci_patcher::apply_patches(&self.ci_dir, &opts, self.dry_run)?;
+        let mode = if self.dry_run {
+            output_writer::WriteMode::Preview
+        } else {
+            output_writer::WriteMode::Commit
+        };
+        let summary = ci_patcher::apply_patches(&self.ci_dir, &opts, mode)?;
         for line in &summary {
             println!("{line}");
         }
