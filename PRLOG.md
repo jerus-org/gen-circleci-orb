@@ -52,6 +52,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - deps: update dependency circleci-public/circleci-cli to v1(pr [#299])
 - deps: lock file maintenance(pr [#300])
 - deps: update dependency toolkit to v7.1.0(pr [#301])
+- deps: lock file maintenance(pr [#307])
 
 ## [0.1.4] - 2026-07-27
 
@@ -893,6 +894,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#304]: https://github.com/jerus-org/gen-circleci-orb/pull/304
 [#306]: https://github.com/jerus-org/gen-circleci-orb/pull/306
 [#308]: https://github.com/jerus-org/gen-circleci-orb/pull/308
+[#307]: https://github.com/jerus-org/gen-circleci-orb/pull/307
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.4...HEAD
 [0.1.4]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.2...v0.1.3
