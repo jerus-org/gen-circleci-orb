@@ -26,7 +26,7 @@ from the dependency graph with [`cargo-about`](https://github.com/EmbarkStudios/
 
 Used by:
 
-- moka 0.12.15
+- moka 0.12.16
 
 ```text
                                  Apache License
@@ -661,7 +661,7 @@ limitations under the License.
 
 Used by:
 
-- aws-lc-sys 0.43.0
+- aws-lc-sys 0.44.0
 - dunce 1.0.5
 - ryu 1.0.23
 - sync_wrapper 1.0.2
@@ -786,7 +786,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 Used by:
 
-- aws-lc-sys 0.43.0
+- aws-lc-sys 0.44.0
 
 ```text
 Copyright (c) <year> <owner>. 
@@ -1013,8 +1013,8 @@ third-party/chromium/LICENSE.
 
 Used by:
 
-- aws-lc-rs 1.17.3
-- aws-lc-sys 0.43.0
+- aws-lc-rs 1.18.0
+- aws-lc-sys 0.44.0
 
 ```text
 ISC License:
@@ -1216,25 +1216,27 @@ DEALINGS IN THE SOFTWARE.
 Used by:
 
 - backtrace 0.3.76
-- cc 1.4.0
+- cc 1.4.2
 - cfg-if 1.0.4
 - cmake 0.1.58
-- find-msvc-tools 0.1.9
+- find-msvc-tools 0.1.10
 - git2 0.21.0
 - jobserver 0.1.35
-- js-sys 0.3.103
+- js-sys 0.3.104
+- libgit2-sys 0.18.7+1.9.6
+- libssh2-sys 0.3.2
 - openssl-probe 0.1.6
 - openssl-probe 0.2.1
 - openssl-sys 0.9.117
 - pkg-config 0.3.33
 - rustc-demangle 0.1.28
 - socket2 0.6.5
-- wasm-bindgen-futures 0.4.76
-- wasm-bindgen-macro-support 0.2.126
-- wasm-bindgen-macro 0.2.126
-- wasm-bindgen-shared 0.2.126
-- wasm-bindgen 0.2.126
-- web-sys 0.3.103
+- wasm-bindgen-futures 0.4.77
+- wasm-bindgen-macro-support 0.2.127
+- wasm-bindgen-macro 0.2.127
+- wasm-bindgen-shared 0.2.127
+- wasm-bindgen 0.2.127
+- web-sys 0.3.104
 
 ```text
 Copyright (c) 2014 Alex Crichton
@@ -1404,7 +1406,7 @@ Used by:
 - num-bigint 0.4.8
 - num-integer 0.1.46
 - num-traits 0.2.19
-- regex-automata 0.4.16
+- regex-automata 0.4.18
 - regex-syntax 0.8.11
 - regex 1.13.1
 
@@ -3881,8 +3883,8 @@ Used by:
 - anstyle 1.0.14
 - clap-verbosity-flag 3.0.4
 - clap-verbosity 2.1.0
-- clap 4.6.5
-- clap_builder 4.6.5
+- clap 4.6.6
+- clap_builder 4.6.6
 - clap_derive 4.6.4
 - clap_lex 1.1.0
 - colorchoice 1.0.5
@@ -4778,7 +4780,7 @@ SOFTWARE.
 
 Used by:
 
-- gen-circleci-orb 0.1.4
+- gen-circleci-orb 0.1.5
 
 ```text
 MIT License
@@ -4912,37 +4914,6 @@ Used by:
 MIT License
 
 Copyright (c) [2021] [Marvin Countryman]
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-```
-
-## MIT License
-
-Used by:
-
-- libssh2-sys 0.3.2
-
-```text
-MIT License
-
-Copyright (c) [year] [fullname]
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -5104,7 +5075,7 @@ Used by:
 - pest_meta 2.8.8
 - pin-project-lite 0.2.17
 - portable-atomic-util 0.2.7
-- portable-atomic 1.14.0
+- portable-atomic 1.15.0
 - proc-macro2 1.0.107
 - quote 1.0.47
 - rustc-stable-hash 0.1.2
@@ -5124,9 +5095,9 @@ Used by:
 - syn 2.0.119
 - syn 3.0.3
 - thiserror-impl 1.0.69
-- thiserror-impl 2.0.19
+- thiserror-impl 2.0.20
 - thiserror 1.0.69
-- thiserror 2.0.19
+- thiserror 2.0.20
 - trait-variant 0.1.3
 - typed-builder-macro 0.18.2
 - typed-builder 0.18.2
@@ -5317,7 +5288,7 @@ Status API Training Shop Blog About Pricing
 
 Used by:
 
-- android_system_properties 0.1.5
+- android_system_properties 0.1.6
 
 ```text
 The MIT License (MIT)
@@ -5668,7 +5639,7 @@ SOFTWARE.
 
 Used by:
 
-- aws-lc-sys 0.43.0
+- aws-lc-sys 0.44.0
 
 ```text
 The MIT License (MIT)
@@ -5934,7 +5905,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- base64 0.23.0
+- base64 0.23.1
 
 ```text
 The MIT License (MIT)
@@ -6080,38 +6051,6 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-```
-
-## MIT License
-
-Used by:
-
-- libgit2-sys 0.18.7+1.9.6
-
-```text
-This software is licensed under the MIT License.
-
-Copyright Fedor Indutny, 2018.
-
-Permission is hereby granted, free of charge, to any person obtaining a
-copy of this software and associated documentation files (the
-"Software"), to deal in the Software without restriction, including
-without limitation the rights to use, copy, modify, merge, publish,
-distribute, sublicense, and/or sell copies of the Software, and to permit
-persons to whom the Software is furnished to do so, subject to the
-following conditions:
-
-The above copyright notice and this permission notice shall be included
-in all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
-OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
-NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
-DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
-OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
-USE OR OTHER DEALINGS IN THE SOFTWARE.
-
 ```
 
 ## Mozilla Public License 2.0

@@ -5,9 +5,59 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.5] - 2026-08-11
+
+Summary: Added[2], Changed[11], Chore[1], Documentation[4], Fixed[24], Testing[1]
+
+### Added
+
+ - feat: record the [orb] settings in the config
+ - feat: generate parameters for positionals and short-only options
+
+### Fixed
+
+ - fix(deps): update rust crate toml to 1.1.4
+ - fix(deps): update rust crate thiserror to 2.0.20
+ - fix(deps): update rust crate clap to 4.6.6
+ - fix: prune orphans at any depth
+ - fix: stop update reformatting blank lines it does not own
+ - fix: give the staging path a uuid rather than a clock reading
+ - fix: write the config atomically
+ - fix: stop a colon in a description ending it
+ - fix: let joined_commands see a missing line continuation
+ - fix: introspect the locally built binary, not the released one
+ - fix: stop after-help prose being read as subcommands
+ - fix: stop a colon-terminated description ending the Commands: block
+ - fix: close four gaps in the gathered [orb] settings
+ - fix: keep comments with their own entry and fail loudly on a stale read
+ - fix: keep comments when writing gen-circleci-orb.toml
+ - fix: split the over-long RUN instructions in the Dockerfile
+ - fix: treat an empty config value as missing
+ - fix: keep the propagation gate within the Dockerfile line limit
+ - fix: stop the propagation gate retrying a build failure
+ - fix: reject parameter names a shell cannot use
+ - fix: let init gather its required values interactively
+ - fix: widen the crates.io propagation gate to ten minutes
+ - fix: stop option blocks swallowing later options
+ - fix(deps): update rust crate pcu to 0.6.30
+
+### Changed
+
+ - refactor: give apply_patches a WriteMode instead of dry_run
+ - refactor: replace write_tree's dry_run bool with WriteMode
+ - refactor: extract run_instruction_lines test helper
+ - refactor: split render_dockerfile by install method
+ - refactor: share the atomic write with the config.yml writers
+ - refactor: read the Commands: block as an iterator
+ - refactor: split write_tree's decision from its action
+ - refactor: split strip_managed's walk from its rules
+ - refactor: resolve init's gathered values through shared helpers
+ - refactor: split merge_table into dispatch, cleanup and removal
+ - refactor: give the crate-wait settings real defaults, not None
+
 ## [0.1.4] - 2026-07-27
 
-Summary: Fixed[1]
+Summary: Chore[1], Fixed[1]
 
 ### Fixed
 
@@ -675,7 +725,8 @@ Summary: Added[2], Chore[1], Fixed[2], Testing[1]
 
 Summary: Chore[2]
 
-[Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.0...v0.1.1
