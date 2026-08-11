@@ -35,7 +35,7 @@ pub enum WriteMode {
 }
 
 impl WriteMode {
-    fn writes(self) -> bool {
+    pub(crate) fn writes(self) -> bool {
         matches!(self, WriteMode::Commit)
     }
 
