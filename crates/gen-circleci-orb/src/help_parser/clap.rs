@@ -480,10 +480,11 @@ fn collect_block(lines: &[&str], start: usize) -> (String, usize) {
         let next_trimmed = lines[j].trim();
 
         if next_trimmed.is_empty() {
-            // A blank line only ends the block if what follows starts a new one.
+            // A blank line only ends the block if what follows starts a new
+            // one. Otherwise it's a paragraph break: skip past it without
+            // adding it to block_lines, so the join below never sees it.
             match peek_next_non_blank(lines, j + 1) {
                 Some((_, peek)) if !ends_block(peek) => {
-                    block_lines.push(next_trimmed); // include the blank
                     j += 1;
                 }
                 _ => {
@@ -499,14 +500,7 @@ fn collect_block(lines: &[&str], start: usize) -> (String, usize) {
         }
     }
 
-    (
-        block_lines
-            .into_iter()
-            .filter(|line| !line.is_empty())
-            .collect::<Vec<_>>()
-            .join(" "),
-        j,
-    )
+    (block_lines.join(" "), j)
 }
 
 /// True when `line` opens something new, so the block before it is complete.
