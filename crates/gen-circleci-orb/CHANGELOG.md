@@ -5,9 +5,23 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.7] - 2026-08-17
+
+Summary: Changed[1], Fixed[3]
+
+### Fixed
+
+ - fix(deps): update rust crate uuid to 1.24.1
+ - fix(deps): update rust crate pcu to 0.6.32
+ - fix: join description with single space (#312)
+
+### Changed
+
+ - refactor: don't push blank into collect_block
+
 ## [0.1.6] - 2026-08-11
 
-Summary: 
+Summary: Chore[1]
 
 ## [0.1.5] - 2026-08-11
 
@@ -729,7 +743,8 @@ Summary: Added[2], Chore[1], Fixed[2], Testing[1]
 
 Summary: Chore[2]
 
-[Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.5...HEAD
+[Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.6...HEAD
+[0.1.6]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.2...v0.1.3
