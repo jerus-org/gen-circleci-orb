@@ -480,10 +480,11 @@ fn collect_block(lines: &[&str], start: usize) -> (String, usize) {
         let next_trimmed = lines[j].trim();
 
         if next_trimmed.is_empty() {
-            // A blank line only ends the block if what follows starts a new one.
+            // A blank line only ends the block if what follows starts a new
+            // one. Otherwise it's a paragraph break: skip past it without
+            // adding it to block_lines, so the join below never sees it.
             match peek_next_non_blank(lines, j + 1) {
                 Some((_, peek)) if !ends_block(peek) => {
-                    block_lines.push(next_trimmed); // include the blank
                     j += 1;
                 }
                 _ => {
@@ -1413,6 +1414,37 @@ Options:
             p.description.contains("Project root directory"),
             "description truncated to {:?}",
             p.description
+        );
+    }
+
+    /// #312: a blank-line short/long split in the doc comment renders as a
+    /// blank line inside the option's block. Joining must drop it, not turn
+    /// it into a second space — matching how `extract_description` already
+    /// joins a subcommand's about+long_about.
+    #[test]
+    fn blank_line_split_description_joins_with_a_single_space() {
+        let help = r#"Do something
+
+Usage: tool cmd [OPTIONS]
+
+Options:
+      --advisory-db <ADVISORY_DB>
+          Advisory-db root; cargo-deny's checkout lives beneath it.
+
+          Its commit becomes the pin. Defaults to ~/.cargo/advisory-db.
+
+  -h, --help
+          Print help
+"#;
+        let params = parse_parameters(help);
+        let p = params
+            .iter()
+            .find(|p| p.long_name == "advisory_db")
+            .unwrap();
+        assert_eq!(
+            p.description,
+            "Advisory-db root; cargo-deny's checkout lives beneath it. \
+             Its commit becomes the pin. Defaults to ~/.cargo/advisory-db."
         );
     }
 

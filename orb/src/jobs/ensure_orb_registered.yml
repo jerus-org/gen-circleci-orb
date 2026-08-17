@@ -6,7 +6,7 @@ parameters:
     description: The orb name to check/register (e.g. my-org/my-orb)
   private:
     type: boolean
-    description: Register the orb as private when creating it.  Must be set correctly on first creation — orb visibility cannot be changed after the orb is created.
+    description: Register the orb as private when creating it. Must be set correctly on first creation — orb visibility cannot be changed after the orb is created.
     default: false
   attach_workspace:
     type: boolean
