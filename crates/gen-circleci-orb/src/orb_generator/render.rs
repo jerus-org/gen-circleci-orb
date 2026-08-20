@@ -31,11 +31,8 @@ pub struct GenerateOpts {
     pub apt_packages: Vec<String>,
     /// Extra cargo tools to install into the executor image via cargo-binstall
     /// in the builder stage, with their binaries copied into the runtime.
-    /// Binstall install method only. Each pair is `(crate_name, binary_name)`
-    /// — already split and validated (syntax, and no collision with another
-    /// entry's or the orb's own binary name) by
-    /// `commands::generate::validate_cargo_tool_entries`, so render code here
-    /// never needs to re-parse or reject a `cargo_tools` entry.
+    /// Binstall install method only. Each pair is `(crate_name, binary_name)`,
+    /// pre-validated by `commands::generate::validate_cargo_tool_entries`.
     pub cargo_tools: Vec<(String, String)>,
     /// How long the generated Dockerfile waits for crates.io to serve the
     /// version being released.
@@ -710,23 +707,17 @@ fn render_propagation_gate(binary: &str, crate_wait: &CrateWait) -> String {
 
 /// Splits a `cargo_tools` entry into `(crate_name, binary_name)`.
 ///
-/// Most crates install a binary of the same name (`cargo-audit` -> binary
-/// `cargo-audit`), so a bare entry uses itself for both. A crate whose binary
-/// name differs (e.g. crate `rsign2`, binary `rsign`) opts in with
-/// `"crate:binary"`. Each half must look like a real crate/binary name:
-/// starting with an ASCII letter or digit (never `-`, which `cargo binstall`
-/// would parse as a flag rather than a package name), and made up only of
-/// ASCII alphanumerics, `-`, `_`, or `.` after that. The crate half flows
-/// verbatim into a Dockerfile `RUN` instruction's shell-form command line
-/// (`render_cargo_tools_install`) and the binary half into `COPY` paths, so
-/// anything else (whitespace, `/`, shell metacharacters, an empty half, or
-/// more than one colon) is rejected at config-validation time rather than
-/// producing a broken or dangerous Dockerfile.
+/// A bare entry (`"cargo-audit"`) uses itself for both; `"crate:binary"`
+/// (e.g. `"rsign2:rsign"`) opts in when the binary name differs. Each half
+/// must follow Cargo's package name rules, since the crate half is passed
+/// unquoted to `cargo binstall` and the binary half becomes a Dockerfile
+/// `COPY` path.
 pub(crate) fn split_cargo_tool_entry(entry: &str) -> anyhow::Result<(&str, &str)> {
+    // Cargo package name rules: leading letter or `_`, then alphanumeric/-/_.
     fn is_valid_segment(s: &str) -> bool {
         let mut chars = s.chars();
-        matches!(chars.next(), Some(c) if c.is_ascii_alphanumeric())
-            && chars.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+        matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_')
+            && chars.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
     }
 
     match entry.split_once(':') {
@@ -735,9 +726,9 @@ pub(crate) fn split_cargo_tool_entry(entry: &str) -> anyhow::Result<(&str, &str)
             Ok((krate, binary))
         }
         _ => Err(anyhow::anyhow!(
-            "invalid cargo_tools entry {entry:?}: expected \"crate\" or \"crate:binary\", each \
-             part starting with a letter or digit and made up only of ASCII letters, digits, \
-             '-', '_', or '.'"
+            "invalid cargo_tools entry {entry:?}: expected \"crate\" or \"crate:binary\" using \
+             Cargo package name characters (leading letter or '_', then alphanumeric, '-', or \
+             '_')"
         )),
     }
 }

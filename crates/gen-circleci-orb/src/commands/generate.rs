@@ -619,21 +619,13 @@ pub(crate) fn ensure_cargo_tools_supported(
     Ok(())
 }
 
-/// Parses and validates every `cargo_tools` entry, and returns the
-/// `(crate, binary)` pairs render needs — so `GenerateOpts.cargo_tools` only
-/// ever holds pairs that are known-valid and free of collisions, and render
-/// code never has to re-parse or reject a raw entry.
-///
-/// Each entry must be a valid `crate` or `crate:binary` form. Its binary half
-/// must be unique among the other entries, distinct from `own_binary`, and
-/// not `"circleci"` — two tools (or a tool and the orb's own binary) landing
-/// at the same runtime path would silently drop one of them, and
-/// `render_runtime_stage` unconditionally overwrites `/usr/local/bin/circleci`
-/// whenever the generated Dockerfile carries the CLI-installer stage, so that
-/// name is always reserved regardless of whether this particular run enables
-/// it. Its crate half must also be unique — a crate listed twice under
-/// different binary aliases would `cargo binstall` it once but expect a COPY
-/// source for each alias, and only the crate's real output binary exists.
+/// Parses and validates every `cargo_tools` entry into `(crate, binary)`
+/// pairs. Binary names must be unique, including the orb's own binary and
+/// the reserved `circleci` CLI name (`render_runtime_stage` always writes
+/// there when the CLI-installer stage is enabled). Crate names must be
+/// unique too — one crate produces one binary regardless of alias. Checks
+/// every entry before returning, so multiple bad entries are reported
+/// together rather than one at a time.
 pub(crate) fn validate_cargo_tool_entries(
     cargo_tools: &[String],
     own_binary: &str,
@@ -644,23 +636,35 @@ pub(crate) fn validate_cargo_tool_entries(
     seen_binaries.insert(cli_binary);
     let mut seen_crates: HashSet<&str> = HashSet::new();
     let mut parsed = Vec::with_capacity(cargo_tools.len());
+    let mut errors = Vec::new();
+
     for entry in cargo_tools {
-        let (krate, binary) = orb_generator::render::split_cargo_tool_entry(entry)?;
+        let (krate, binary) = match orb_generator::render::split_cargo_tool_entry(entry) {
+            Ok(pair) => pair,
+            Err(e) => {
+                errors.push(e.to_string());
+                continue;
+            }
+        };
         if !seen_binaries.insert(binary) {
-            anyhow::bail!(
+            errors.push(format!(
                 "cargo_tools entry {entry:?} installs binary {binary:?}, which collides with \
                  another cargo_tools entry, the orb's own binary name {own_binary:?}, or the \
-                 reserved name {cli_binary:?} — each installed binary must land at a distinct \
-                 path in the runtime image"
-            );
+                 reserved name {cli_binary:?}"
+            ));
+            continue;
         }
         if !seen_crates.insert(krate) {
-            anyhow::bail!(
-                "cargo_tools entry {entry:?} lists crate {krate:?} more than once — each crate \
-                 may appear in cargo_tools only once, regardless of binary alias"
-            );
+            errors.push(format!(
+                "cargo_tools entry {entry:?} lists crate {krate:?} more than once"
+            ));
+            continue;
         }
         parsed.push((krate.to_string(), binary.to_string()));
+    }
+
+    if !errors.is_empty() {
+        anyhow::bail!("invalid cargo_tools:\n{}", errors.join("\n"));
     }
     Ok(parsed)
 }
@@ -2050,6 +2054,15 @@ mod tests {
             let err = validate_cargo_tool_entries(&[bad.to_string()], "mytool");
             assert!(err.is_err(), "expected error for entry {bad:?}");
         }
+    }
+
+    #[test]
+    fn validate_cargo_tool_entries_reports_every_bad_entry_not_just_the_first() {
+        let tools = vec!["a:b:c".to_string(), "rsign2:".to_string()];
+        let err = validate_cargo_tool_entries(&tools, "mytool").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("a:b:c"), "got: {msg}");
+        assert!(msg.contains("rsign2:"), "got: {msg}");
     }
 
     #[test]
