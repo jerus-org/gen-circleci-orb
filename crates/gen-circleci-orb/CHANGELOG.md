@@ -5,9 +5,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.8] - 2026-08-20
+
+Summary: Fixed[2]
+
+### Fixed
+
+ - fix: collect cargo_tools errors, trim comments
+ - fix: support crate:binary syntax in cargo_tools
+
 ## [0.1.7] - 2026-08-17
 
-Summary: Changed[1], Fixed[3]
+Summary: Changed[1], Chore[1], Fixed[3]
 
 ### Fixed
 
@@ -743,7 +752,8 @@ Summary: Added[2], Chore[1], Fixed[2], Testing[1]
 
 Summary: Chore[2]
 
-[Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.6...HEAD
+[Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.7...HEAD
+[0.1.7]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.3...v0.1.4

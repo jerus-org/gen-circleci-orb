@@ -772,7 +772,7 @@ CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 Used by:
 
-- rustls-webpki 0.103.13
+- rustls-webpki 0.103.14
 
 ```text
 Except as otherwise noted, this project is licensed under the following
@@ -1004,10 +1004,10 @@ DEALINGS IN THE SOFTWARE.
 Used by:
 
 - backtrace 0.3.76
-- cc 1.4.2
+- cc 1.4.3
 - cfg-if 1.0.4
 - cmake 0.1.58
-- find-msvc-tools 0.1.10
+- find-msvc-tools 0.1.11
 - git2 0.21.0
 - jobserver 0.1.35
 - js-sys 0.3.104
@@ -1016,7 +1016,7 @@ Used by:
 - openssl-probe 0.1.6
 - openssl-probe 0.2.1
 - openssl-sys 0.9.117
-- pkg-config 0.3.33
+- pkg-config 0.3.34
 - rustc-demangle 0.1.28
 - socket2 0.6.5
 - wasm-bindgen-futures 0.4.77
@@ -1192,7 +1192,7 @@ Used by:
 - bitflags 2.13.1
 - log 0.4.33
 - num-bigint 0.4.8
-- num-integer 0.1.46
+- num-integer 0.1.47
 - num-traits 0.2.19
 - regex-automata 0.4.18
 - regex-syntax 0.8.11
@@ -1579,13 +1579,13 @@ THE SOFTWARE.
 
 Used by:
 
-- futures-channel 0.3.33
-- futures-core 0.3.33
-- futures-io 0.3.33
-- futures-macro 0.3.33
-- futures-sink 0.3.33
-- futures-task 0.3.33
-- futures-util 0.3.33
+- futures-channel 0.3.34
+- futures-core 0.3.34
+- futures-io 0.3.34
+- futures-macro 0.3.34
+- futures-sink 0.3.34
+- futures-task 0.3.34
+- futures-util 0.3.34
 
 ```text
 Copyright (c) 2016 Alex Crichton
@@ -2336,7 +2336,7 @@ SOFTWARE.
 
 Used by:
 
-- h2 0.4.15
+- h2 0.4.16
 
 ```text
 Copyright (c) 2017 h2 authors
@@ -3198,7 +3198,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- http-body-util 0.1.4
+- http-body-util 0.1.5
 - http-body 1.1.0
 
 ```text
@@ -4167,7 +4167,7 @@ SOFTWARE.
 
 Used by:
 
-- libredox 0.1.19
+- libredox 0.1.20
 
 ```text
 MIT License
@@ -4260,7 +4260,7 @@ SOFTWARE.
 
 Used by:
 
-- link-bridge 0.2.6
+- link-bridge 0.2.7
 
 ```text
 MIT License
@@ -4291,7 +4291,7 @@ SOFTWARE.
 
 Used by:
 
-- gen-circleci-orb 0.1.7
+- gen-circleci-orb 0.1.8
 
 ```text
 MIT License
@@ -4558,17 +4558,17 @@ Used by:
 - color-eyre 0.6.5
 - color-spantrace 0.3.0
 - displaydoc 0.2.7
-- eyre 0.6.12
+- eyre 0.6.14
 - fastrand 2.5.0
 - indenter 0.3.4
 - itoa 1.0.18
 - linux-raw-sys 0.12.1
 - once_cell 1.21.4
 - pathdiff 0.2.3
-- pest 2.8.8
-- pest_derive 2.8.8
-- pest_generator 2.8.8
-- pest_meta 2.8.8
+- pest 2.9.0
+- pest_derive 2.9.0
+- pest_generator 2.9.0
+- pest_meta 2.9.0
 - pin-project-lite 0.2.17
 - portable-atomic-util 0.2.7
 - portable-atomic 1.15.0
@@ -5823,24 +5823,24 @@ authorization of the copyright holder.
 
 Used by:
 
-- icu_collections 2.2.0
-- icu_locale_core 2.2.0
-- icu_normalizer 2.2.0
-- icu_normalizer_data 2.2.0
-- icu_properties 2.2.0
-- icu_properties_data 2.2.0
-- icu_provider 2.2.0
-- litemap 0.8.2
-- potential_utf 0.1.5
-- tinystr 0.8.3
-- writeable 0.6.3
+- icu_collections 2.3.0
+- icu_locale_core 2.3.0
+- icu_normalizer 2.3.0
+- icu_normalizer_data 2.3.0
+- icu_properties 2.3.0
+- icu_properties_data 2.3.0
+- icu_provider 2.3.0
+- litemap 0.8.3
+- potential_utf 0.1.6
+- tinystr 0.8.4
+- writeable 0.6.4
 - yoke-derive 0.8.2
 - yoke 0.8.3
 - zerofrom-derive 0.1.7
 - zerofrom 0.1.8
-- zerotrie 0.2.4
-- zerovec-derive 0.11.3
-- zerovec 0.11.6
+- zerotrie 0.2.5
+- zerovec-derive 0.11.5
+- zerovec 0.11.7
 
 ```text
 UNICODE LICENSE V3
