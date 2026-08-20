@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::ValueEnum;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::{help_parser, orb_config, orb_generator, output_writer};
@@ -139,8 +139,10 @@ pub struct Generate {
 
     /// Extra cargo tool(s) to install into the executor image (repeatable).
     /// Each is a crate name installed via cargo-binstall in the builder stage,
-    /// with its binary copied into the runtime. Binstall install method only.
-    /// Example: --cargo-tool cargo-audit --cargo-tool cargo-deny
+    /// with its binary copied into the runtime, or "crate:binary" when the
+    /// installed binary name differs from the crate name. Binstall install
+    /// method only.
+    /// Example: --cargo-tool cargo-audit --cargo-tool rsign2:rsign
     #[arg(long = "cargo-tool")]
     pub cargo_tools: Vec<String>,
 
@@ -617,6 +619,52 @@ pub(crate) fn ensure_cargo_tools_supported(
     Ok(())
 }
 
+/// Parses and validates every `cargo_tools` entry, and returns the
+/// `(crate, binary)` pairs render needs — so `GenerateOpts.cargo_tools` only
+/// ever holds pairs that are known-valid and free of collisions, and render
+/// code never has to re-parse or reject a raw entry.
+///
+/// Each entry must be a valid `crate` or `crate:binary` form. Its binary half
+/// must be unique among the other entries, distinct from `own_binary`, and
+/// not `"circleci"` — two tools (or a tool and the orb's own binary) landing
+/// at the same runtime path would silently drop one of them, and
+/// `render_runtime_stage` unconditionally overwrites `/usr/local/bin/circleci`
+/// whenever the generated Dockerfile carries the CLI-installer stage, so that
+/// name is always reserved regardless of whether this particular run enables
+/// it. Its crate half must also be unique — a crate listed twice under
+/// different binary aliases would `cargo binstall` it once but expect a COPY
+/// source for each alias, and only the crate's real output binary exists.
+pub(crate) fn validate_cargo_tool_entries(
+    cargo_tools: &[String],
+    own_binary: &str,
+) -> Result<Vec<(String, String)>> {
+    let cli_binary = orb_generator::render::CIRCLECI_CLI_BINARY;
+    let mut seen_binaries: HashSet<&str> = HashSet::new();
+    seen_binaries.insert(own_binary);
+    seen_binaries.insert(cli_binary);
+    let mut seen_crates: HashSet<&str> = HashSet::new();
+    let mut parsed = Vec::with_capacity(cargo_tools.len());
+    for entry in cargo_tools {
+        let (krate, binary) = orb_generator::render::split_cargo_tool_entry(entry)?;
+        if !seen_binaries.insert(binary) {
+            anyhow::bail!(
+                "cargo_tools entry {entry:?} installs binary {binary:?}, which collides with \
+                 another cargo_tools entry, the orb's own binary name {own_binary:?}, or the \
+                 reserved name {cli_binary:?} — each installed binary must land at a distinct \
+                 path in the runtime image"
+            );
+        }
+        if !seen_crates.insert(krate) {
+            anyhow::bail!(
+                "cargo_tools entry {entry:?} lists crate {krate:?} more than once — each crate \
+                 may appear in cargo_tools only once, regardless of binary alias"
+            );
+        }
+        parsed.push((krate.to_string(), binary.to_string()));
+    }
+    Ok(parsed)
+}
+
 pub(crate) fn resolve_config_path(explicit: Option<&PathBuf>, output: &Path) -> PathBuf {
     explicit
         .cloned()
@@ -680,6 +728,7 @@ impl Generate {
         let install_method = resolve_install_method(self.install_method.as_ref(), &orb_config);
         let cargo_tools = resolve_cargo_tools(&self.cargo_tools, &orb_config);
         ensure_cargo_tools_supported(&install_method, &cargo_tools)?;
+        let cargo_tools = validate_cargo_tool_entries(&cargo_tools, &cli_def.binary_name)?;
 
         let opts = orb_generator::GenerateOpts {
             namespaces,
@@ -1978,6 +2027,67 @@ mod tests {
     fn no_cargo_tools_is_fine_with_any_method() {
         assert!(ensure_cargo_tools_supported(&InstallMethod::Apt, &[]).is_ok());
         assert!(ensure_cargo_tools_supported(&InstallMethod::Local, &[]).is_ok());
+    }
+
+    // ── validate_cargo_tool_entries ─────────────────────────────────────────
+
+    #[test]
+    fn validate_cargo_tool_entries_accepts_plain_and_split_forms() {
+        let tools = vec!["cargo-audit".to_string(), "rsign2:rsign".to_string()];
+        let parsed = validate_cargo_tool_entries(&tools, "mytool").unwrap();
+        assert_eq!(
+            parsed,
+            vec![
+                ("cargo-audit".to_string(), "cargo-audit".to_string()),
+                ("rsign2".to_string(), "rsign".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn validate_cargo_tool_entries_rejects_malformed_entries() {
+        for bad in ["a:b:c", ":rsign", "rsign2:", ""] {
+            let err = validate_cargo_tool_entries(&[bad.to_string()], "mytool");
+            assert!(err.is_err(), "expected error for entry {bad:?}");
+        }
+    }
+
+    #[test]
+    fn validate_cargo_tool_entries_rejects_binary_collision_between_entries() {
+        let tools = vec!["foo:tool".to_string(), "bar:tool".to_string()];
+        let err = validate_cargo_tool_entries(&tools, "mytool").unwrap_err();
+        // "tool" alone is a substring of both "cargo_tools" (the boilerplate
+        // text) and "mytool" (own_binary) — assert on the second entry itself
+        // so this only passes when *that* collision is what's reported.
+        assert!(err.to_string().contains("bar:tool"), "got: {err}");
+    }
+
+    #[test]
+    fn validate_cargo_tool_entries_rejects_binary_collision_with_own_binary() {
+        let tools = vec!["evilcrate:mytool".to_string()];
+        let err = validate_cargo_tool_entries(&tools, "mytool").unwrap_err();
+        assert!(err.to_string().contains("mytool"), "got: {err}");
+    }
+
+    #[test]
+    fn validate_cargo_tool_entries_rejects_binary_named_circleci() {
+        // render_runtime_stage unconditionally appends the CLI_COPY line when
+        // circleci_cli_version is set, overwriting anything already copied to
+        // /usr/local/bin/circleci — so this name is always reserved, not just
+        // when this particular run wraps the CLI.
+        let tools = vec!["evilcrate:circleci".to_string()];
+        let err = validate_cargo_tool_entries(&tools, "mytool").unwrap_err();
+        assert!(err.to_string().contains("circleci"), "got: {err}");
+    }
+
+    #[test]
+    fn validate_cargo_tool_entries_rejects_same_crate_under_different_binary_aliases() {
+        // Distinct binary names don't collide, but the crate rsign2 only ever
+        // produces one binary (rsign) — the "foo" alias would COPY a path
+        // cargo binstall never wrote.
+        let tools = vec!["rsign2:rsign".to_string(), "rsign2:foo".to_string()];
+        let err = validate_cargo_tool_entries(&tools, "mytool").unwrap_err();
+        assert!(err.to_string().contains("rsign2"), "got: {err}");
     }
 
     // ── MCP feature auto-provisions the executor image ─────────────────────
