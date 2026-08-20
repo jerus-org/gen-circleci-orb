@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - deps: lock file maintenance(pr [#318])
+- support crate:binary syntax in cargo_tools(pr [#320])
 
 ## [0.1.7] - 2026-08-17
 
@@ -922,6 +923,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#317]: https://github.com/jerus-org/gen-circleci-orb/pull/317
 [#313]: https://github.com/jerus-org/gen-circleci-orb/pull/313
 [#318]: https://github.com/jerus-org/gen-circleci-orb/pull/318
+[#320]: https://github.com/jerus-org/gen-circleci-orb/pull/320
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.7...HEAD
 [0.1.7]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.5...v0.1.6
