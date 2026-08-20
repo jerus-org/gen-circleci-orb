@@ -29,10 +29,11 @@ pub struct GenerateOpts {
     /// Extra apt packages to install in the final Docker image stage (sorted together with
     /// the baseline packages: ca-certificates, git).
     pub apt_packages: Vec<String>,
-    /// Extra cargo tools (crate names) to install into the executor image via
-    /// cargo-binstall in the builder stage, with their binaries copied into the
-    /// runtime. Binstall install method only.
-    pub cargo_tools: Vec<String>,
+    /// Extra cargo tools to install into the executor image via cargo-binstall
+    /// in the builder stage, with their binaries copied into the runtime.
+    /// Binstall install method only. Each pair is `(crate_name, binary_name)`,
+    /// pre-validated by `commands::generate::validate_cargo_tool_entries`.
+    pub cargo_tools: Vec<(String, String)>,
     /// How long the generated Dockerfile waits for crates.io to serve the
     /// version being released.
     pub crate_wait: CrateWait,
@@ -602,8 +603,10 @@ const BUILDER_PACKAGES: &[&str] = &[
     "pkg-config",
 ];
 
-const CLI_COPY: &str =
-    "COPY --from=cli-installer /usr/local/bin/circleci /usr/local/bin/circleci\n";
+/// The binary name the CLI-installer stage copies in. Single source of truth
+/// so `commands::generate::validate_cargo_tool_entries` can reserve it against
+/// `cargo_tools` collisions rather than duplicating the literal.
+pub(crate) const CIRCLECI_CLI_BINARY: &str = "circleci";
 
 /// Build from crates.io in a builder stage, then copy the binary into a slim
 /// runtime.
@@ -634,13 +637,17 @@ fn render_binstall_dockerfile(binary: &str, opts: &GenerateOpts) -> String {
     }
     out.push('\n');
 
-    // Each cargo tool's binary shares its crate name, and lands on PATH as a
-    // standalone binary — the runtime needs no cargo or Rust toolchain to run it.
+    // The runtime only cares about each entry's binary half — that's the name
+    // `cargo binstall` actually wrote under /usr/local/cargo/bin/ — and lands
+    // it on PATH as a standalone binary, so the runtime needs no cargo or Rust
+    // toolchain to run it.
     let mut copies = vec![format!(
         "COPY --from=builder /usr/local/cargo/bin/{binary} /usr/local/bin/{binary}\n"
     )];
-    copies.extend(tools.iter().map(|tool| {
-        format!("COPY --from=builder /usr/local/cargo/bin/{tool} /usr/local/bin/{tool}\n")
+    copies.extend(tools.iter().map(|(_, tool_binary)| {
+        format!(
+            "COPY --from=builder /usr/local/cargo/bin/{tool_binary} /usr/local/bin/{tool_binary}\n"
+        )
     }));
     out.push_str(&render_runtime_stage(
         &opts.base_image,
@@ -698,6 +705,34 @@ fn render_propagation_gate(binary: &str, crate_wait: &CrateWait) -> String {
     out
 }
 
+/// Splits a `cargo_tools` entry into `(crate_name, binary_name)`.
+///
+/// A bare entry (`"cargo-audit"`) uses itself for both; `"crate:binary"`
+/// (e.g. `"rsign2:rsign"`) opts in when the binary name differs. Each half
+/// must follow Cargo's package name rules, since the crate half is passed
+/// unquoted to `cargo binstall` and the binary half becomes a Dockerfile
+/// `COPY` path.
+pub(crate) fn split_cargo_tool_entry(entry: &str) -> anyhow::Result<(&str, &str)> {
+    // Cargo package name rules: leading letter or `_`, then alphanumeric/-/_.
+    fn is_valid_segment(s: &str) -> bool {
+        let mut chars = s.chars();
+        matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_')
+            && chars.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    }
+
+    match entry.split_once(':') {
+        None if is_valid_segment(entry) => Ok((entry, entry)),
+        Some((krate, binary)) if is_valid_segment(krate) && is_valid_segment(binary) => {
+            Ok((krate, binary))
+        }
+        _ => Err(anyhow::anyhow!(
+            "invalid cargo_tools entry {entry:?}: expected \"crate\" or \"crate:binary\" using \
+             Cargo package name characters (leading letter or '_', then alphanumeric, '-', or \
+             '_')"
+        )),
+    }
+}
+
 /// Extra tools the executor orchestrates, installed into the builder.
 ///
 /// `cargo-binstall` fetches prebuilt binaries rather than compiling, and is
@@ -705,16 +740,20 @@ fn render_propagation_gate(binary: &str, crate_wait: &CrateWait) -> String {
 /// supply chain stays on the same registry as every other dependency. One tool
 /// per line, because the list grows with `[orb] cargo_tools` and would run past
 /// the line limit.
-fn render_cargo_tools_install(tools: &[String]) -> String {
+///
+/// `cargo binstall` takes crate names — only the crate half of each pair is
+/// used here, the binary half only matters to the COPY that follows, in
+/// `render_binstall_dockerfile`.
+fn render_cargo_tools_install(tools: &[(String, String)]) -> String {
     if tools.is_empty() {
         return String::new();
     }
     let mut out = String::from("RUN cargo install cargo-binstall --locked \\\n");
     out.push_str("    && cargo binstall --no-confirm \\\n");
     let last = tools.len() - 1;
-    for (i, tool) in tools.iter().enumerate() {
+    for (i, (krate, _)) in tools.iter().enumerate() {
         let cont = if i == last { "" } else { " \\" };
-        out.push_str(&format!("    {tool}{cont}\n"));
+        out.push_str(&format!("    {krate}{cont}\n"));
     }
     out
 }
@@ -739,7 +778,10 @@ fn render_runtime_stage(
         out.push_str(line);
     }
     if with_cli {
-        out.push_str(CLI_COPY);
+        out.push_str(&format!(
+            "COPY --from=cli-installer /usr/local/bin/{CIRCLECI_CLI_BINARY} \
+             /usr/local/bin/{CIRCLECI_CLI_BINARY}\n"
+        ));
     }
     out.push_str("USER circleci\n");
     out.push_str("WORKDIR /home/circleci/project\n");
@@ -1654,6 +1696,19 @@ mod tests {
         }
     }
 
+    /// Test-only convenience: parse raw `"crate"` / `"crate:binary"` entries
+    /// into the `(crate, binary)` pairs `GenerateOpts.cargo_tools` now holds,
+    /// so tests can still write the familiar string form.
+    fn parsed_cargo_tools(entries: &[&str]) -> Vec<(String, String)> {
+        entries
+            .iter()
+            .map(|e| {
+                let (krate, binary) = split_cargo_tool_entry(e).unwrap();
+                (krate.to_string(), binary.to_string())
+            })
+            .collect()
+    }
+
     // ── @orb.yml ────────────────────────────────────────────────────────────
 
     #[test]
@@ -1747,7 +1802,7 @@ mod tests {
     fn dockerfile_cargo_tools_installed_in_builder_and_copied_to_runtime() {
         let cli = make_cli("mytool", vec![]);
         let opts = GenerateOpts {
-            cargo_tools: vec!["cargo-audit".to_string(), "cargo-deny".to_string()],
+            cargo_tools: parsed_cargo_tools(&["cargo-audit", "cargo-deny"]),
             ..default_opts()
         };
         let files = generate(&cli, &opts, None);
@@ -1796,7 +1851,7 @@ mod tests {
     fn dockerfile_cargo_tools_are_sorted() {
         let cli = make_cli("mytool", vec![]);
         let opts = GenerateOpts {
-            cargo_tools: vec!["cargo-deny".to_string(), "cargo-audit".to_string()],
+            cargo_tools: parsed_cargo_tools(&["cargo-deny", "cargo-audit"]),
             ..default_opts()
         };
         let content = &generate(&cli, &opts, None)[&PathBuf::from("Dockerfile")];
@@ -1804,6 +1859,123 @@ mod tests {
             binstall_tools(content) == ["cargo-audit", "cargo-deny"],
             "tools should be emitted in sorted order:\n{content}"
         );
+    }
+
+    #[test]
+    fn dockerfile_cargo_tools_supports_crate_binary_syntax() {
+        let cli = make_cli("mytool", vec![]);
+        let opts = GenerateOpts {
+            cargo_tools: parsed_cargo_tools(&["cargo-audit", "rsign2:rsign"]),
+            ..default_opts()
+        };
+        let content = &generate(&cli, &opts, None)[&PathBuf::from("Dockerfile")];
+        assert!(
+            binstall_tools(content) == ["cargo-audit", "rsign2"],
+            "binstall should use the crate name, not the raw entry:\n{content}"
+        );
+        assert!(
+            !content.contains("rsign2:rsign"),
+            "the raw entry syntax must never reach the rendered Dockerfile:\n{content}"
+        );
+        assert!(
+            content.contains("COPY --from=builder /usr/local/cargo/bin/rsign /usr/local/bin/rsign"),
+            "runtime should copy the split binary name on both source and dest:\n{content}"
+        );
+        assert!(
+            !content.contains("/usr/local/cargo/bin/rsign2"),
+            "the crate name must never appear as a binstall output path:\n{content}"
+        );
+    }
+
+    #[test]
+    fn split_cargo_tool_entry_plain_name_uses_it_for_both() {
+        assert_eq!(
+            split_cargo_tool_entry("cargo-audit").unwrap(),
+            ("cargo-audit", "cargo-audit")
+        );
+    }
+
+    #[test]
+    fn split_cargo_tool_entry_crate_colon_binary_splits() {
+        assert_eq!(
+            split_cargo_tool_entry("rsign2:rsign").unwrap(),
+            ("rsign2", "rsign")
+        );
+    }
+
+    #[test]
+    fn split_cargo_tool_entry_rejects_empty_entry() {
+        assert!(split_cargo_tool_entry("").is_err());
+    }
+
+    #[test]
+    fn split_cargo_tool_entry_rejects_empty_crate_half() {
+        assert!(split_cargo_tool_entry(":rsign").is_err());
+    }
+
+    #[test]
+    fn split_cargo_tool_entry_rejects_empty_binary_half() {
+        assert!(split_cargo_tool_entry("rsign2:").is_err());
+    }
+
+    #[test]
+    fn split_cargo_tool_entry_rejects_multiple_colons() {
+        assert!(split_cargo_tool_entry("a:b:c").is_err());
+    }
+
+    #[test]
+    fn split_cargo_tool_entry_rejects_whitespace_in_either_half() {
+        // A stray space (e.g. "crate: binary") would otherwise pass syntax
+        // validation and render a Dockerfile COPY path containing a literal
+        // space, which fails the container build.
+        assert!(split_cargo_tool_entry("rsign2: rsign").is_err());
+        assert!(split_cargo_tool_entry(" rsign2:rsign").is_err());
+        assert!(split_cargo_tool_entry("rsign2 :rsign").is_err());
+        assert!(split_cargo_tool_entry("rsign2:rsign ").is_err());
+        assert!(split_cargo_tool_entry("   ").is_err());
+    }
+
+    #[test]
+    fn split_cargo_tool_entry_rejects_path_separator_in_either_half() {
+        // cargo binstall writes a binary directly under
+        // /usr/local/cargo/bin/<name>, never a nested path — a '/' in either
+        // half would otherwise render a COPY source or destination path that
+        // never exists.
+        assert!(split_cargo_tool_entry("mycrate:bin/mybin").is_err());
+        assert!(split_cargo_tool_entry("crate/name:mybin").is_err());
+        assert!(split_cargo_tool_entry("crate/name").is_err());
+    }
+
+    #[test]
+    fn split_cargo_tool_entry_rejects_shell_metacharacters() {
+        // A crate name flows verbatim into a Dockerfile RUN instruction's
+        // shell-form command line (render_cargo_tools_install); the binary
+        // half flows into COPY paths. Neither is a real cargo/crates.io name
+        // once it carries `$`, backticks, quotes, or a semicolon — restrict
+        // both to the charset real crate/binary names actually use rather
+        // than deny-listing shell metacharacters one at a time.
+        for bad in [
+            "crate:bin$(id)",
+            "crate:bin`id`",
+            "crate:bin;rm -rf /",
+            "crate:bin\"x",
+            "cra$te:bin",
+        ] {
+            assert!(
+                split_cargo_tool_entry(bad).is_err(),
+                "expected error for {bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn split_cargo_tool_entry_rejects_leading_dash() {
+        // The crate half becomes a bare argument on the `cargo binstall`
+        // command line; a leading '-' would make clap parse it as a flag
+        // (e.g. "-h") instead of a package name.
+        assert!(split_cargo_tool_entry("-h").is_err());
+        assert!(split_cargo_tool_entry("--version:bin").is_err());
+        assert!(split_cargo_tool_entry("crate:-bin").is_err());
     }
 
     #[test]
@@ -3244,7 +3416,7 @@ mod tests {
     fn every_run_instruction_line_stays_within_the_length_limit() {
         const MAX: usize = 120;
         let long_binary = "a-consumer-crate-with-a-considerably-longer-name";
-        let many_tools: Vec<String> = [
+        let many_tools = parsed_cargo_tools(&[
             "cargo-audit",
             "cargo-deny",
             "cargo-nextest",
@@ -3252,10 +3424,8 @@ mod tests {
             "cargo-msrv",
             "cargo-machete",
             "cargo-about",
-        ]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
+            "rsign2:rsign",
+        ]);
 
         for binary in ["mytool", long_binary] {
             for method in [
