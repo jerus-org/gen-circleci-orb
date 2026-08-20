@@ -51,7 +51,7 @@ parameters:
     default: ''
   cargo_tool:
     type: string
-    description: 'Extra cargo tool(s) to install into the executor image (repeatable). Each is a crate name installed via cargo-binstall in the builder stage, with its binary copied into the runtime. Binstall install method only. Example: --cargo-tool cargo-audit --cargo-tool cargo-deny'
+    description: 'Extra cargo tool(s) to install into the executor image (repeatable). Each is a crate name installed via cargo-binstall in the builder stage, with its binary copied into the runtime, or "crate:binary" when the installed binary name differs from the crate name. Binstall install method only. Example: --cargo-tool cargo-audit --cargo-tool rsign2:rsign'
     default: ''
   dry_run:
     type: boolean
