@@ -27,7 +27,7 @@ base_image = "rust:1-slim-trixie@sha256:cc0448b41c3b7b7fea44f5dc50eacba729a56db3
 # whenever the binary exposes a circleci-using subcommand, so removing this line
 # does NOT drop the CLI (it falls back to DEFAULT_CIRCLECI_CLI_VERSION) — this
 # pin just keeps the version current and Renovate-tracked (renovate.json).
-circleci_cli_version = "0.1.38646"
+circleci_cli_version = "1.0.0"
 # Hand-authored orb infrastructure (build/release commands, jobs and scripts)
 # that `generate` does not produce. Registered here so the prune step preserves
 # them — the orb tree is otherwise fully owned by (CLI subcommands ∪ config).
