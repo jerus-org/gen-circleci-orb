@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - deps: update dependency gen-circleci-orb to v0.1.8(pr [#323])
 - deps: update pinned containers(pr [#322])
+- deps: update rust crate pcu to 0.6.33(pr [#324])
 
 ## [0.1.8] - 2026-08-20
 
@@ -933,6 +934,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#320]: https://github.com/jerus-org/gen-circleci-orb/pull/320
 [#323]: https://github.com/jerus-org/gen-circleci-orb/pull/323
 [#322]: https://github.com/jerus-org/gen-circleci-orb/pull/322
+[#324]: https://github.com/jerus-org/gen-circleci-orb/pull/324
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.8...HEAD
 [0.1.8]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.7...v0.1.8
 [0.1.7]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.6...v0.1.7
