@@ -13,7 +13,7 @@ from the dependency graph with [`cargo-about`](https://github.com/EmbarkStudios/
 
 ## Overview
 
-- **MIT License** — 320 crate(s)
+- **MIT License** — 321 crate(s)
 - **Unicode License v3** — 19 crate(s)
 - **Apache License 2.0** — 7 crate(s)
 - **ISC License** — 6 crate(s)
@@ -772,7 +772,7 @@ CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 Used by:
 
-- rustls-webpki 0.103.14
+- rustls-webpki 0.103.15
 
 ```text
 Except as otherwise noted, this project is licensed under the following
@@ -1004,14 +1004,14 @@ DEALINGS IN THE SOFTWARE.
 Used by:
 
 - backtrace 0.3.76
-- cc 1.4.3
+- cc 1.4.4
 - cfg-if 1.0.4
 - cmake 0.1.58
 - find-msvc-tools 0.1.11
 - git2 0.21.0
 - jobserver 0.1.35
 - js-sys 0.3.104
-- libgit2-sys 0.18.7+1.9.6
+- libgit2-sys 0.18.8+1.9.7
 - libssh2-sys 0.3.2
 - openssl-probe 0.1.6
 - openssl-probe 0.2.1
@@ -1331,7 +1331,7 @@ THE SOFTWARE.
 
 Used by:
 
-- either 1.17.0
+- either 1.18.0
 
 ```text
 Copyright (c) 2015
@@ -2336,7 +2336,7 @@ SOFTWARE.
 
 Used by:
 
-- h2 0.4.16
+- h2 0.4.18
 
 ```text
 Copyright (c) 2017 h2 authors
@@ -3884,10 +3884,39 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- pcu 0.6.32
+- pcu 0.6.33
 
 ```text
 Copyright © 2025 Jeremiah Russell
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+```
+
+## MIT License
+
+Used by:
+
+- pcu-release-assets 0.1.0
+
+```text
+Copyright © 2026 Jeremiah Russell
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -4291,7 +4320,7 @@ SOFTWARE.
 
 Used by:
 
-- gen-circleci-orb 0.1.8
+- gen-circleci-orb 0.1.9
 
 ```text
 MIT License
@@ -5829,7 +5858,7 @@ Used by:
 - icu_normalizer_data 2.3.0
 - icu_properties 2.3.0
 - icu_properties_data 2.3.0
-- icu_provider 2.3.0
+- icu_provider 2.3.1
 - litemap 0.8.3
 - potential_utf 0.1.6
 - tinystr 0.8.4
@@ -5839,8 +5868,8 @@ Used by:
 - zerofrom-derive 0.1.7
 - zerofrom 0.1.8
 - zerotrie 0.2.5
-- zerovec-derive 0.11.5
-- zerovec 0.11.7
+- zerovec-derive 0.11.6
+- zerovec 0.11.8
 
 ```text
 UNICODE LICENSE V3
