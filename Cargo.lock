@@ -2011,9 +2011,9 @@ checksum = "df94ce210e5bc13cb6651479fa48d14f601d9858cfe0467f43ae157023b938d3"
 
 [[package]]
 name = "pcu"
-version = "0.6.32"
+version = "0.6.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bcba113934954927c7311c472d10d3279066d43d36b361305856cdb95f73eeb9"
+checksum = "6e789fa13686cda24f540204d697ef92e5fa5e83b255b37f77f9446e1cc6c191"
 dependencies = [
  "base62",
  "base64 0.23.1",
@@ -2033,6 +2033,7 @@ dependencies = [
  "log",
  "octocrate",
  "owo-colors",
+ "pcu-release-assets",
  "regex",
  "reqwest 0.13.4",
  "serde",
@@ -2046,6 +2047,21 @@ dependencies = [
  "tracing-subscriber",
  "unicode-segmentation",
  "url",
+]
+
+[[package]]
+name = "pcu-release-assets"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e17c5858b42db2b17b2a473b95970503fd4351e93207aacf64338b9d58f975e"
+dependencies = [
+ "gql_client",
+ "log",
+ "octocrate",
+ "reqwest 0.13.4",
+ "serde",
+ "thiserror 2.0.20",
+ "tokio",
 ]
 
 [[package]]
