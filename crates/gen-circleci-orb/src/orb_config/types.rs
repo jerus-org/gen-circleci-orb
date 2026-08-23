@@ -336,16 +336,11 @@ pub struct JobGroupStep {
     pub script: Option<String>,
     pub with: Option<IndexMap<String, String>>,
     pub environment: Option<IndexMap<String, String>>,
-    /// Whether this step needs the SSH-backed, authenticated git remote that
-    /// CircleCI's checkout injects (an `insteadOf` rewrite of the HTTPS URL).
-    /// A later `set_https_remote` step strips it for an unauthenticated
-    /// literal HTTPS remote (needed only for a push subcommand's own push) —
-    /// a step flagged here must run strictly before it. `builtin = "checkout"`
-    /// is implicitly true and needs no explicit flag. Twice
-    /// (jerus-org/gen-orb-mcp#266, #288) this precondition was violated by
-    /// hand-ordering the step list and broke silently on private-repo
-    /// consumers (public repos still get an anonymous HTTPS fetch, so this
-    /// class of bug never surfaces there).
+    /// Marks a step as needing the authenticated git remote CircleCI's
+    /// checkout injects, before a later `set_https_remote` step strips it.
+    /// `builtin = "checkout"` gets this implicitly. See
+    /// `validate_job_group_step_order` for the enforced ordering rule and
+    /// the bug history behind it (gen-orb-mcp#266, #288).
     pub requires_git_auth: Option<bool>,
 }
 
