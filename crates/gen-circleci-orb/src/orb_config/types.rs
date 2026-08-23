@@ -324,6 +324,9 @@ pub struct JobGroupParam {
 /// * [`run`](Self::run) — a custom `run` step whose name is this field's value,
 ///   shell body is [`script`](Self::script), and env block is
 ///   [`environment`](Self::environment).
+///
+/// [`requires_git_auth`](Self::requires_git_auth) is orthogonal to the above —
+/// it can be set on any step kind, not just one of the discriminants.
 #[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq)]
 pub struct JobGroupStep {
     pub builtin: Option<String>,
@@ -333,6 +336,17 @@ pub struct JobGroupStep {
     pub script: Option<String>,
     pub with: Option<IndexMap<String, String>>,
     pub environment: Option<IndexMap<String, String>>,
+    /// Whether this step needs the SSH-backed, authenticated git remote that
+    /// CircleCI's checkout injects (an `insteadOf` rewrite of the HTTPS URL).
+    /// A later `set_https_remote` step strips it for an unauthenticated
+    /// literal HTTPS remote (needed only for a push subcommand's own push) —
+    /// a step flagged here must run strictly before it. `builtin = "checkout"`
+    /// is implicitly true and needs no explicit flag. Twice
+    /// (jerus-org/gen-orb-mcp#266, #288) this precondition was violated by
+    /// hand-ordering the step list and broke silently on private-repo
+    /// consumers (public repos still get an anonymous HTTPS fetch, so this
+    /// class of bug never surfaces there).
+    pub requires_git_auth: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]

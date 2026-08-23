@@ -85,6 +85,7 @@ description = "Path to the orb source @orb.yml."
 | `command = "prime"` | Invoke one of the tool's generated commands. Values come from `[job_group.step.with]`; omit `with` to wire parameters through by name |
 | `orb = "some-orb/setup"` | Invoke a third-party orb command, values from `[job_group.step.with]` |
 | `run = "Set up git"` + `script` + `[job_group.step.environment]` | A custom `run` step: `run` is the step name, `script` the shell body, `environment` the env block |
+| `requires_git_auth = true` | Orthogonal to the above — settable on *any* step. Marks it as needing the authenticated (SSH-backed) git remote CircleCI's checkout injects, before a later `set_https_remote` step strips it. See the ordering rule below. |
 
 Two step targets are worth knowing about:
 
@@ -95,6 +96,15 @@ Two step targets are worth knowing about:
   the [Configuration Guide](configuration-guide.md#git_push_subcommands--subcommands-that-push-to-git)).
   You do not author it — declaring a push subcommand generates the shared command, and a composite
   can then reference it to prepare the git remote before its own push step.
+
+`generate` (and `generate --check`) validates step order around `set_https_remote`: every step
+marked `requires_git_auth = true` (plus builtin `checkout`, implicitly) must come *before* it, and
+every step invoking a command listed in `git_push_subcommands` must come *after* it — getting this
+backwards breaks on any private-repo consumer (public repos still get an anonymous HTTPS fetch, so
+it never surfaces there). This was previously enforced only by hand-ordering the step list and a
+prose comment, and was gotten wrong twice in production
+([jerus-org/gen-orb-mcp#266](https://github.com/jerus-org/gen-orb-mcp/issues/266),
+[#288](https://github.com/jerus-org/gen-orb-mcp/pull/288)) before it was a validated field.
 
 ## Worked example: gen-orb-mcp's `build_mcp_server`
 
@@ -139,11 +149,13 @@ builtin = "checkout"
 [[job_group.step]]
 builtin = "attach_workspace"          # injects attach_workspace + workspace_root parameters
 
-[[job_group.step]]
-command = "set_https_remote"          # exists because save is a push subcommand (see Config Guide)
-
+# This step and the next (prime) both need the authenticated git remote
+# checkout injected — set_https_remote (below) strips that in favour of an
+# unauthenticated HTTPS remote, so both must run before it. See the ordering
+# rule above requires_git_auth.
 [[job_group.step]]
 run = "Set up git and environment"
+requires_git_auth = true
 script = '''
 # Prefer the freshly-built binary if the workspace attached one, else use the image's.
 if [[ -f "${WORKSPACE_BIN_PATH}/${NAME}" ]]; then
@@ -158,13 +170,20 @@ NAME = "<< parameters.binary_name >>"
 TAG_PREFIX = "<< parameters.tag_prefix >>"
 WORKSPACE_BIN_PATH = "<< parameters.workspace_root >>"
 
+# prime walks prior version tags via `git worktree add`, which on a
+# partial/shallow CircleCI checkout can trigger an on-demand fetch from the
+# promisor remote — needs the same authenticated remote as the step above.
 [[job_group.step]]
 command = "prime"
+requires_git_auth = true
 
 [job_group.step.with]
 orb_path = "<< parameters.orb_path >>"
 tag_prefix = "<< parameters.tag_prefix >>"
 earliest_version = "<< parameters.earliest_version >>"
+
+[[job_group.step]]
+command = "set_https_remote"          # exists because save is a push subcommand (see Config Guide)
 
 [[job_group.step]]
 command = "generate"
