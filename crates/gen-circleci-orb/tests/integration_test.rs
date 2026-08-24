@@ -37,7 +37,7 @@ fn generate_kdeets_orb() {
     );
     assert!(orb_root.join("Dockerfile").exists(), "missing Dockerfile");
 
-    for name in &["crate", "rust",  "setup"] {
+    for name in &["crate", "rust", "setup"] {
         assert!(
             src.join(format!("commands/{name}.yml")).exists(),
             "missing commands/{name}.yml"
