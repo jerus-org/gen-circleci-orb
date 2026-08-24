@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - deps: update jerusdp/ci-rust:rolling-6mo docker digest to b48a099(pr [#330])
+- deps: update dependency gen-orb-mcp to v0.2.3(pr [#332])
 
 ## [0.1.9] - 2026-08-22
 
@@ -951,6 +952,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#327]: https://github.com/jerus-org/gen-circleci-orb/pull/327
 [#329]: https://github.com/jerus-org/gen-circleci-orb/pull/329
 [#330]: https://github.com/jerus-org/gen-circleci-orb/pull/330
+[#332]: https://github.com/jerus-org/gen-circleci-orb/pull/332
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.9...HEAD
 [0.1.9]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.8...v0.1.9
 [0.1.8]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.7...v0.1.8
