@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- guard job_group step order vs https remote(pr [#329])
+
 ## [0.1.9] - 2026-08-22
 
 ### Fixed
@@ -939,6 +945,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#324]: https://github.com/jerus-org/gen-circleci-orb/pull/324
 [#325]: https://github.com/jerus-org/gen-circleci-orb/pull/325
 [#327]: https://github.com/jerus-org/gen-circleci-orb/pull/327
+[#329]: https://github.com/jerus-org/gen-circleci-orb/pull/329
+[Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.9...HEAD
 [0.1.9]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.8...v0.1.9
 [0.1.8]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.7...v0.1.8
 [0.1.7]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.6...v0.1.7
