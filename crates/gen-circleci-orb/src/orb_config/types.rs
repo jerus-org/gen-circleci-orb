@@ -324,6 +324,9 @@ pub struct JobGroupParam {
 /// * [`run`](Self::run) — a custom `run` step whose name is this field's value,
 ///   shell body is [`script`](Self::script), and env block is
 ///   [`environment`](Self::environment).
+///
+/// [`requires_git_auth`](Self::requires_git_auth) is orthogonal to the above —
+/// it can be set on any step kind, not just one of the discriminants.
 #[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq)]
 pub struct JobGroupStep {
     pub builtin: Option<String>,
@@ -333,6 +336,12 @@ pub struct JobGroupStep {
     pub script: Option<String>,
     pub with: Option<IndexMap<String, String>>,
     pub environment: Option<IndexMap<String, String>>,
+    /// Marks a step as needing the authenticated git remote CircleCI's
+    /// checkout injects, before a later `set_https_remote` step strips it.
+    /// `builtin = "checkout"` gets this implicitly. See
+    /// `validate_job_group_step_order` for the enforced ordering rule and
+    /// the bug history behind it (gen-orb-mcp#266, #288).
+    pub requires_git_auth: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]

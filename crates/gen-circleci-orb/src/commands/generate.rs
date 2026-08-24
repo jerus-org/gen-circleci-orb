@@ -669,6 +669,145 @@ pub(crate) fn validate_cargo_tool_entries(
     Ok(parsed)
 }
 
+fn describe_job_group_step(step: &orb_config::JobGroupStep) -> String {
+    if let Some(b) = &step.builtin {
+        format!("builtin {b:?}")
+    } else if let Some(c) = &step.command {
+        format!("command {c:?}")
+    } else if let Some(o) = &step.orb {
+        format!("orb {o:?}")
+    } else if let Some(r) = &step.run {
+        format!("run {r:?}")
+    } else {
+        "step".to_string()
+    }
+}
+
+/// A rich-mode job_group's `set_https_remote` step strips the SSH-backed,
+/// authenticated git remote CircleCI's checkout injects in favour of a
+/// literal, unauthenticated HTTPS remote — needed only later, for a push
+/// subcommand's own push. Any step needing that authenticated remote
+/// (builtin `checkout`, or any step marked `requires_git_auth = true`) must
+/// run strictly before it; any step invoking a push subcommand (named in
+/// `git_push_subcommands`) must run strictly after it, so the HTTPS remote
+/// it just configured is what the push uses. `render_rich_job_group` emits
+/// `job_group.step` verbatim in declared order with no reordering, so this
+/// ordering is entirely on the config author to get right — twice
+/// (jerus-org/gen-orb-mcp#266, #288) it was gotten wrong and broke silently
+/// on private-repo consumers. Only rich-mode groups (`step: Some(_)`) are
+/// checked; simple-mode groups already get `set_https_remote` auto-placed
+/// correctly by `render_job_group`. Checks every job_group before returning,
+/// so multiple violations are reported together. The boundary is located by
+/// exact match on `command == "set_https_remote"` — it's a tool-generated
+/// command, not something authorable via `run`/`orb`, so this can't be
+/// bypassed by construction; a bare typo of the name would still go
+/// undetected, same as any other hardcoded command-name check in this
+/// codebase (e.g. the `"checkout"` builtin match below).
+pub(crate) fn validate_job_group_step_order(
+    job_groups: &[orb_config::JobGroup],
+    git_push_subcommands: &[String],
+) -> Result<()> {
+    let errors: Vec<String> = job_groups
+        .iter()
+        .flat_map(|group| job_group_step_order_errors(group, git_push_subcommands))
+        .collect();
+
+    if !errors.is_empty() {
+        anyhow::bail!("invalid job_group step order:\n{}", errors.join("\n"));
+    }
+    Ok(())
+}
+
+/// One rich-mode job_group's share of [`validate_job_group_step_order`]'s
+/// checks. Split out so the multiplicity check, the boundary lookup, and the
+/// per-step check each read as one small piece rather than one deeply nested
+/// function.
+fn job_group_step_order_errors(
+    group: &orb_config::JobGroup,
+    git_push_subcommands: &[String],
+) -> Vec<String> {
+    let Some(steps) = group.step.as_deref() else {
+        return Vec::new();
+    };
+
+    let boundary_indices: Vec<usize> = steps
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.command.as_deref() == Some("set_https_remote"))
+        .map(|(i, _)| i)
+        .collect();
+
+    let Some(&boundary) = boundary_indices.first() else {
+        return Vec::new();
+    };
+
+    let mut errors = Vec::new();
+    if boundary_indices.len() > 1 {
+        let positions: Vec<usize> = boundary_indices.iter().map(|i| i + 1).collect();
+        errors.push(format!(
+            "job_group {:?} has {} 'set_https_remote' steps (at positions {:?}); expected \
+             at most one so step order can be validated unambiguously",
+            group.name,
+            boundary_indices.len(),
+            positions
+        ));
+        // Still check ordering against the first occurrence below, rather
+        // than swallowing every other violation behind this one — fixing
+        // the duplicate alone shouldn't look sufficient on the next run.
+    }
+
+    errors.extend(steps.iter().enumerate().filter_map(|(i, step)| {
+        step_order_violation(group, step, i, boundary, git_push_subcommands)
+    }));
+    errors
+}
+
+/// Checks one step's position against the `set_https_remote` boundary,
+/// returning an error message if it violates either ordering rule.
+fn step_order_violation(
+    group: &orb_config::JobGroup,
+    step: &orb_config::JobGroupStep,
+    i: usize,
+    boundary: usize,
+    git_push_subcommands: &[String],
+) -> Option<String> {
+    let pos = i + 1;
+    let boundary_pos = boundary + 1;
+    if i < boundary {
+        let command = step.command.as_deref()?;
+        if !git_push_subcommands.iter().any(|c| c == command) {
+            return None;
+        }
+        Some(format!(
+            "job_group {:?} step {} ({}) invokes push subcommand {:?} (listed in \
+             git_push_subcommands) before its 'set_https_remote' step (position {}); move it \
+             after set_https_remote or the push will use the wrong remote",
+            group.name,
+            pos,
+            describe_job_group_step(step),
+            command,
+            boundary_pos
+        ))
+    } else if i > boundary {
+        let requires_git_auth =
+            step.requires_git_auth == Some(true) || step.builtin.as_deref() == Some("checkout");
+        if !requires_git_auth {
+            return None;
+        }
+        Some(format!(
+            "job_group {:?} step {} ({}) requires an authenticated git remote (builtin \
+             checkout, or requires_git_auth = true) but runs after its 'set_https_remote' step \
+             (position {}); move this step before set_https_remote",
+            group.name,
+            pos,
+            describe_job_group_step(step),
+            boundary_pos
+        ))
+    } else {
+        None
+    }
+}
+
 pub(crate) fn resolve_config_path(explicit: Option<&PathBuf>, output: &Path) -> PathBuf {
     explicit
         .cloned()
@@ -734,6 +873,13 @@ impl Generate {
         ensure_cargo_tools_supported(&install_method, &cargo_tools)?;
         let cargo_tools = validate_cargo_tool_entries(&cargo_tools, &cli_def.binary_name)?;
 
+        let git_push_subcommands =
+            resolve_git_push_subcommands(&self.git_push_subcommands, &orb_config);
+        validate_job_group_step_order(
+            orb_config.job_group.as_deref().unwrap_or_default(),
+            &git_push_subcommands,
+        )?;
+
         let opts = orb_generator::GenerateOpts {
             namespaces,
             install_method,
@@ -742,10 +888,7 @@ impl Generate {
             home_url,
             source_url,
             binary_name: cli_def.binary_name.clone(),
-            git_push_subcommands: resolve_git_push_subcommands(
-                &self.git_push_subcommands,
-                &orb_config,
-            ),
+            git_push_subcommands,
             circleci_cli_version: resolve_circleci_cli_version(
                 self.circleci_cli_version.as_deref(),
                 &orb_config,
@@ -2101,6 +2244,208 @@ mod tests {
         let tools = vec!["rsign2:rsign".to_string(), "rsign2:foo".to_string()];
         let err = validate_cargo_tool_entries(&tools, "mytool").unwrap_err();
         assert!(err.to_string().contains("rsign2"), "got: {err}");
+    }
+
+    // ── validate_job_group_step_order ───────────────────────────────────────
+
+    fn step_builtin(name: &str) -> crate::orb_config::JobGroupStep {
+        crate::orb_config::JobGroupStep {
+            builtin: Some(name.to_string()),
+            ..Default::default()
+        }
+    }
+
+    fn step_command(name: &str) -> crate::orb_config::JobGroupStep {
+        crate::orb_config::JobGroupStep {
+            command: Some(name.to_string()),
+            ..Default::default()
+        }
+    }
+
+    fn step_run(name: &str) -> crate::orb_config::JobGroupStep {
+        crate::orb_config::JobGroupStep {
+            run: Some(name.to_string()),
+            ..Default::default()
+        }
+    }
+
+    fn requiring_git_auth(
+        mut step: crate::orb_config::JobGroupStep,
+    ) -> crate::orb_config::JobGroupStep {
+        step.requires_git_auth = Some(true);
+        step
+    }
+
+    fn rich_group(
+        name: &str,
+        steps: Vec<crate::orb_config::JobGroupStep>,
+    ) -> crate::orb_config::JobGroup {
+        crate::orb_config::JobGroup {
+            name: name.to_string(),
+            step: Some(steps),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn validate_job_group_step_order_accepts_correct_order() {
+        let group = rich_group(
+            "build_mcp_server",
+            vec![
+                step_builtin("checkout"),
+                step_builtin("attach_workspace"),
+                requiring_git_auth(step_run("Set up git and environment")),
+                requiring_git_auth(step_command("prime")),
+                step_command("set_https_remote"),
+                step_command("generate"),
+                step_command("publish"),
+                step_command("save"),
+            ],
+        );
+        let push_subcommands = ["save".to_string()];
+        assert!(validate_job_group_step_order(&[group], &push_subcommands).is_ok());
+    }
+
+    #[test]
+    fn validate_job_group_step_order_rejects_requires_git_auth_step_after_https_remote() {
+        let group = rich_group(
+            "build_mcp_server",
+            vec![
+                step_command("set_https_remote"),
+                requiring_git_auth(step_command("prime")),
+            ],
+        );
+        let err = validate_job_group_step_order(&[group], &[]).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("build_mcp_server"), "got: {msg}");
+        assert!(msg.contains("prime"), "got: {msg}");
+        assert!(
+            msg.contains("requires an authenticated git remote"),
+            "got: {msg}"
+        );
+    }
+
+    #[test]
+    fn validate_job_group_step_order_rejects_push_subcommand_before_https_remote() {
+        let group = rich_group(
+            "build_mcp_server",
+            vec![step_command("save"), step_command("set_https_remote")],
+        );
+        let push_subcommands = ["save".to_string()];
+        let err = validate_job_group_step_order(&[group], &push_subcommands).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("save"), "got: {msg}");
+        assert!(msg.contains("invokes push subcommand"), "got: {msg}");
+    }
+
+    #[test]
+    fn validate_job_group_step_order_skips_group_with_no_https_remote_step() {
+        // No set_https_remote step at all: even a would-be violation ordering
+        // is fine, since there's no boundary to enforce against.
+        let group = rich_group(
+            "other",
+            vec![
+                step_command("save"),
+                requiring_git_auth(step_command("prime")),
+            ],
+        );
+        let push_subcommands = ["save".to_string()];
+        assert!(validate_job_group_step_order(&[group], &push_subcommands).is_ok());
+    }
+
+    #[test]
+    fn validate_job_group_step_order_rejects_multiple_https_remote_steps() {
+        let group = rich_group(
+            "build_mcp_server",
+            vec![
+                step_command("set_https_remote"),
+                step_command("generate"),
+                step_command("set_https_remote"),
+            ],
+        );
+        let err = validate_job_group_step_order(&[group], &[]).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains('2'), "got: {msg}");
+        assert!(msg.contains("expected at most one"), "got: {msg}");
+    }
+
+    #[test]
+    fn validate_job_group_step_order_still_checks_ordering_despite_multiple_https_remote_steps() {
+        // A second, genuine ordering violation must still surface alongside
+        // the multiplicity error, not be swallowed by it — otherwise fixing
+        // the duplicate alone would look sufficient on the next run.
+        let group = rich_group(
+            "build_mcp_server",
+            vec![
+                step_command("set_https_remote"),
+                requiring_git_auth(step_command("prime")),
+                step_command("set_https_remote"),
+            ],
+        );
+        let err = validate_job_group_step_order(&[group], &[]).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("expected at most one"), "got: {msg}");
+        assert!(
+            msg.contains("requires an authenticated git remote"),
+            "got: {msg}"
+        );
+    }
+
+    #[test]
+    fn validate_job_group_step_order_treats_builtin_checkout_as_implicit_git_auth() {
+        let group = rich_group(
+            "build_mcp_server",
+            vec![step_command("set_https_remote"), step_builtin("checkout")],
+        );
+        let err = validate_job_group_step_order(&[group], &[]).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("requires an authenticated git remote"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_job_group_step_order_skips_simple_mode_groups() {
+        let group = crate::orb_config::JobGroup {
+            name: "simple".to_string(),
+            steps: vec!["prime".to_string(), "save".to_string()],
+            ..Default::default()
+        };
+        // Simple-mode groups (step: None) are never inspected, regardless of
+        // what would otherwise be a violation.
+        let push_subcommands = ["save".to_string()];
+        assert!(validate_job_group_step_order(&[group], &push_subcommands).is_ok());
+    }
+
+    #[test]
+    fn validate_job_group_step_order_reports_multiple_groups_violations_together() {
+        let group_a = rich_group(
+            "group_a",
+            vec![step_command("save"), step_command("set_https_remote")],
+        );
+        let group_b = rich_group(
+            "group_b",
+            vec![
+                step_command("set_https_remote"),
+                requiring_git_auth(step_command("prime")),
+            ],
+        );
+        let push_subcommands = ["save".to_string()];
+        let err =
+            validate_job_group_step_order(&[group_a, group_b], &push_subcommands).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("group_a"), "got: {msg}");
+        assert!(msg.contains("group_b"), "got: {msg}");
+    }
+
+    #[test]
+    fn validate_job_group_step_order_accepts_when_git_push_subcommands_empty() {
+        let group = rich_group(
+            "build_mcp_server",
+            vec![step_command("set_https_remote"), step_command("save")],
+        );
+        assert!(validate_job_group_step_order(&[group], &[]).is_ok());
     }
 
     // ── MCP feature auto-provisions the executor image ─────────────────────
