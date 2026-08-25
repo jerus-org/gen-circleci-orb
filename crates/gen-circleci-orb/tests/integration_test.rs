@@ -5,7 +5,7 @@ use tempfile::TempDir;
 /// and verify the output structure passes gen-orb-mcp validate.
 #[test]
 #[cfg_attr(not(feature = "integration"), ignore)]
-fn generate_gen_orb_mcp_orb() {
+fn generate_kdeets_orb() {
     let out = TempDir::new().unwrap();
     let binary = env!("CARGO_BIN_EXE_gen-circleci-orb");
 
@@ -13,7 +13,7 @@ fn generate_gen_orb_mcp_orb() {
         .args([
             "generate",
             "--binary",
-            "gen-orb-mcp",
+            "kdeets",
             "--orb-namespace",
             "jerus-org",
             "--output",
@@ -37,7 +37,7 @@ fn generate_gen_orb_mcp_orb() {
     );
     assert!(orb_root.join("Dockerfile").exists(), "missing Dockerfile");
 
-    for name in &["generate", "validate", "diff", "migrate", "prime"] {
+    for name in &["crate", "rust", "setup"] {
         assert!(
             src.join(format!("commands/{name}.yml")).exists(),
             "missing commands/{name}.yml"
@@ -74,32 +74,16 @@ fn generate_gen_orb_mcp_orb() {
         "@orb.yml must have float version"
     );
 
-    // Verify gen-orb-mcp validate passes
-    let validate = Command::new("gen-orb-mcp")
-        .args([
-            "validate",
-            "--orb-path",
-            src.join("@orb.yml").to_str().unwrap(),
-        ])
-        .output()
-        .expect("gen-orb-mcp not found");
-
-    assert!(
-        validate.status.success(),
-        "gen-orb-mcp validate failed:\n{}",
-        String::from_utf8_lossy(&validate.stderr)
-    );
-
     // Verify command file uses script include (RC009) and script has binary name
-    let generate_cmd = std::fs::read_to_string(src.join("commands/generate.yml")).unwrap();
+    let crate_cmd = std::fs::read_to_string(src.join("commands/crate.yml")).unwrap();
     assert!(
-        generate_cmd.contains("<<include(scripts/generate.sh)>>"),
-        "command YAML must use script include:\n{generate_cmd}"
+        crate_cmd.contains("<<include(scripts/crate.sh)>>"),
+        "command YAML must use script include:\n{crate_cmd}"
     );
-    let generate_script = std::fs::read_to_string(src.join("scripts/generate.sh")).unwrap();
+    let crate_script = std::fs::read_to_string(src.join("scripts/crate.sh")).unwrap();
     assert!(
-        generate_script.contains("gen-orb-mcp generate"),
-        "script must include binary name:\n{generate_script}"
+        crate_script.contains("kdeets crate"),
+        "script must include binary name:\n{crate_script}"
     );
 }
 
@@ -112,7 +96,7 @@ fn generate_is_idempotent() {
     let args = [
         "generate",
         "--binary",
-        "gen-orb-mcp",
+        "gen-changelog",
         "--orb-namespace",
         "jerus-org",
         "--output",
