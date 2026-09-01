@@ -267,21 +267,8 @@ const RESERVED_JOB_PARAMS: &[&str] = &[
     "post_steps",
 ];
 
-/// Extract a command's "short about" — the first sentence of its description,
-/// i.e. everything before the double-space (or newline) that separates clap's
-/// short about from its long help. Returns `None` when the result is blank.
-fn short_about(description: &str) -> Option<&str> {
-    let end = description
-        .find("  ")
-        .or_else(|| description.find('\n'))
-        .unwrap_or(description.len());
-    let trimmed = description[..end].trim();
-    (!trimmed.is_empty()).then_some(trimmed)
-}
-
-/// Resolve the display name for a command's `run` step, in priority order:
-/// a curated `label` from the subcommand config, then the command's short
-/// about, then the bare subcommand name.
+/// Resolve the display name for a command's `run` step: a curated `label`
+/// from config, else `short_about`, else the bare subcommand name.
 fn resolve_run_step_name(sub: &SubCommand, config: Option<&OrbConfig>) -> String {
     if let Some(label) = config
         .and_then(|c| c.subcommand.as_ref())
@@ -292,7 +279,8 @@ fn resolve_run_step_name(sub: &SubCommand, config: Option<&OrbConfig>) -> String
     {
         return label.to_string();
     }
-    if let Some(about) = short_about(&sub.description) {
+    let about = sub.short_about.trim();
+    if !about.is_empty() {
         return about.to_string();
     }
     sub.name.clone()
@@ -1665,6 +1653,7 @@ mod tests {
         SubCommand {
             name: name.to_string(),
             description: format!("Does {name} things."),
+            short_about: format!("Does {name} things."),
             is_leaf: true,
             parameters: params,
             subcommands: vec![],
@@ -2192,28 +2181,6 @@ mod tests {
     }
 
     #[test]
-    fn short_about_takes_text_before_double_space() {
-        assert_eq!(
-            short_about("Populate snapshots from git history  Discovers tags..."),
-            Some("Populate snapshots from git history")
-        );
-    }
-
-    #[test]
-    fn short_about_is_whole_string_when_no_double_space() {
-        assert_eq!(
-            short_about("Generate an MCP server from an orb definition"),
-            Some("Generate an MCP server from an orb definition")
-        );
-    }
-
-    #[test]
-    fn short_about_none_when_empty_or_blank() {
-        assert_eq!(short_about(""), None);
-        assert_eq!(short_about("   "), None);
-    }
-
-    #[test]
     fn resolve_run_step_name_prefers_curated_label() {
         let sub = make_leaf("save", vec![]);
         let mut subcommands = indexmap::IndexMap::new();
@@ -2237,15 +2204,43 @@ mod tests {
     #[test]
     fn resolve_run_step_name_falls_back_to_short_about() {
         let mut sub = make_leaf("generate", vec![]);
-        sub.description = "Generate an MCP server  Long help here.".to_string();
-        // No label configured for this subcommand.
-        assert_eq!(resolve_run_step_name(&sub, None), "Generate an MCP server");
+        sub.short_about = "Generate an MCP server from an orb definition".to_string();
+        assert_eq!(
+            resolve_run_step_name(&sub, None),
+            "Generate an MCP server from an orb definition"
+        );
+    }
+
+    /// #336: step name must come from `short_about`, never `description`.
+    #[test]
+    fn resolve_run_step_name_uses_short_about_not_the_full_description() {
+        let mut sub = make_leaf("check", vec![]);
+        sub.description = "PR/dev gate: cargo-deny policy, a live cargo-audit scan, and \
+            license policy. All four blocking: cargo-deny, cargo-audit, the \
+            about.toml/deny.toml drift check, and the cargo-about resolution check. \
+            Aggregates exit codes and surfaces stderr."
+            .to_string();
+        sub.short_about =
+            "PR/dev gate: cargo-deny policy, a live cargo-audit scan, and license policy."
+                .to_string();
+        assert_eq!(
+            resolve_run_step_name(&sub, None),
+            "PR/dev gate: cargo-deny policy, a live cargo-audit scan, and license policy."
+        );
+    }
+
+    #[test]
+    fn resolve_run_step_name_falls_back_to_bare_name_when_short_about_is_empty() {
+        let mut sub = make_leaf("prime", vec![]);
+        sub.short_about = String::new();
+        assert_eq!(resolve_run_step_name(&sub, None), "prime");
     }
 
     #[test]
     fn resolve_run_step_name_falls_back_to_bare_name_without_description() {
         let mut sub = make_leaf("prime", vec![]);
         sub.description = String::new();
+        sub.short_about = String::new();
         assert_eq!(resolve_run_step_name(&sub, None), "prime");
     }
 
@@ -4219,6 +4214,7 @@ mod tests {
         let parent = SubCommand {
             name: "admin".to_string(),
             description: "Admin tools".to_string(),
+            short_about: "Admin tools".to_string(),
             is_leaf: false,
             parameters: vec![],
             subcommands: vec![child],

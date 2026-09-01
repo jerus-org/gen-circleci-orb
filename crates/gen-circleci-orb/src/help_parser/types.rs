@@ -10,6 +10,9 @@ pub struct CliDefinition {
 pub struct SubCommand {
     pub name: String,
     pub description: String,
+    /// clap's short `about` line only, before any `long_about` continuation.
+    /// Unlike `description`, not reconstructed from flattened text.
+    pub short_about: String,
     /// True when this subcommand has no children (leaf node in the command tree).
     pub is_leaf: bool,
     pub parameters: Vec<Parameter>,

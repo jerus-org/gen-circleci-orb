@@ -36,7 +36,7 @@ pub fn parse_top_level(
 fn normalize_binary_name(binary: &str) -> String {
     std::path::Path::new(binary)
         .file_stem()
-        .and_then(|s| s.to_str())
+        .and_then(std::ffi::OsStr::to_str)
         .unwrap_or(binary)
         .to_string()
 }
@@ -48,6 +48,7 @@ fn parse_subcommand(
     opts: &ParseOptions,
 ) -> Result<SubCommand> {
     let description = extract_description(help_text);
+    let short_about = extract_short_about(help_text);
     let child_names = extract_subcommand_names(help_text);
     let is_leaf = child_names.is_empty();
 
@@ -70,6 +71,7 @@ fn parse_subcommand(
     Ok(SubCommand {
         name: name.to_string(),
         description,
+        short_about,
         is_leaf,
         parameters,
         subcommands,
@@ -127,6 +129,17 @@ fn extract_description(text: &str) -> String {
         .map(str::trim)
         .take_while(|line| !ends_description(line))
         .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Like [`extract_description`], but stops at the first paragraph break —
+/// clap's short `about`, without the `long_about` continuation.
+fn extract_short_about(text: &str) -> String {
+    text.lines()
+        .map(str::trim)
+        .take_while(|line| !ends_description(line))
+        .take_while(|line| !line.is_empty())
         .collect::<Vec<_>>()
         .join(" ")
 }
@@ -344,7 +357,7 @@ fn resolve_short_only_name(
         .next()
         .unwrap_or_default()
         .chars()
-        .filter(|c| c.is_ascii_alphanumeric())
+        .filter(char::is_ascii_alphanumeric)
         .collect::<String>()
         .to_lowercase();
     is_usable_param_name(&first).then_some(first)
@@ -939,6 +952,71 @@ Commands:
   run   Run the thing
 "#;
         assert_eq!(extract_description(help), "A tool that does things");
+    }
+
+    // ── #336: recovering the short/long about boundary ─────────────────────
+
+    #[test]
+    fn extract_short_about_stops_at_the_first_paragraph_break() {
+        let help = r#"PR/dev gate: cargo-deny policy, a live cargo-audit scan, and license policy.
+
+All four blocking: cargo-deny, cargo-audit, the about.toml/deny.toml drift
+check, and the cargo-about resolution check. Aggregates exit codes and
+surfaces stderr.
+
+Usage: jci-audit check [OPTIONS]
+
+Options:
+  -h, --help  Print help
+"#;
+        assert_eq!(
+            extract_short_about(help),
+            "PR/dev gate: cargo-deny policy, a live cargo-audit scan, and license policy."
+        );
+        // extract_description still returns the full flattened text.
+        assert_eq!(
+            extract_description(help),
+            "PR/dev gate: cargo-deny policy, a live cargo-audit scan, and license policy. \
+             All four blocking: cargo-deny, cargo-audit, the about.toml/deny.toml drift \
+             check, and the cargo-about resolution check. Aggregates exit codes and \
+             surfaces stderr."
+        );
+    }
+
+    #[test]
+    fn extract_short_about_is_the_whole_text_with_no_long_about() {
+        let help = r#"Generate an MCP server from an orb definition
+
+Usage: gen-orb-mcp generate [OPTIONS]
+
+Options:
+  -h, --help  Print help
+"#;
+        assert_eq!(
+            extract_short_about(help),
+            "Generate an MCP server from an orb definition"
+        );
+    }
+
+    #[test]
+    fn extract_short_about_joins_a_wrapped_first_paragraph() {
+        let help = r#"Re-verify a past release against its recorded
+advisory snapshot.
+
+Uses the policy that was in force at the time.
+
+Usage: jci-audit verify [OPTIONS] <VERSION>
+"#;
+        assert_eq!(
+            extract_short_about(help),
+            "Re-verify a past release against its recorded advisory snapshot."
+        );
+    }
+
+    #[test]
+    fn extract_short_about_empty_when_help_text_starts_blank_or_at_a_heading() {
+        assert_eq!(extract_short_about("Usage: tool [OPTIONS]\n"), "");
+        assert_eq!(extract_short_about(""), "");
     }
 
     /// The wrapped binary is whatever the consumer configured and need not be
