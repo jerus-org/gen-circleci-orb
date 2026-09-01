@@ -12,14 +12,14 @@ apt_packages = ["gnupg"]
 # Pinned Rust builder image for the Dockerfile `builder` stage. Kept here (not
 # left to the generator's unpinned default) so the @sha256 digest survives
 # regeneration; Renovate updates this digest via a customManager (renovate.json).
-builder_image = "rust:1-slim-trixie@sha256:cc0448b41c3b7b7fea44f5dc50eacba729a56db365b65b7bd5e8a82d5b3db078"
+builder_image = "rust:1-slim-trixie@sha256:17d1ba895198f9934c6314ec5346a0d5115372f3243390c3d731e242f35c2f27"
 # Pinned runtime base image for the Dockerfile final stage. mcp = true defaults
 # this to an *unpinned* rust:1-slim-trixie, so without pinning it here the digest
 # is stripped on every regeneration (regenerate-orb rewrites Dockerfile from this
 # config, not from Renovate's in-Dockerfile edit). Pinned here so the @sha256
 # survives regeneration; Renovate updates it via a customManager (renovate.json).
 # Same image + digest as builder_image (both rust:1-slim-trixie).
-base_image = "rust:1-slim-trixie@sha256:cc0448b41c3b7b7fea44f5dc50eacba729a56db365b65b7bd5e8a82d5b3db078"
+base_image = "rust:1-slim-trixie@sha256:17d1ba895198f9934c6314ec5346a0d5115372f3243390c3d731e242f35c2f27"
 # circleci-cli version bundled into this image. gen-circleci-orb's own
 # `ensure-orb-registered` subcommand shells out to `circleci orb create`, so the
 # image MUST carry the full CLI (the pipeline-provided `circleci` is the agent
@@ -99,4 +99,4 @@ mcp_earliest_version = "0.0.11"
 # and carries clang + libclang. Digest-pinned so it survives regeneration and
 # CircleCI can't serve a stale moving tag from cache; Renovate updates the digest
 # via a customManager (renovate.json).
-rust_image = "jerusdp/ci-rust:rolling-6mo@sha256:b48a099fe67725fde4adf84144f3bb5061323e069566dd763871e09aefd29d59"
+rust_image = "jerusdp/ci-rust:rolling-6mo@sha256:a0be475b440dfb940ee2b89e29c3299e161aa6868f7191871d70076769200c6d"
