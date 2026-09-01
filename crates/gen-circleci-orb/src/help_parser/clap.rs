@@ -133,14 +133,8 @@ fn extract_description(text: &str) -> String {
         .join(" ")
 }
 
-/// Extract only the FIRST paragraph of the leading description block — clap's
-/// short `about` line, stopping at the first blank-line break into any
-/// `long_about` continuation text.
-///
-/// Unlike [`extract_description`], which flattens every paragraph into one
-/// string and so discards the short/long boundary, this reads the boundary
-/// directly off the raw help text while it's still there — the only place it
-/// can be recovered from (jerus-org/gen-circleci-orb#336).
+/// Like [`extract_description`], but stops at the first paragraph break —
+/// clap's short `about`, without the `long_about` continuation.
 fn extract_short_about(text: &str) -> String {
     text.lines()
         .map(str::trim)
@@ -962,11 +956,6 @@ Commands:
 
     // ── #336: recovering the short/long about boundary ─────────────────────
 
-    /// The bug reported as jerus-org/jci-audit#126: `extract_description`
-    /// flattens `about` and `long_about` together, discarding the boundary
-    /// between them, so nothing downstream can recover a short label from it
-    /// — `extract_short_about` must read that boundary directly off the raw
-    /// help text instead, stopping at the first paragraph.
     #[test]
     fn extract_short_about_stops_at_the_first_paragraph_break() {
         let help = r#"PR/dev gate: cargo-deny policy, a live cargo-audit scan, and license policy.
@@ -984,7 +973,7 @@ Options:
             extract_short_about(help),
             "PR/dev gate: cargo-deny policy, a live cargo-audit scan, and license policy."
         );
-        // extract_description, unchanged, still returns the full flattened text.
+        // extract_description still returns the full flattened text.
         assert_eq!(
             extract_description(help),
             "PR/dev gate: cargo-deny policy, a live cargo-audit scan, and license policy. \
@@ -994,8 +983,6 @@ Options:
         );
     }
 
-    /// A single-paragraph description (no `long_about` continuation) is its
-    /// own short about — the whole thing, same as `extract_description`.
     #[test]
     fn extract_short_about_is_the_whole_text_with_no_long_about() {
         let help = r#"Generate an MCP server from an orb definition
@@ -1011,8 +998,6 @@ Options:
         );
     }
 
-    /// A multi-line first paragraph (clap wraps long `about` text across
-    /// several lines) must still join as one label, not stop at the wrap.
     #[test]
     fn extract_short_about_joins_a_wrapped_first_paragraph() {
         let help = r#"Re-verify a past release against its recorded

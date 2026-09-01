@@ -267,12 +267,8 @@ const RESERVED_JOB_PARAMS: &[&str] = &[
     "post_steps",
 ];
 
-/// Resolve the display name for a command's `run` step, in priority order:
-/// a curated `label` from the subcommand config, then the command's short
-/// about (`SubCommand::short_about`, extracted from the raw help text at
-/// parse time — see `help_parser::clap::extract_short_about` — so it already
-/// carries just the leading paragraph, not `description`'s full flattened
-/// text), then the bare subcommand name.
+/// Resolve the display name for a command's `run` step: a curated `label`
+/// from config, else `short_about`, else the bare subcommand name.
 fn resolve_run_step_name(sub: &SubCommand, config: Option<&OrbConfig>) -> String {
     if let Some(label) = config
         .and_then(|c| c.subcommand.as_ref())
@@ -2209,21 +2205,13 @@ mod tests {
     fn resolve_run_step_name_falls_back_to_short_about() {
         let mut sub = make_leaf("generate", vec![]);
         sub.short_about = "Generate an MCP server from an orb definition".to_string();
-        // No label configured for this subcommand.
         assert_eq!(
             resolve_run_step_name(&sub, None),
             "Generate an MCP server from an orb definition"
         );
     }
 
-    /// The bug reported as jerus-org/jci-audit#126: the step name must come
-    /// from `short_about` (the leading paragraph, extracted separately at
-    /// parse time — `help_parser::clap::extract_short_about`), never from
-    /// `description` (the full, flattened `about` + `long_about` text). This
-    /// is the render-layer half of the fix: the parser-layer half — that
-    /// `short_about` is actually short in the first place — is covered by
-    /// `extract_short_about_stops_at_the_first_paragraph_break` in
-    /// `help_parser::clap`.
+    /// #336: step name must come from `short_about`, never `description`.
     #[test]
     fn resolve_run_step_name_uses_short_about_not_the_full_description() {
         let mut sub = make_leaf("check", vec![]);
@@ -2235,7 +2223,6 @@ mod tests {
         sub.short_about =
             "PR/dev gate: cargo-deny policy, a live cargo-audit scan, and license policy."
                 .to_string();
-        // No label configured for this subcommand.
         assert_eq!(
             resolve_run_step_name(&sub, None),
             "PR/dev gate: cargo-deny policy, a live cargo-audit scan, and license policy."
