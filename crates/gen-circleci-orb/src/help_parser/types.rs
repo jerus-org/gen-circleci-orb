@@ -10,6 +10,16 @@ pub struct CliDefinition {
 pub struct SubCommand {
     pub name: String,
     pub description: String,
+    /// The leading paragraph only — clap's short `about` line, before any
+    /// blank-line break into `long_about` continuation text. Extracted
+    /// directly from the raw `--help` text at parse time, independently of
+    /// `description` (which flattens every paragraph together): the
+    /// short/long boundary clap actually renders would otherwise be lost
+    /// once the two are joined, with no way to recover it after the fact
+    /// (jerus-org/gen-circleci-orb#336). Used for display contexts — e.g. a
+    /// CircleCI job step's name — that need a short label, not the full
+    /// prose `description`.
+    pub short_about: String,
     /// True when this subcommand has no children (leaf node in the command tree).
     pub is_leaf: bool,
     pub parameters: Vec<Parameter>,

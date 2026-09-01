@@ -1351,6 +1351,7 @@ mod tests {
         let sub = |name: &str| SubCommand {
             name: name.to_string(),
             description: String::new(),
+            short_about: String::new(),
             is_leaf: true,
             parameters: vec![],
             subcommands: vec![],
@@ -1516,6 +1517,7 @@ mod tests {
         let sub = SubCommand {
             name: sub_name.to_string(),
             description: String::new(),
+            short_about: String::new(),
             is_leaf: true,
             parameters: vec![p],
             subcommands: vec![],
@@ -1620,6 +1622,7 @@ mod tests {
         let sub = SubCommand {
             name: "save".to_string(),
             description: "Save artifacts".to_string(),
+            short_about: "Save artifacts".to_string(),
             is_leaf: true,
             parameters: vec![push_param],
             subcommands: vec![],
@@ -1648,6 +1651,7 @@ mod tests {
         let sub = SubCommand {
             name: "commit".to_string(),
             description: "Commit".to_string(),
+            short_about: "Commit".to_string(),
             is_leaf: true,
             parameters: vec![sign_param],
             subcommands: vec![],
@@ -1676,6 +1680,7 @@ mod tests {
         let sub = SubCommand {
             name: "generate".to_string(),
             description: "Generate".to_string(),
+            short_about: "Generate".to_string(),
             is_leaf: true,
             parameters: vec![other_param],
             subcommands: vec![],

@@ -267,24 +267,12 @@ const RESERVED_JOB_PARAMS: &[&str] = &[
     "post_steps",
 ];
 
-/// Above this length a description reads as a paragraph, not a label — the
-/// caller falls back to the bare subcommand name instead
-/// (jerus-org/gen-circleci-orb#336).
-const MAX_STEP_NAME_LEN: usize = 60;
-
-/// `extract_description` (`help_parser::clap`) always flattens every
-/// paragraph of a subcommand's `--help` text — `about` and any `long_about`
-/// continuation alike — into a single space-joined string, so there is no
-/// structural short/long boundary left in it to split on. Usable as a step
-/// name only when short enough to actually read as a label.
-fn short_about(description: &str) -> Option<&str> {
-    let trimmed = description.trim();
-    (!trimmed.is_empty() && trimmed.chars().count() <= MAX_STEP_NAME_LEN).then_some(trimmed)
-}
-
 /// Resolve the display name for a command's `run` step, in priority order:
 /// a curated `label` from the subcommand config, then the command's short
-/// about, then the bare subcommand name.
+/// about (`SubCommand::short_about`, extracted from the raw help text at
+/// parse time — see `help_parser::clap::extract_short_about` — so it already
+/// carries just the leading paragraph, not `description`'s full flattened
+/// text), then the bare subcommand name.
 fn resolve_run_step_name(sub: &SubCommand, config: Option<&OrbConfig>) -> String {
     if let Some(label) = config
         .and_then(|c| c.subcommand.as_ref())
@@ -295,7 +283,8 @@ fn resolve_run_step_name(sub: &SubCommand, config: Option<&OrbConfig>) -> String
     {
         return label.to_string();
     }
-    if let Some(about) = short_about(&sub.description) {
+    let about = sub.short_about.trim();
+    if !about.is_empty() {
         return about.to_string();
     }
     sub.name.clone()
@@ -1668,6 +1657,7 @@ mod tests {
         SubCommand {
             name: name.to_string(),
             description: format!("Does {name} things."),
+            short_about: format!("Does {name} things."),
             is_leaf: true,
             parameters: params,
             subcommands: vec![],
@@ -2195,37 +2185,6 @@ mod tests {
     }
 
     #[test]
-    fn short_about_returns_the_full_text_when_within_the_length_cap() {
-        assert_eq!(
-            short_about("Generate an MCP server from an orb definition"),
-            Some("Generate an MCP server from an orb definition")
-        );
-    }
-
-    /// `extract_description` always flattens every paragraph of a subcommand's
-    /// `--help` text into a single space-joined string (`help_parser::clap`) —
-    /// there is no double-space or newline boundary left in it to split a
-    /// short about from a long one. `short_about` must not assume one exists;
-    /// past the length cap the text reads as a paragraph, not a label, so it
-    /// returns `None` and lets the caller fall back to the bare subcommand
-    /// name (jerus-org/gen-circleci-orb#336).
-    #[test]
-    fn short_about_is_none_once_the_flattened_description_exceeds_the_length_cap() {
-        let flattened = "PR/dev gate: cargo-deny policy, a live cargo-audit scan, and \
-            license policy. All four blocking: cargo-deny, cargo-audit, the \
-            about.toml/deny.toml drift check, and the cargo-about resolution check. \
-            Aggregates exit codes and surfaces stderr.";
-        assert!(flattened.len() > MAX_STEP_NAME_LEN);
-        assert_eq!(short_about(flattened), None);
-    }
-
-    #[test]
-    fn short_about_none_when_empty_or_blank() {
-        assert_eq!(short_about(""), None);
-        assert_eq!(short_about("   "), None);
-    }
-
-    #[test]
     fn resolve_run_step_name_prefers_curated_label() {
         let sub = make_leaf("save", vec![]);
         let mut subcommands = indexmap::IndexMap::new();
@@ -2249,7 +2208,7 @@ mod tests {
     #[test]
     fn resolve_run_step_name_falls_back_to_short_about() {
         let mut sub = make_leaf("generate", vec![]);
-        sub.description = "Generate an MCP server from an orb definition".to_string();
+        sub.short_about = "Generate an MCP server from an orb definition".to_string();
         // No label configured for this subcommand.
         assert_eq!(
             resolve_run_step_name(&sub, None),
@@ -2257,25 +2216,44 @@ mod tests {
         );
     }
 
-    /// The bug reported as jerus-org/jci-audit#126: without this guard, the
-    /// entire flattened `long_about` paragraph — not a short label — became
-    /// the CircleCI job step's name.
+    /// The bug reported as jerus-org/jci-audit#126: the step name must come
+    /// from `short_about` (the leading paragraph, extracted separately at
+    /// parse time — `help_parser::clap::extract_short_about`), never from
+    /// `description` (the full, flattened `about` + `long_about` text). This
+    /// is the render-layer half of the fix: the parser-layer half — that
+    /// `short_about` is actually short in the first place — is covered by
+    /// `extract_short_about_stops_at_the_first_paragraph_break` in
+    /// `help_parser::clap`.
     #[test]
-    fn resolve_run_step_name_falls_back_to_bare_name_when_description_is_too_long() {
+    fn resolve_run_step_name_uses_short_about_not_the_full_description() {
         let mut sub = make_leaf("check", vec![]);
         sub.description = "PR/dev gate: cargo-deny policy, a live cargo-audit scan, and \
             license policy. All four blocking: cargo-deny, cargo-audit, the \
             about.toml/deny.toml drift check, and the cargo-about resolution check. \
             Aggregates exit codes and surfaces stderr."
             .to_string();
+        sub.short_about =
+            "PR/dev gate: cargo-deny policy, a live cargo-audit scan, and license policy."
+                .to_string();
         // No label configured for this subcommand.
-        assert_eq!(resolve_run_step_name(&sub, None), "check");
+        assert_eq!(
+            resolve_run_step_name(&sub, None),
+            "PR/dev gate: cargo-deny policy, a live cargo-audit scan, and license policy."
+        );
+    }
+
+    #[test]
+    fn resolve_run_step_name_falls_back_to_bare_name_when_short_about_is_empty() {
+        let mut sub = make_leaf("prime", vec![]);
+        sub.short_about = String::new();
+        assert_eq!(resolve_run_step_name(&sub, None), "prime");
     }
 
     #[test]
     fn resolve_run_step_name_falls_back_to_bare_name_without_description() {
         let mut sub = make_leaf("prime", vec![]);
         sub.description = String::new();
+        sub.short_about = String::new();
         assert_eq!(resolve_run_step_name(&sub, None), "prime");
     }
 
@@ -4249,6 +4227,7 @@ mod tests {
         let parent = SubCommand {
             name: "admin".to_string(),
             description: "Admin tools".to_string(),
+            short_about: "Admin tools".to_string(),
             is_leaf: false,
             parameters: vec![],
             subcommands: vec![child],

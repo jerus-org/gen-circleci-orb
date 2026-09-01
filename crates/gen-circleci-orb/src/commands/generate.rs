@@ -1844,6 +1844,7 @@ mod tests {
         help_parser::types::SubCommand {
             name: name.to_string(),
             description: String::new(),
+            short_about: String::new(),
             is_leaf: children.is_empty(),
             parameters: vec![],
             subcommands: children,
