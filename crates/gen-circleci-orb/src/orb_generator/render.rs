@@ -267,9 +267,6 @@ const RESERVED_JOB_PARAMS: &[&str] = &[
     "post_steps",
 ];
 
-/// Extract a command's "short about" — the first sentence of its description,
-/// i.e. everything before the double-space (or newline) that separates clap's
-/// short about from its long help. Returns `None` when the result is blank.
 /// Above this length a description reads as a paragraph, not a label — the
 /// caller falls back to the bare subcommand name instead
 /// (jerus-org/gen-circleci-orb#336).
