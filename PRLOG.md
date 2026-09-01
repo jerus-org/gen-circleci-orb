@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - deps: update pinned containers(pr [#339])
 - deps: update rust crate indexmap to 2.14.1(pr [#340])
 - deps: update rust crate pcu to 0.6.34(pr [#341])
+- deps: update rust crate uuid to 1.26.0(pr [#342])
 
 ## [0.1.9] - 2026-08-22
 
@@ -969,6 +970,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#339]: https://github.com/jerus-org/gen-circleci-orb/pull/339
 [#340]: https://github.com/jerus-org/gen-circleci-orb/pull/340
 [#341]: https://github.com/jerus-org/gen-circleci-orb/pull/341
+[#342]: https://github.com/jerus-org/gen-circleci-orb/pull/342
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.9...HEAD
 [0.1.9]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.8...v0.1.9
 [0.1.8]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.7...v0.1.8
