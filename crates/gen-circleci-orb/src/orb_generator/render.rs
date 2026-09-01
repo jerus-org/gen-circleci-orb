@@ -270,13 +270,19 @@ const RESERVED_JOB_PARAMS: &[&str] = &[
 /// Extract a command's "short about" — the first sentence of its description,
 /// i.e. everything before the double-space (or newline) that separates clap's
 /// short about from its long help. Returns `None` when the result is blank.
+/// Above this length a description reads as a paragraph, not a label — the
+/// caller falls back to the bare subcommand name instead
+/// (jerus-org/gen-circleci-orb#336).
+const MAX_STEP_NAME_LEN: usize = 60;
+
+/// `extract_description` (`help_parser::clap`) always flattens every
+/// paragraph of a subcommand's `--help` text — `about` and any `long_about`
+/// continuation alike — into a single space-joined string, so there is no
+/// structural short/long boundary left in it to split on. Usable as a step
+/// name only when short enough to actually read as a label.
 fn short_about(description: &str) -> Option<&str> {
-    let end = description
-        .find("  ")
-        .or_else(|| description.find('\n'))
-        .unwrap_or(description.len());
-    let trimmed = description[..end].trim();
-    (!trimmed.is_empty()).then_some(trimmed)
+    let trimmed = description.trim();
+    (!trimmed.is_empty() && trimmed.chars().count() <= MAX_STEP_NAME_LEN).then_some(trimmed)
 }
 
 /// Resolve the display name for a command's `run` step, in priority order:
@@ -2192,19 +2198,28 @@ mod tests {
     }
 
     #[test]
-    fn short_about_takes_text_before_double_space() {
-        assert_eq!(
-            short_about("Populate snapshots from git history  Discovers tags..."),
-            Some("Populate snapshots from git history")
-        );
-    }
-
-    #[test]
-    fn short_about_is_whole_string_when_no_double_space() {
+    fn short_about_returns_the_full_text_when_within_the_length_cap() {
         assert_eq!(
             short_about("Generate an MCP server from an orb definition"),
             Some("Generate an MCP server from an orb definition")
         );
+    }
+
+    /// `extract_description` always flattens every paragraph of a subcommand's
+    /// `--help` text into a single space-joined string (`help_parser::clap`) —
+    /// there is no double-space or newline boundary left in it to split a
+    /// short about from a long one. `short_about` must not assume one exists;
+    /// past the length cap the text reads as a paragraph, not a label, so it
+    /// returns `None` and lets the caller fall back to the bare subcommand
+    /// name (jerus-org/gen-circleci-orb#336).
+    #[test]
+    fn short_about_is_none_once_the_flattened_description_exceeds_the_length_cap() {
+        let flattened = "PR/dev gate: cargo-deny policy, a live cargo-audit scan, and \
+            license policy. All four blocking: cargo-deny, cargo-audit, the \
+            about.toml/deny.toml drift check, and the cargo-about resolution check. \
+            Aggregates exit codes and surfaces stderr.";
+        assert!(flattened.len() > MAX_STEP_NAME_LEN);
+        assert_eq!(short_about(flattened), None);
     }
 
     #[test]
@@ -2237,9 +2252,27 @@ mod tests {
     #[test]
     fn resolve_run_step_name_falls_back_to_short_about() {
         let mut sub = make_leaf("generate", vec![]);
-        sub.description = "Generate an MCP server  Long help here.".to_string();
+        sub.description = "Generate an MCP server from an orb definition".to_string();
         // No label configured for this subcommand.
-        assert_eq!(resolve_run_step_name(&sub, None), "Generate an MCP server");
+        assert_eq!(
+            resolve_run_step_name(&sub, None),
+            "Generate an MCP server from an orb definition"
+        );
+    }
+
+    /// The bug reported as jerus-org/jci-audit#126: without this guard, the
+    /// entire flattened `long_about` paragraph — not a short label — became
+    /// the CircleCI job step's name.
+    #[test]
+    fn resolve_run_step_name_falls_back_to_bare_name_when_description_is_too_long() {
+        let mut sub = make_leaf("check", vec![]);
+        sub.description = "PR/dev gate: cargo-deny policy, a live cargo-audit scan, and \
+            license policy. All four blocking: cargo-deny, cargo-audit, the \
+            about.toml/deny.toml drift check, and the cargo-about resolution check. \
+            Aggregates exit codes and surfaces stderr."
+            .to_string();
+        // No label configured for this subcommand.
+        assert_eq!(resolve_run_step_name(&sub, None), "check");
     }
 
     #[test]
