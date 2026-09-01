@@ -20,7 +20,7 @@ steps:
         name: Set CHECK flag
         command: echo 'export CHECK=true' >> "$BASH_ENV"
 - run:
-    name: update
+    name: Re-sync an existing repo's orb-managed CI wiring to the current flow
     command: <<include(scripts/update.sh)>>
     environment:
       CONFIG: << parameters.config >>
