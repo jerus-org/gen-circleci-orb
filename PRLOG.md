@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - deps: update dependency toolkit to v7.3.0(pr [#333])
 - deps: update rust crate uuid to 1.25.0(pr [#334])
 - deps: lock file maintenance(pr [#335])
+- cap generated step name to a short label(pr [#338])
 
 ## [0.1.9] - 2026-08-22
 
@@ -959,6 +960,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#333]: https://github.com/jerus-org/gen-circleci-orb/pull/333
 [#334]: https://github.com/jerus-org/gen-circleci-orb/pull/334
 [#335]: https://github.com/jerus-org/gen-circleci-orb/pull/335
+[#338]: https://github.com/jerus-org/gen-circleci-orb/pull/338
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.9...HEAD
 [0.1.9]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.8...v0.1.9
 [0.1.8]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.7...v0.1.8
