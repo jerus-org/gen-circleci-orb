@@ -36,7 +36,7 @@ pub fn parse_top_level(
 fn normalize_binary_name(binary: &str) -> String {
     std::path::Path::new(binary)
         .file_stem()
-        .and_then(|s| s.to_str())
+        .and_then(std::ffi::OsStr::to_str)
         .unwrap_or(binary)
         .to_string()
 }
@@ -357,7 +357,7 @@ fn resolve_short_only_name(
         .next()
         .unwrap_or_default()
         .chars()
-        .filter(|c| c.is_ascii_alphanumeric())
+        .filter(char::is_ascii_alphanumeric)
         .collect::<String>()
         .to_lowercase();
     is_usable_param_name(&first).then_some(first)
