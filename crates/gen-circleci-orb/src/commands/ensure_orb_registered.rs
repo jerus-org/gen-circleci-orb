@@ -3,10 +3,8 @@ use anyhow::{Context, Result};
 /// Ensure a CircleCI orb is registered, creating it if it does not exist.
 ///
 /// Authenticates the CircleCI CLI via the `CIRCLE_TOKEN` environment variable,
-/// passed straight through to the `circleci` child process, rather than
-/// calling `circleci setup` (removed in newer CLI releases) or exporting it
-/// under the old `CIRCLECI_CLI_TOKEN` name (circleci-cli 1.0 stopped reading
-/// that name — only `CIRCLE_TOKEN` is recognised now).
+/// passed straight through to the `circleci` child process — the CLI reads
+/// `CIRCLE_TOKEN` directly, so no `circleci setup` step is needed.
 #[derive(Debug, clap::Args)]
 pub struct EnsureOrbRegistered {
     /// The orb name to check/register (e.g. my-org/my-orb).
@@ -54,9 +52,7 @@ impl EnsureOrbRegistered {
         // `circleci orb get` exits 0 only when the orb exists. A missing orb exits
         // non-zero. Non-zero must NOT be treated as "registered": that inverts the
         // check and means a missing orb is never created — defeating the whole
-        // purpose of this command. (circleci-cli 1.0 removed `orb info` entirely —
-        // `orb get` is its replacement — so this also covers the "not a orb
-        // command" case if the CLI version ever regresses.)
+        // purpose of this command.
         let (info_exit, _, _) = runner.run(&["circleci", "orb", "get", &self.orb_name], token)?;
 
         if info_exit == 0 {
@@ -64,9 +60,8 @@ impl EnsureOrbRegistered {
             return Ok(());
         }
 
-        // circleci-cli 1.0 removed `orb create`'s `--no-prompt` flag outright
-        // (`unknown flag: --no-prompt`) rather than renaming it — it no longer
-        // prompts for confirmation in the first place.
+        // `circleci orb create` does not accept `--no-prompt` and does not
+        // prompt for confirmation.
         let mut args = vec!["circleci", "orb", "create", &self.orb_name];
         if self.private {
             args.push("--private");
@@ -144,8 +139,7 @@ mod tests {
     fn get_nonzero_exit_missing_orb_triggers_create() {
         // `circleci orb get` exits non-zero (exact code unspecified — the CLI
         // doesn't guarantee one) when the orb does NOT exist. That must trigger
-        // creation — it must NOT be read as "already registered" (the old
-        // inverted behaviour that meant a missing orb was never created).
+        // creation, not be read as "already registered".
         let runner = FakeRunner::new(vec![
             (255, "", "no Orb 'my-org/my-orb@volatile' was found"),
             (0, "", ""),
@@ -199,9 +193,7 @@ mod tests {
 
     #[test]
     fn create_omits_no_prompt_flag() {
-        // circleci-cli 1.0 removed `--no-prompt` from `orb create` entirely
-        // (`unknown flag: --no-prompt`, verified against a live v1.0.49221
-        // binary) rather than renaming it, so passing it is a hard failure.
+        // `circleci orb create` rejects `--no-prompt` as an unknown flag.
         let runner = FakeRunner::new(vec![(1, "", ""), (0, "", "")]);
         cmd("my-org/my-orb")
             .run_with_runner(&runner, "tok")

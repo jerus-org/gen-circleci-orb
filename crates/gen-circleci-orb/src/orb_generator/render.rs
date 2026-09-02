@@ -3172,12 +3172,11 @@ mod tests {
 
     #[test]
     fn dockerfile_cli_installer_extracts_binary_by_name_not_strip() {
-        // circleci-cli's release tarballs used to nest everything under a
-        // `circleci-cli_<ver>_linux_amd64/` directory, which `--strip 1` peeled
-        // off. Current releases (the 1.0.x build-number line) ship the binary
-        // at the tarball root instead, so `--strip 1` has nothing to strip off
-        // a top-level file and GNU tar silently drops it. Extracting the
-        // `circleci` member by name works against both layouts.
+        // circleci-cli's release tarballs place the binary at the tarball
+        // root, with no wrapping directory — `--strip 1` would strip the only
+        // path component a top-level file has and drop it. Extracting the
+        // `circleci` member by exact name works regardless of the tarball's
+        // directory structure.
         let cli = make_cli("mytool", vec![]);
         let opts = GenerateOpts {
             circleci_cli_version: Some("1.0.49221".to_string()),
