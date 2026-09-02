@@ -18,7 +18,7 @@ pub use crate::orb_config::{
 /// binaries that use the CLI still get it at this version even if
 /// `[orb].circleci_cli_version` is removed, so the install can't be accidentally
 /// dropped. Renovate keeps the pinned override current; this is the fallback.
-pub const DEFAULT_CIRCLECI_CLI_VERSION: &str = "0.1.38646";
+pub const DEFAULT_CIRCLECI_CLI_VERSION: &str = "1.0.49221";
 
 /// Subcommand names whose generated orb artifacts shell out to the `circleci`
 /// CLI, so a binary exposing any of them needs the CLI bundled in its image.

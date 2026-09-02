@@ -544,7 +544,7 @@ fn render_cli_installer_stage(ver: &str) -> String {
     s.push_str("         \"${REL}/circleci-cli_${CIRCLECI_CLI_VERSION}_checksums.txt\" \\\n");
     s.push_str("         -o checksums.txt \\\n");
     s.push_str("    && grep \"${TARBALL}\" checksums.txt | sha256sum --check \\\n");
-    s.push_str("    && tar -xzf \"${TARBALL}\" --strip 1 \\\n");
+    s.push_str("    && tar -xzf \"${TARBALL}\" circleci \\\n");
     s.push_str("    && install -m 755 circleci /usr/local/bin/circleci \\\n");
     s.push_str("    && rm -rf \"${TARBALL}\" checksums.txt circleci\n");
     s
@@ -3167,6 +3167,31 @@ mod tests {
         assert!(
             !content.contains("| bash"),
             "cli-installer must not use curl|bash:\n{content}"
+        );
+    }
+
+    #[test]
+    fn dockerfile_cli_installer_extracts_binary_by_name_not_strip() {
+        // circleci-cli's release tarballs used to nest everything under a
+        // `circleci-cli_<ver>_linux_amd64/` directory, which `--strip 1` peeled
+        // off. Current releases (the 1.0.x build-number line) ship the binary
+        // at the tarball root instead, so `--strip 1` has nothing to strip off
+        // a top-level file and GNU tar silently drops it. Extracting the
+        // `circleci` member by name works against both layouts.
+        let cli = make_cli("mytool", vec![]);
+        let opts = GenerateOpts {
+            circleci_cli_version: Some("1.0.49221".to_string()),
+            ..default_opts()
+        };
+        let files = generate(&cli, &opts, None);
+        let content = &files[&PathBuf::from("Dockerfile")];
+        assert!(
+            content.contains("tar -xzf \"${TARBALL}\" circleci"),
+            "cli-installer must extract the circleci binary by exact member name:\n{content}"
+        );
+        assert!(
+            !content.contains("--strip"),
+            "cli-installer must not rely on --strip against the current flat tarball layout:\n{content}"
         );
     }
 
