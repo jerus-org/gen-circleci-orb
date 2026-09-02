@@ -25,7 +25,7 @@ RUN apt-get update \
        done; }
 
 FROM debian:13-slim AS cli-installer
-ARG CIRCLECI_CLI_VERSION=0.1.38646
+ARG CIRCLECI_CLI_VERSION=1.0.49221
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/* \
@@ -39,7 +39,7 @@ RUN apt-get update \
          "${REL}/circleci-cli_${CIRCLECI_CLI_VERSION}_checksums.txt" \
          -o checksums.txt \
     && grep "${TARBALL}" checksums.txt | sha256sum --check \
-    && tar -xzf "${TARBALL}" --strip 1 \
+    && tar -xzf "${TARBALL}" circleci \
     && install -m 755 circleci /usr/local/bin/circleci \
     && rm -rf "${TARBALL}" checksums.txt circleci
 

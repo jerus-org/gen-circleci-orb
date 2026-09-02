@@ -338,24 +338,22 @@ build-binary-release:
 
 **`ensure-orb-registered`** checks that the orb namespace entry exists before attempting to
 publish — `orb-tools/publish` fails if the orb has never been registered. This is a separate
-inline job rather than a pre-step of `orb-tools/publish` because `orb-tools/publish`
-configures CLI authentication in its own steps, which execute after pre-steps. Running
-`circleci orb info` before that point would fail with "please set a token". The inline job
-uses `executor: orb-tools/default` (the same `circleci/circleci-cli` image used by
-`orb-tools/publish`) and the `orb-publishing` context, which injects `CIRCLE_TOKEN`.
-`circleci setup` must be called explicitly to write the CLI config file before any
-`circleci orb` commands.
+job rather than a pre-step of `orb-tools/publish` because `orb-tools/publish` configures CLI
+authentication in its own steps, which execute after pre-steps. It's the orb's own
+`ensure_orb_registered` job (not a hand-rolled step): it runs on the orb's `default` executor,
+which already has `circleci` baked in by the `cli-installer` Dockerfile stage, and the command
+behind it authenticates via the `CIRCLE_TOKEN` environment variable directly — no `circleci
+setup` step needed. Give it the `orb-publishing` context so `CIRCLE_TOKEN` is injected, and
+require it before `orb-tools/publish`:
 
 ```yaml
-ensure-orb-registered:
-  executor: orb-tools/default
-  steps:
-    - run:
-        name: Ensure orb is registered
-        command: |
-          circleci setup --token "${CIRCLE_TOKEN}" --host https://circleci.com --no-prompt
-          circleci orb info <namespace>/<binary> > /dev/null 2>&1 || \
-            circleci orb create <namespace>/<binary> --no-prompt
+- gen-circleci-orb/ensure_orb_registered:
+    orb_name: <namespace>/<binary>
+    context: [orb-publishing]
+
+- orb-tools/publish:
+    requires: [ensure-orb-registered, ...]
+    context: [orb-publishing]
 ```
 
 **`build-container`** builds and pushes the Docker image for the orb executor. The release

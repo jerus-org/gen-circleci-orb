@@ -42,7 +42,7 @@ Options:
       --docker-context <DOCKER_CONTEXT>
           CircleCI context name holding Docker Hub credentials (DOCKER_LOGIN, DOCKER_PASSWORD). Prompted interactively if not supplied
       --orb-context <ORB_CONTEXT>
-          CircleCI context name holding orb publishing credentials (CIRCLECI_CLI_TOKEN). Prompted interactively if not supplied
+          CircleCI context name holding orb publishing credentials (CIRCLE_TOKEN). Prompted interactively if not supplied
       --gen-circleci-orb-version <GEN_CIRCLECI_ORB_VERSION>
           Version of the jerus-org/gen-circleci-orb orb to pin in generated CI. Defaults to the version of this binary (orb and crate are released together) [default: [..]]
       --mcp
