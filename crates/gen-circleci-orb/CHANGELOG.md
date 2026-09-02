@@ -5,9 +5,33 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.10] - 2026-09-02
+
+Summary: Added[1], Documentation[1], Fixed[13]
+
+### Added
+
+ - feat: guard job_group order vs https remote
+
+### Fixed
+
+ - fix: adapt orb registration to circleci-cli 1.0
+ - fix: extract circleci-cli by name, not --strip
+ - fix(deps): update rust crate uuid to 1.26.0
+ - fix(deps): update rust crate pcu to 0.6.34
+ - fix(deps): update rust crate indexmap to 2.14.1
+ - fix: capture short_about at parse time
+ - fix: remove stale doc comment
+ - fix: cap generated step name to a short label
+ - fix(deps): update rust crate uuid to 1.25.0
+ - fix: fmt error
+ - fix: integration tests\n\nIntegration tests need to use binaries that are installed. Previously they\nused gen-orb-mcp which is not longer installed in the ci container.\n Replace with kdeets and gen-changelog which should be more durable.
+ - fix: reduce cognitive complexity of step check
+ - fix: trim requires_git_auth doc comment
+
 ## [0.1.9] - 2026-08-22
 
-Summary: Fixed[1]
+Summary: Chore[1], Fixed[1]
 
 ### Fixed
 
@@ -760,7 +784,8 @@ Summary: Added[2], Chore[1], Fixed[2], Testing[1]
 
 Summary: Chore[2]
 
-[Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.8...HEAD
+[Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.9...HEAD
+[0.1.9]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.8...v0.1.9
 [0.1.8]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.7...v0.1.8
 [0.1.7]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.5...v0.1.6
