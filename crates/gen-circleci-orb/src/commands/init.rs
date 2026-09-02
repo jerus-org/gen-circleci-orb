@@ -381,7 +381,7 @@ pub struct Init {
     #[arg(long)]
     pub docker_context: Option<String>,
 
-    /// CircleCI context name holding orb publishing credentials (CIRCLECI_CLI_TOKEN).
+    /// CircleCI context name holding orb publishing credentials (CIRCLE_TOKEN).
     /// Prompted interactively if not supplied.
     #[arg(long)]
     pub orb_context: Option<String>,
@@ -967,7 +967,7 @@ impl Init {
             self.orb_context.clone(),
             non_empty(ci.and_then(|c| c.orb_context.clone()))
                 .unwrap_or_else(|| DEFAULT_ORB_CONTEXT.to_string()),
-            "Orb publishing context name (needs: CIRCLECI_CLI_TOKEN)",
+            "Orb publishing context name (needs: CIRCLE_TOKEN)",
             interactive,
         )?;
 
