@@ -43,9 +43,6 @@ workflows:
               ignore: main
       - toolkit/idiomatic_rust:
           clippy_report: true
-          filters:
-            branches:
-              ignore: main
       - toolkit/common_tests:
           min_rust_version: << pipeline.parameters.min_rust_version >>
       - toolkit/security:
