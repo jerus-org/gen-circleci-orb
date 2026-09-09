@@ -294,14 +294,16 @@ fn is_option_decl(trimmed: &str) -> bool {
 /// The built-in `--version` has no `<VALUE>` metavar; an application flag also
 /// named `--version` that accepts a value must NOT be excluded — the metavar
 /// tells them apart.
-/// True for clap's own builtin `-h, --help` / `-V, --version` declarations.
 ///
-/// Keyed off `extract_long_flag`'s anchored declaration match rather than a
-/// raw substring search over the whole line: the line can carry both a
+/// Keyed off `extract_long_flag`'s declaration extraction rather than a raw
+/// substring search over the whole line: the line can carry both a
 /// declaration and (once clap renders inline) its description on the same
 /// text, and a raw `contains`/`find` for "--help"/"--version" matches inside
 /// an unrelated longer flag name (`--version-env`) or inside another flag's
-/// description that merely mentions one (#311).
+/// description that merely mentions one (#311). `extract_long_flag`'s regex
+/// is not itself anchored to the start of the line — it takes the first
+/// `--word` occurrence in the string — but that's equivalent to anchoring
+/// here, since a declaration line's own flag always precedes its description.
 fn is_builtin_decl(trimmed: &str) -> bool {
     match extract_long_flag(trimmed).as_deref() {
         Some("help") => true,
@@ -760,8 +762,11 @@ fn extract_positional_description(block: &str) -> String {
 }
 
 fn extract_long_flag(block: &str) -> Option<String> {
-    // Match --word or --word-word patterns
-    let re = regex::Regex::new(r"--([a-zA-Z][a-zA-Z0-9-]*)").ok()?;
+    // Match --word, --word-word, or an explicitly underscore-named
+    // --word_word (legal via `#[arg(long = "...")]`, just not clap's
+    // kebab-case derive default) — the char class must include '_' or the
+    // match stops early and returns a truncated flag name (#311).
+    let re = regex::Regex::new(r"--([a-zA-Z][a-zA-Z0-9_-]*)").ok()?;
     let cap = re.captures(block)?;
     Some(cap[1].to_string())
 }
@@ -1512,6 +1517,43 @@ Options:
             params.iter().any(|p| p.long_name == "release_version"),
             "--release-version must not be dropped just because its own \
              description mentions --version-env, got: {:?}",
+            params.iter().map(|p| &p.long_name).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn flag_prefixed_with_version_underscore_is_not_treated_as_builtin() {
+        // extract_long_flag's charset excludes '_', so an explicitly
+        // underscore-named flag (legal via `#[arg(long = "version_env")]`,
+        // just not clap's kebab-case derive default) is captured as bare
+        // "version" unless is_builtin_decl separately checks that the
+        // identifier doesn't continue past what was captured.
+        let help = r#"Usage: tool release [OPTIONS]
+
+Options:
+      --version_env <VERSION_ENV>  Env var holding the release version
+  -h, --help                       Print help
+"#;
+        let params = parse_parameters(help);
+        assert!(
+            params.iter().any(|p| p.long_name == "version_env"),
+            "--version_env must not be dropped as the clap builtin, got: {:?}",
+            params.iter().map(|p| &p.long_name).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn flag_prefixed_with_help_underscore_is_not_treated_as_builtin() {
+        let help = r#"Usage: tool cmd [OPTIONS]
+
+Options:
+      --help_format <FORMAT>  Output format for help text
+  -h, --help               Print help
+"#;
+        let params = parse_parameters(help);
+        assert!(
+            params.iter().any(|p| p.long_name == "help_format"),
+            "--help_format must not be dropped as the clap builtin, got: {:?}",
             params.iter().map(|p| &p.long_name).collect::<Vec<_>>()
         );
     }
