@@ -708,6 +708,105 @@ fn describe_job_group_step(step: &orb_config::JobGroupStep) -> String {
 /// bypassed by construction; a bare typo of the name would still go
 /// undetected, same as any other hardcoded command-name check in this
 /// codebase (e.g. the `"checkout"` builtin match below).
+/// Validates every `[subcommand.<name>.param.<param>] default = "..."`
+/// override against its target parameter's declared type, so a value that
+/// cannot be coerced (a non-numeric default for an integer param, anything
+/// but `"true"`/`"false"` for a boolean one) fails generation with a clear
+/// message instead of silently reaching `coerce_override_default`'s
+/// fallback and emitting invalid orb YAML (#355).
+///
+/// An override naming a param not found on its subcommand is not an error
+/// here — some consumers keep an override for a param since removed from
+/// the CLI, and `render_job` already treats an unmatched name as a no-op;
+/// this check only judges overrides that will actually be applied.
+pub(crate) fn validate_param_overrides(
+    cli_def: &help_parser::types::CliDefinition,
+    config: &orb_config::OrbConfig,
+) -> Result<()> {
+    let Some(subcommands) = config.subcommand.as_ref() else {
+        return Ok(());
+    };
+    let mut errors = Vec::new();
+    for (sub_name, sc_config) in subcommands {
+        let Some(overrides) = sc_config.param.as_ref() else {
+            continue;
+        };
+        let Some(sub) = find_subcommand(&cli_def.subcommands, sub_name) else {
+            continue;
+        };
+        for (param_name, override_) in overrides {
+            let Some(default) = &override_.default else {
+                continue;
+            };
+            let Some(param) = sub.parameters.iter().find(|p| &p.long_name == param_name) else {
+                continue;
+            };
+            if let Err(reason) = check_override_value(default, &param.param_type) {
+                errors.push(format!(
+                    "[subcommand.{sub_name}.param.{param_name}] default = {default:?}: {reason}"
+                ));
+            }
+        }
+    }
+    if !errors.is_empty() {
+        anyhow::bail!("invalid param overrides:\n{}", errors.join("\n"));
+    }
+    Ok(())
+}
+
+/// Depth-first search for a subcommand by name — configs key overrides by
+/// bare subcommand name (not a nested path), matching every other lookup
+/// against `[subcommand.<name>]` elsewhere in this module.
+fn find_subcommand<'a>(
+    subs: &'a [help_parser::types::SubCommand],
+    name: &str,
+) -> Option<&'a help_parser::types::SubCommand> {
+    for sub in subs {
+        if sub.name == name {
+            return Some(sub);
+        }
+        if let Some(found) = find_subcommand(&sub.subcommands, name) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// `Err` names why `raw` can't be coerced to `param_type` — mirrors the
+/// coercions `coerce_override_default` (orb_generator::render) actually
+/// performs, so this rejects exactly the inputs that function would
+/// otherwise silently fall back on.
+fn check_override_value(
+    raw: &str,
+    param_type: &help_parser::types::ParamType,
+) -> std::result::Result<(), String> {
+    use help_parser::types::ParamType;
+    match param_type {
+        ParamType::Integer => raw
+            .parse::<i64>()
+            .map(|_| ())
+            .map_err(|_| "not a valid integer".to_string()),
+        ParamType::Boolean => {
+            if raw == "true" || raw == "false" {
+                Ok(())
+            } else {
+                Err("must be exactly \"true\" or \"false\" for a boolean parameter".to_string())
+            }
+        }
+        ParamType::Enum(values) => {
+            if values.iter().any(|v| v == raw) {
+                Ok(())
+            } else {
+                Err(format!(
+                    "not one of this parameter's declared enum values: {}",
+                    values.join(", ")
+                ))
+            }
+        }
+        _ => Ok(()),
+    }
+}
+
 pub(crate) fn validate_job_group_step_order(
     job_groups: &[orb_config::JobGroup],
     git_push_subcommands: &[String],
@@ -884,6 +983,7 @@ impl Generate {
             orb_config.job_group.as_deref().unwrap_or_default(),
             &git_push_subcommands,
         )?;
+        validate_param_overrides(&cli_def, &orb_config)?;
 
         let opts = orb_generator::GenerateOpts {
             namespaces,
@@ -2287,6 +2387,177 @@ mod tests {
         let tools = vec!["rsign2:rsign".to_string(), "rsign2:foo".to_string()];
         let err = validate_cargo_tool_entries(&tools, "mytool").unwrap_err();
         assert!(err.to_string().contains("rsign2"), "got: {err}");
+    }
+
+    // ── validate_param_overrides ─────────────────────────────────────────────
+
+    use help_parser::types::ParamType;
+    use indexmap::IndexMap;
+
+    fn param(
+        long_name: &str,
+        param_type: help_parser::types::ParamType,
+    ) -> help_parser::types::Parameter {
+        help_parser::types::Parameter {
+            long_name: long_name.to_string(),
+            param_type,
+            description: format!("{long_name} param."),
+            ..Default::default()
+        }
+    }
+
+    fn cli_with_params(
+        sub_name: &str,
+        params: Vec<help_parser::types::Parameter>,
+    ) -> help_parser::types::CliDefinition {
+        help_parser::types::CliDefinition {
+            binary_name: "demo".to_string(),
+            description: String::new(),
+            subcommands: vec![help_parser::types::SubCommand {
+                name: sub_name.to_string(),
+                description: String::new(),
+                short_about: String::new(),
+                is_leaf: true,
+                parameters: params,
+                subcommands: vec![],
+            }],
+        }
+    }
+
+    fn config_with_override(
+        sub_name: &str,
+        param_name: &str,
+        default: &str,
+    ) -> crate::orb_config::OrbConfig {
+        use crate::orb_config::{OrbConfig, ParamOverride, SubcommandConfig};
+        let mut overrides = IndexMap::new();
+        overrides.insert(
+            param_name.to_string(),
+            ParamOverride {
+                default: Some(default.to_string()),
+            },
+        );
+        let mut subcommands = IndexMap::new();
+        subcommands.insert(
+            sub_name.to_string(),
+            SubcommandConfig {
+                param: Some(overrides),
+                ..SubcommandConfig::default()
+            },
+        );
+        OrbConfig {
+            subcommand: Some(subcommands),
+            ..OrbConfig::default()
+        }
+    }
+
+    #[test]
+    fn validate_param_overrides_accepts_a_valid_integer_default() {
+        let cli = cli_with_params("release", vec![param("retries", ParamType::Integer)]);
+        let config = config_with_override("release", "retries", "3");
+        assert!(validate_param_overrides(&cli, &config).is_ok());
+    }
+
+    #[test]
+    fn validate_param_overrides_accepts_a_valid_boolean_default() {
+        let cli = cli_with_params("wire_ci", vec![param("check", ParamType::Boolean)]);
+        let config = config_with_override("wire_ci", "check", "true");
+        assert!(validate_param_overrides(&cli, &config).is_ok());
+    }
+
+    #[test]
+    fn validate_param_overrides_rejects_an_unparseable_integer_default() {
+        let cli = cli_with_params("release", vec![param("retries", ParamType::Integer)]);
+        let config = config_with_override("release", "retries", "3.5");
+        let err = validate_param_overrides(&cli, &config).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("release"), "got: {msg}");
+        assert!(msg.contains("retries"), "got: {msg}");
+        assert!(msg.contains("3.5"), "got: {msg}");
+    }
+
+    #[test]
+    fn validate_param_overrides_rejects_a_non_true_false_boolean_default() {
+        let cli = cli_with_params("wire_ci", vec![param("check", ParamType::Boolean)]);
+        let config = config_with_override("wire_ci", "check", "True");
+        let err = validate_param_overrides(&cli, &config).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("wire_ci"), "got: {msg}");
+        assert!(msg.contains("check"), "got: {msg}");
+    }
+
+    #[test]
+    fn validate_param_overrides_ignores_a_string_param_default() {
+        // No declared type to violate — any string is a valid string default.
+        let cli = cli_with_params("generate", vec![param("orb_path", ParamType::String)]);
+        let config = config_with_override("generate", "orb_path", "custom/@orb.yml");
+        assert!(validate_param_overrides(&cli, &config).is_ok());
+    }
+
+    #[test]
+    fn validate_param_overrides_accepts_a_declared_enum_value() {
+        let cli = cli_with_params(
+            "release",
+            vec![param(
+                "log_level",
+                ParamType::Enum(vec!["default".to_string(), "verbose".to_string()]),
+            )],
+        );
+        let config = config_with_override("release", "log_level", "verbose");
+        assert!(validate_param_overrides(&cli, &config).is_ok());
+    }
+
+    #[test]
+    fn validate_param_overrides_rejects_a_value_outside_the_declared_enum() {
+        let cli = cli_with_params(
+            "release",
+            vec![param(
+                "log_level",
+                ParamType::Enum(vec!["default".to_string(), "verbose".to_string()]),
+            )],
+        );
+        let config = config_with_override("release", "log_level", "bogus");
+        let err = validate_param_overrides(&cli, &config).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("log_level"), "got: {msg}");
+        assert!(msg.contains("bogus"), "got: {msg}");
+    }
+
+    #[test]
+    fn validate_param_overrides_ignores_an_override_for_an_unknown_param() {
+        // Not this validation's job to catch a stale override left behind
+        // after a CLI param was removed — render_job already treats an
+        // unmatched override name as a no-op, unchanged by this check.
+        let cli = cli_with_params("release", vec![param("retries", ParamType::Integer)]);
+        let config = config_with_override("release", "does_not_exist", "3.5");
+        assert!(validate_param_overrides(&cli, &config).is_ok());
+    }
+
+    #[test]
+    fn validate_param_overrides_finds_a_param_on_a_nested_subcommand() {
+        let nested = help_parser::types::SubCommand {
+            name: "release".to_string(),
+            description: String::new(),
+            short_about: String::new(),
+            is_leaf: true,
+            parameters: vec![param("retries", ParamType::Integer)],
+            subcommands: vec![],
+        };
+        let cli = help_parser::types::CliDefinition {
+            binary_name: "demo".to_string(),
+            description: String::new(),
+            subcommands: vec![help_parser::types::SubCommand {
+                name: "ci".to_string(),
+                description: String::new(),
+                short_about: String::new(),
+                is_leaf: false,
+                parameters: vec![],
+                subcommands: vec![nested],
+            }],
+        };
+        let config = config_with_override("release", "retries", "not-a-number");
+        let err = validate_param_overrides(&cli, &config).unwrap_err();
+        assert!(err.to_string().contains("retries"), "got: {err}");
     }
 
     // ── validate_job_group_step_order ───────────────────────────────────────
