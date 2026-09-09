@@ -619,17 +619,18 @@ pub(crate) fn ensure_cargo_tools_supported(
     Ok(())
 }
 
-/// Parses and validates every `cargo_tools` entry into `(crate, binary)`
-/// pairs. Binary names must be unique, including the orb's own binary and
-/// the reserved `circleci` CLI name (`render_runtime_stage` always writes
-/// there when the CLI-installer stage is enabled). Crate names must be
-/// unique too — one crate produces one binary regardless of alias. Checks
-/// every entry before returning, so multiple bad entries are reported
-/// together rather than one at a time.
+/// Parses and validates every `cargo_tools` entry into
+/// `(crate, binary, version)` triples. Binary names must be unique, including
+/// the orb's own binary and the reserved `circleci` CLI name
+/// (`render_runtime_stage` always writes there when the CLI-installer stage
+/// is enabled). Crate names must be unique too — one crate produces one
+/// binary regardless of alias or version pin. Checks every entry before
+/// returning, so multiple bad entries are reported together rather than one
+/// at a time.
 pub(crate) fn validate_cargo_tool_entries(
     cargo_tools: &[String],
     own_binary: &str,
-) -> Result<Vec<(String, String)>> {
+) -> Result<Vec<(String, String, Option<String>)>> {
     let cli_binary = orb_generator::render::CIRCLECI_CLI_BINARY;
     let mut seen_binaries: HashSet<&str> = HashSet::new();
     seen_binaries.insert(own_binary);
@@ -639,8 +640,8 @@ pub(crate) fn validate_cargo_tool_entries(
     let mut errors = Vec::new();
 
     for entry in cargo_tools {
-        let (krate, binary) = match orb_generator::render::split_cargo_tool_entry(entry) {
-            Ok(pair) => pair,
+        let (krate, binary, version) = match orb_generator::render::split_cargo_tool_entry(entry) {
+            Ok(triple) => triple,
             Err(e) => {
                 errors.push(e.to_string());
                 continue;
@@ -660,7 +661,11 @@ pub(crate) fn validate_cargo_tool_entries(
             ));
             continue;
         }
-        parsed.push((krate.to_string(), binary.to_string()));
+        parsed.push((
+            krate.to_string(),
+            binary.to_string(),
+            version.map(str::to_string),
+        ));
     }
 
     if !errors.is_empty() {
@@ -2186,10 +2191,47 @@ mod tests {
         assert_eq!(
             parsed,
             vec![
-                ("cargo-audit".to_string(), "cargo-audit".to_string()),
-                ("rsign2".to_string(), "rsign".to_string()),
+                ("cargo-audit".to_string(), "cargo-audit".to_string(), None),
+                ("rsign2".to_string(), "rsign".to_string(), None),
             ]
         );
+    }
+
+    #[test]
+    fn validate_cargo_tool_entries_accepts_version_pins() {
+        let tools = vec![
+            "cargo-audit@0.21.0".to_string(),
+            "rsign2:rsign@2.1.0".to_string(),
+        ];
+        let parsed = validate_cargo_tool_entries(&tools, "mytool").unwrap();
+        assert_eq!(
+            parsed,
+            vec![
+                (
+                    "cargo-audit".to_string(),
+                    "cargo-audit".to_string(),
+                    Some("0.21.0".to_string())
+                ),
+                (
+                    "rsign2".to_string(),
+                    "rsign".to_string(),
+                    Some("2.1.0".to_string())
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn validate_cargo_tool_entries_rejects_same_crate_different_versions() {
+        // Pinning two different versions of the same crate under different
+        // aliases is still one crate producing one binary — a version
+        // difference doesn't change that.
+        let tools = vec![
+            "rsign2:rsign@1.0.0".to_string(),
+            "rsign2:foo@2.0.0".to_string(),
+        ];
+        let err = validate_cargo_tool_entries(&tools, "mytool").unwrap_err();
+        assert!(err.to_string().contains("rsign2"), "got: {err}");
     }
 
     #[test]

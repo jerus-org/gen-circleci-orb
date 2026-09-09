@@ -49,23 +49,26 @@ Also settable per-run with the repeatable `--apt-packages` flag (CLI overrides t
 Extra cargo tools to install into the executor image, for orbs whose executor **orchestrates other
 cargo commands** (e.g. a security gate that runs `cargo-audit` and `cargo-deny`). Each entry is
 either a crate name, when the installed binary shares the crate's name, or `"crate:binary"` when it
-doesn't (e.g. crate `rsign2` installs a binary named `rsign`). The generated Dockerfile installs
-`cargo-binstall` in the builder stage (from crates.io, not a `curl | bash` installer), `cargo
-binstall`s the crate half of each entry, and copies the binary half onto `PATH` in the runtime — so
-the runtime needs no Rust toolchain to invoke them.
+doesn't (e.g. crate `rsign2` installs a binary named `rsign`). Either form takes an optional
+`"@version"` suffix to pin an exact version instead of floating to whatever's latest on crates.io at
+container-build time. The generated Dockerfile installs `cargo-binstall` in the builder stage (from
+crates.io, not a `curl | bash` installer), `cargo binstall`s the crate half of each entry (as
+`crate@version` when pinned), and copies the binary half onto `PATH` in the runtime — so the runtime
+needs no Rust toolchain to invoke them.
 
 ```toml
 [orb]
-cargo_tools = ["cargo-audit", "cargo-deny", "rsign2:rsign"]
+cargo_tools = ["cargo-audit", "cargo-deny@0.14.0", "rsign2:rsign@2.1.0"]
 ```
 
 Also settable with the repeatable `--cargo-tool` flag (CLI overrides the config value). Supported
 with the **binstall** install method only — it relies on the Dockerfile's Rust builder stage; using
 it with `apt`/`local` is an error. Rejected at generate time: a malformed `crate:binary` entry
-(empty half, more than one colon, or whitespace in either half), and a binary name that collides
-with another entry's, with the orb's own binary, or with `circleci` (reserved — the CLI-installer
-stage always writes there when enabled) — two tools landing at the same runtime path would silently
-drop one of them.
+(empty half, more than one colon, or whitespace in either half), a malformed `@version` suffix (empty,
+more than one `@`, or not starting with a digit — this is an exact pin, not a comparator range like
+`<=1.3.3`), and a binary name that collides with another entry's, with the orb's own binary, or with
+`circleci` (reserved — the CLI-installer stage always writes there when enabled) — two tools landing
+at the same runtime path would silently drop one of them.
 
 ### `crate_wait_attempts` / `crate_wait_seconds` — the crates.io propagation gate
 
