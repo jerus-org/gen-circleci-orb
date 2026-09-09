@@ -187,7 +187,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("thing.yml");
         std::fs::write(&path, "old").unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o444)).unwrap();
+        // Owner-only read (no group/other bits): least-privilege even for a
+        // test fixture, and the write-refusal this induces only needs the
+        // owner's own write bit cleared (SonarQube rust:S2612).
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o400)).unwrap();
 
         let err = write_atomically(&path, "new").unwrap_err().to_string();
         assert!(err.contains("read-only"), "got: {err}");
