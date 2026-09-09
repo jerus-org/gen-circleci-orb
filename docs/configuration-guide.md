@@ -295,6 +295,14 @@ default = "./dist"
 `gen-circleci-orb config set-parameter-default --subcommand generate --parameter output --value ./dist`
 writes the same thing.
 
+The subcommand key matches the CLI's own subcommand name exactly, including hyphens (a
+multi-word subcommand like `release-prep` is `[subcommand.release-prep.param.<name>]`, not
+`release_prep`). The override value is validated against the target parameter's declared type at
+generate time — `"true"`/`"false"` for a boolean parameter, a parseable integer for an integer one
+— and generation fails with a clear error naming the subcommand, parameter, and reason rather than
+silently emitting an invalid orb.yml. An override naming a parameter the CLI no longer has is not
+an error; it's simply not applied.
+
 ### Pin extra orbs
 
 ```toml
