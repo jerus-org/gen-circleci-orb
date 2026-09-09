@@ -164,11 +164,14 @@ pub struct OrbSection {
     /// only). Each entry is a crate name (`"cargo-audit"`), or `"crate:binary"`
     /// when the installed binary name differs from the crate name
     /// (`"rsign2:rsign"` installs crate `rsign2` and exposes its binary as
-    /// `rsign`). The generated Dockerfile installs `cargo-binstall` in the
-    /// builder stage, `cargo binstall`s these crates, and copies their binaries
-    /// into the runtime stage. Use for orbs whose executor orchestrates other
-    /// cargo tools (e.g. a security gate needs `cargo-audit` and `cargo-deny`
-    /// on PATH).
+    /// `rsign`). Either form takes an optional `"@version"` suffix
+    /// (`"cargo-audit@0.21.0"`, `"rsign2:rsign@2.1.0"`) to pin an exact
+    /// version instead of floating to whatever's latest on crates.io at
+    /// container-build time. The generated Dockerfile installs `cargo-binstall`
+    /// in the builder stage, `cargo binstall`s these crates (pinned entries as
+    /// `crate@version`), and copies their binaries into the runtime stage. Use
+    /// for orbs whose executor orchestrates other cargo tools (e.g. a security
+    /// gate needs `cargo-audit` and `cargo-deny` on PATH).
     pub cargo_tools: Option<Vec<String>>,
     pub home_url: Option<String>,
     pub source_url: Option<String>,

@@ -31,9 +31,12 @@ pub struct GenerateOpts {
     pub apt_packages: Vec<String>,
     /// Extra cargo tools to install into the executor image via cargo-binstall
     /// in the builder stage, with their binaries copied into the runtime.
-    /// Binstall install method only. Each pair is `(crate_name, binary_name)`,
-    /// pre-validated by `commands::generate::validate_cargo_tool_entries`.
-    pub cargo_tools: Vec<(String, String)>,
+    /// Binstall install method only. Each triple is
+    /// `(crate_name, binary_name, version)` — `version` is `None` for the
+    /// default floating install, or `Some(v)` to pin `crate@v` on the
+    /// `cargo binstall` command line. Pre-validated by
+    /// `commands::generate::validate_cargo_tool_entries`.
+    pub cargo_tools: Vec<(String, String, Option<String>)>,
     /// How long the generated Dockerfile waits for crates.io to serve the
     /// version being released.
     pub crate_wait: CrateWait,
@@ -632,7 +635,7 @@ fn render_binstall_dockerfile(binary: &str, opts: &GenerateOpts) -> String {
     let mut copies = vec![format!(
         "COPY --from=builder /usr/local/cargo/bin/{binary} /usr/local/bin/{binary}\n"
     )];
-    copies.extend(tools.iter().map(|(_, tool_binary)| {
+    copies.extend(tools.iter().map(|(_, tool_binary, _)| {
         format!(
             "COPY --from=builder /usr/local/cargo/bin/{tool_binary} /usr/local/bin/{tool_binary}\n"
         )
@@ -693,14 +696,24 @@ fn render_propagation_gate(binary: &str, crate_wait: &CrateWait) -> String {
     out
 }
 
-/// Splits a `cargo_tools` entry into `(crate_name, binary_name)`.
+/// Splits a `cargo_tools` entry into `(crate_name, binary_name, version)`.
 ///
 /// A bare entry (`"cargo-audit"`) uses itself for both; `"crate:binary"`
 /// (e.g. `"rsign2:rsign"`) opts in when the binary name differs. Each half
 /// must follow Cargo's package name rules, since the crate half is passed
 /// unquoted to `cargo binstall` and the binary half becomes a Dockerfile
 /// `COPY` path.
-pub(crate) fn split_cargo_tool_entry(entry: &str) -> anyhow::Result<(&str, &str)> {
+///
+/// An optional `@version` suffix (e.g. `"rsign2:rsign@2.1.0"`) pins the crate
+/// to an exact version: `cargo binstall` accepts `crate@version` inline as a
+/// single argument, so the version rides along with the crate half rather
+/// than needing its own `--version` flag per tool. Bare entries keep floating
+/// to whatever's latest on crates.io at container-build time — pinning is
+/// opt-in per entry. The version is deliberately restricted to an exact pin
+/// (leading digit, then alphanumeric/`.`/`-`/`+`) rather than the full range
+/// of comparators `cargo binstall` itself accepts (e.g. `<=1.3.3`) — a range
+/// doesn't pin anything, which defeats the point of this syntax.
+pub(crate) fn split_cargo_tool_entry(entry: &str) -> anyhow::Result<(&str, &str, Option<&str>)> {
     // Cargo package name rules: leading letter or `_`, then alphanumeric/-/_.
     fn is_valid_segment(s: &str) -> bool {
         let mut chars = s.chars();
@@ -708,16 +721,43 @@ pub(crate) fn split_cargo_tool_entry(entry: &str) -> anyhow::Result<(&str, &str)
             && chars.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
     }
 
-    match entry.split_once(':') {
-        None if is_valid_segment(entry) => Ok((entry, entry)),
-        Some((krate, binary)) if is_valid_segment(krate) && is_valid_segment(binary) => {
-            Ok((krate, binary))
+    // Leading digit, then alphanumeric/./-/+ — a SemVer-shaped exact version,
+    // never a comparator (`<=`, `^`, `*`, ...) and never shell metacharacters.
+    fn is_valid_version(s: &str) -> bool {
+        let mut chars = s.chars();
+        matches!(chars.next(), Some(c) if c.is_ascii_digit())
+            && chars.all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '+')
+    }
+
+    let invalid = || {
+        anyhow::anyhow!(
+            "invalid cargo_tools entry {entry:?}: expected \"crate\", \"crate:binary\", \
+             \"crate@version\", or \"crate:binary@version\" — crate/binary use Cargo package \
+             name characters (leading letter or '_', then alphanumeric, '-', or '_'), version \
+             starts with a digit (then alphanumeric, '.', '-', or '+')"
+        )
+    };
+
+    // The crate/binary halves never contain '@' (is_valid_segment forbids it),
+    // so a single '@' unambiguously starts the version suffix.
+    let (spec, version) = match entry.matches('@').count() {
+        0 => (entry, None),
+        1 => {
+            let (spec, version) = entry.split_once('@').expect("counted exactly one '@'");
+            if !is_valid_version(version) {
+                return Err(invalid());
+            }
+            (spec, Some(version))
         }
-        _ => Err(anyhow::anyhow!(
-            "invalid cargo_tools entry {entry:?}: expected \"crate\" or \"crate:binary\" using \
-             Cargo package name characters (leading letter or '_', then alphanumeric, '-', or \
-             '_')"
-        )),
+        _ => return Err(invalid()),
+    };
+
+    match spec.split_once(':') {
+        None if is_valid_segment(spec) => Ok((spec, spec, version)),
+        Some((krate, binary)) if is_valid_segment(krate) && is_valid_segment(binary) => {
+            Ok((krate, binary, version))
+        }
+        _ => Err(invalid()),
     }
 }
 
@@ -729,19 +769,22 @@ pub(crate) fn split_cargo_tool_entry(entry: &str) -> anyhow::Result<(&str, &str)
 /// per line, because the list grows with `[orb] cargo_tools` and would run past
 /// the line limit.
 ///
-/// `cargo binstall` takes crate names — only the crate half of each pair is
-/// used here, the binary half only matters to the COPY that follows, in
-/// `render_binstall_dockerfile`.
-fn render_cargo_tools_install(tools: &[(String, String)]) -> String {
+/// `cargo binstall` takes crate specs — only the crate and version halves of
+/// each triple are used here (as `crate` or `crate@version`), the binary half
+/// only matters to the COPY that follows, in `render_binstall_dockerfile`.
+fn render_cargo_tools_install(tools: &[(String, String, Option<String>)]) -> String {
     if tools.is_empty() {
         return String::new();
     }
     let mut out = String::from("RUN cargo install cargo-binstall --locked \\\n");
     out.push_str("    && cargo binstall --no-confirm \\\n");
     let last = tools.len() - 1;
-    for (i, (krate, _)) in tools.iter().enumerate() {
+    for (i, (krate, _, version)) in tools.iter().enumerate() {
         let cont = if i == last { "" } else { " \\" };
-        out.push_str(&format!("    {krate}{cont}\n"));
+        match version {
+            Some(v) => out.push_str(&format!("    {krate}@{v}{cont}\n")),
+            None => out.push_str(&format!("    {krate}{cont}\n")),
+        }
     }
     out
 }
@@ -1685,15 +1728,20 @@ mod tests {
         }
     }
 
-    /// Test-only convenience: parse raw `"crate"` / `"crate:binary"` entries
-    /// into the `(crate, binary)` pairs `GenerateOpts.cargo_tools` now holds,
-    /// so tests can still write the familiar string form.
-    fn parsed_cargo_tools(entries: &[&str]) -> Vec<(String, String)> {
+    /// Test-only convenience: parse raw `"crate"` / `"crate:binary"` /
+    /// `"crate@version"` entries into the `(crate, binary, version)` triples
+    /// `GenerateOpts.cargo_tools` now holds, so tests can still write the
+    /// familiar string form.
+    fn parsed_cargo_tools(entries: &[&str]) -> Vec<(String, String, Option<String>)> {
         entries
             .iter()
             .map(|e| {
-                let (krate, binary) = split_cargo_tool_entry(e).unwrap();
-                (krate.to_string(), binary.to_string())
+                let (krate, binary, version) = split_cargo_tool_entry(e).unwrap();
+                (
+                    krate.to_string(),
+                    binary.to_string(),
+                    version.map(str::to_string),
+                )
             })
             .collect()
     }
@@ -1877,10 +1925,42 @@ mod tests {
     }
 
     #[test]
+    fn dockerfile_cargo_tools_pins_version_on_binstall_line() {
+        let cli = make_cli("mytool", vec![]);
+        let opts = GenerateOpts {
+            cargo_tools: parsed_cargo_tools(&["cargo-audit@0.21.0", "rsign2:rsign@2.1.0"]),
+            ..default_opts()
+        };
+        let content = &generate(&cli, &opts, None)[&PathBuf::from("Dockerfile")];
+        assert!(
+            binstall_tools(content) == ["cargo-audit@0.21.0", "rsign2@2.1.0"],
+            "binstall should pin crate@version on the command line:\n{content}"
+        );
+        assert!(
+            content.contains("COPY --from=builder /usr/local/cargo/bin/rsign /usr/local/bin/rsign"),
+            "runtime should still copy the plain binary name, not a version-qualified path:\n{content}"
+        );
+    }
+
+    #[test]
+    fn dockerfile_cargo_tools_mixes_pinned_and_unpinned_entries() {
+        let cli = make_cli("mytool", vec![]);
+        let opts = GenerateOpts {
+            cargo_tools: parsed_cargo_tools(&["cargo-audit", "cargo-deny@0.14.0"]),
+            ..default_opts()
+        };
+        let content = &generate(&cli, &opts, None)[&PathBuf::from("Dockerfile")];
+        assert!(
+            binstall_tools(content) == ["cargo-audit", "cargo-deny@0.14.0"],
+            "a bare entry should keep floating to latest alongside a pinned one:\n{content}"
+        );
+    }
+
+    #[test]
     fn split_cargo_tool_entry_plain_name_uses_it_for_both() {
         assert_eq!(
             split_cargo_tool_entry("cargo-audit").unwrap(),
-            ("cargo-audit", "cargo-audit")
+            ("cargo-audit", "cargo-audit", None)
         );
     }
 
@@ -1888,8 +1968,67 @@ mod tests {
     fn split_cargo_tool_entry_crate_colon_binary_splits() {
         assert_eq!(
             split_cargo_tool_entry("rsign2:rsign").unwrap(),
-            ("rsign2", "rsign")
+            ("rsign2", "rsign", None)
         );
+    }
+
+    #[test]
+    fn split_cargo_tool_entry_crate_at_version_pins_without_alias() {
+        assert_eq!(
+            split_cargo_tool_entry("cargo-audit@0.21.0").unwrap(),
+            ("cargo-audit", "cargo-audit", Some("0.21.0"))
+        );
+    }
+
+    #[test]
+    fn split_cargo_tool_entry_crate_colon_binary_at_version_pins_with_alias() {
+        assert_eq!(
+            split_cargo_tool_entry("rsign2:rsign@2.1.0").unwrap(),
+            ("rsign2", "rsign", Some("2.1.0"))
+        );
+    }
+
+    #[test]
+    fn split_cargo_tool_entry_version_accepts_prerelease_and_build_metadata() {
+        assert_eq!(
+            split_cargo_tool_entry("cargo-audit@1.0.0-beta.1+abc123").unwrap(),
+            ("cargo-audit", "cargo-audit", Some("1.0.0-beta.1+abc123"))
+        );
+    }
+
+    #[test]
+    fn split_cargo_tool_entry_rejects_empty_version() {
+        assert!(split_cargo_tool_entry("cargo-audit@").is_err());
+    }
+
+    #[test]
+    fn split_cargo_tool_entry_rejects_multiple_at_signs() {
+        assert!(split_cargo_tool_entry("cargo-audit@1.0.0@2.0.0").is_err());
+    }
+
+    #[test]
+    fn split_cargo_tool_entry_rejects_version_not_starting_with_digit() {
+        // Real crates.io versions never carry a "v" prefix or a comparator —
+        // this is an exact pin, not a range query.
+        assert!(split_cargo_tool_entry("cargo-audit@v1.0.0").is_err());
+        assert!(split_cargo_tool_entry("cargo-audit@<=1.3.3").is_err());
+        assert!(split_cargo_tool_entry("cargo-audit@^1.0.0").is_err());
+        assert!(split_cargo_tool_entry("cargo-audit@*").is_err());
+    }
+
+    #[test]
+    fn split_cargo_tool_entry_rejects_shell_metacharacters_in_version() {
+        for bad in [
+            "crate@1.0$(id)",
+            "crate@1.0`id`",
+            "crate@1.0;rm -rf /",
+            "crate@1.0 2.0",
+        ] {
+            assert!(
+                split_cargo_tool_entry(bad).is_err(),
+                "expected error for {bad:?}"
+            );
+        }
     }
 
     #[test]
