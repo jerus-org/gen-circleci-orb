@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - deps: lock file maintenance(pr [#351])
+- run idiomatic_rust on main for sonarcloud(pr [#353])
 
 ## [0.1.10] - 2026-09-02
 
@@ -987,6 +988,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#345]: https://github.com/jerus-org/gen-circleci-orb/pull/345
 [#351]: https://github.com/jerus-org/gen-circleci-orb/pull/351
 [#352]: https://github.com/jerus-org/gen-circleci-orb/pull/352
+[#353]: https://github.com/jerus-org/gen-circleci-orb/pull/353
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.10...HEAD
 [0.1.10]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.9...v0.1.10
 [0.1.9]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.8...v0.1.9
