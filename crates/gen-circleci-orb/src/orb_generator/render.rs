@@ -368,6 +368,10 @@ fn orb_param_default(p: &crate::help_parser::types::Parameter) -> Option<serde_y
                 || vals.first().cloned().unwrap_or_default(),
             )))
         }
+        ParamType::Integer if p.default.is_some() => Some(coerce_override_default(
+            p.default.as_deref().expect("checked by guard"),
+            "integer",
+        )),
         _ if !p.required && p.default.is_none() => Some(serde_yaml::Value::String(String::new())),
         _ => p
             .default
@@ -376,13 +380,17 @@ fn orb_param_default(p: &crate::help_parser::types::Parameter) -> Option<serde_y
     }
 }
 
-/// Coerce a `[subcommand.<name>.param.<param>] default = "..."` override
-/// string into the YAML value shape the parameter's own type requires —
-/// mirrors `orb_param_default`'s type-aware coercion, which only runs on the
-/// non-overridden path. Without this, a boolean/integer param's override
-/// renders as a quoted YAML string (`default: "true"`), which CircleCI's orb
-/// schema rejects as a type mismatch against `type: boolean`/`type: integer`
-/// (#347).
+/// Coerce a raw default string into the YAML value shape its declared
+/// `param_type` (`"boolean"`/`"integer"`/…) requires. Shared by every site
+/// that builds an `OrbParameter` from a string-typed source — a
+/// `[subcommand.<name>.param.<param>] default = "..."` override
+/// (`render_job`) and a declared rich `job_group` parameter
+/// (`render_rich_job_group`) — plus `orb_param_default`'s own
+/// `ParamType::Integer` arm, for the one caller that already has a typed
+/// `ParamType` instead of a bare string. Without this, a boolean/integer
+/// param renders as a quoted YAML string (`default: "true"`), which
+/// CircleCI's orb schema rejects as a type mismatch against `type:
+/// boolean`/`type: integer` (#347).
 fn coerce_override_default(raw: &str, param_type: &str) -> serde_yaml::Value {
     match param_type {
         "boolean" => serde_yaml::Value::Bool(raw == "true"),
@@ -1519,12 +1527,16 @@ fn render_rich_job_group(
     let mut parameters: IndexMap<String, OrbParameter> = IndexMap::new();
     if let Some(declared) = &group.parameter {
         for p in declared {
+            let param_type = p.param_type.clone().unwrap_or_else(|| "string".to_string());
             parameters.insert(
                 p.name.clone(),
                 OrbParameter {
-                    param_type: p.param_type.clone().unwrap_or_else(|| "string".to_string()),
+                    default: p
+                        .default
+                        .as_deref()
+                        .map(|d| coerce_override_default(d, &param_type)),
+                    param_type,
                     description: p.description.clone().unwrap_or_default(),
-                    default: p.default.clone().map(serde_yaml::Value::String),
                     enum_values: None,
                 },
             );
@@ -4625,6 +4637,36 @@ mod tests {
     }
 
     #[test]
+    fn integer_param_default_not_a_quoted_string_without_any_override() {
+        // Same #347 defect class, but on the plain (non-override) default
+        // path: orb_param_default has no ParamType::Integer arm, so it falls
+        // through to the generic string-wrapping catch-all.
+        use crate::help_parser::types::Parameter;
+
+        let retries_param = Parameter {
+            long_name: "retries".to_string(),
+            short: None,
+            param_type: ParamType::Integer,
+            default: Some("2".to_string()),
+            required: false,
+            description: "Retry count.".to_string(),
+            ..Default::default()
+        };
+        let sub = make_leaf("publish", vec![retries_param]);
+        let cli = make_cli("mytool", vec![sub]);
+        let files = generate(&cli, &default_opts(), None);
+        let job = &files[&PathBuf::from("src/jobs/publish.yml")];
+        assert!(
+            job.contains("default: 2"),
+            "integer param's plain CLI default must render as an unquoted YAML number:\n{job}"
+        );
+        assert!(
+            !job.contains("default: \"2\""),
+            "integer param's plain CLI default must not render as a quoted string:\n{job}"
+        );
+    }
+
+    #[test]
     fn orb_yml_has_orbs_section_when_config_provides_orbs() {
         use crate::orb_config::OrbConfig;
         use indexmap::IndexMap;
@@ -4904,6 +4946,41 @@ mod tests {
         assert!(
             job.contains("tag_prefix:") && job.contains("default: v"),
             "tag_prefix with default must appear:\n{job}"
+        );
+    }
+
+    #[test]
+    fn rich_job_group_boolean_and_integer_param_defaults_not_quoted_strings() {
+        // Same #347 defect class as the subcommand param-override path:
+        // render_rich_job_group unconditionally wrapped a declared param's
+        // default in Value::String regardless of its declared type.
+        use crate::orb_config::JobGroupParam;
+
+        let mut group = rich_build_group();
+        group.parameter.as_mut().unwrap().push(JobGroupParam {
+            name: "force".to_string(),
+            param_type: Some("boolean".to_string()),
+            default: Some("true".to_string()),
+            ..Default::default()
+        });
+        group.parameter.as_mut().unwrap().push(JobGroupParam {
+            name: "attempts".to_string(),
+            param_type: Some("integer".to_string()),
+            default: Some("3".to_string()),
+            ..Default::default()
+        });
+        let job = render_rich(group);
+        assert!(
+            job.contains("default: true"),
+            "boolean job_group param default must be unquoted:\n{job}"
+        );
+        assert!(
+            job.contains("default: 3"),
+            "integer job_group param default must be unquoted:\n{job}"
+        );
+        assert!(
+            !job.contains("default: \"true\"") && !job.contains("default: \"3\""),
+            "job_group param defaults must not render as quoted strings:\n{job}"
         );
     }
 
