@@ -289,11 +289,11 @@ fn is_option_decl(trimmed: &str) -> bool {
 }
 
 /// True for the clap built-ins `-h/--help` and `-V/--version`, which are
-/// deliberately excluded from the generated orb.
-///
-/// The built-in `--version` has no `<VALUE>` metavar; an application flag also
-/// named `--version` that accepts a value must NOT be excluded — the metavar
-/// tells them apart.
+/// deliberately excluded from the generated orb — both names are reserved
+/// for their customary meaning; a consumer CLI that wants e.g. a "version
+/// string to embed in output" flag names it something else instead (as
+/// gen-orb-mcp does with `--crate-version`), rather than clashing with what
+/// users expect `--version` to mean.
 ///
 /// Keyed off `extract_long_flag`'s declaration extraction rather than a raw
 /// substring search over the whole line: the line can carry both a
@@ -305,11 +305,10 @@ fn is_option_decl(trimmed: &str) -> bool {
 /// `--word` occurrence in the string — but that's equivalent to anchoring
 /// here, since a declaration line's own flag always precedes its description.
 fn is_builtin_decl(trimmed: &str) -> bool {
-    match extract_long_flag(trimmed).as_deref() {
-        Some("help") => true,
-        Some("version") => !has_value_metavar(trimmed, "version"),
-        _ => false,
-    }
+    matches!(
+        extract_long_flag(trimmed).as_deref(),
+        Some("help" | "version")
+    )
 }
 
 /// True for a line that declares a positional argument: `<VERSION>` (required)
@@ -1455,10 +1454,12 @@ Options:
     }
 
     #[test]
-    fn app_version_flag_with_metavar_is_included() {
-        // Some tools use --version as an application-level flag (e.g. "version string
-        // to embed in output"). This has a <VALUE> metavar and must NOT be excluded —
-        // only the clap built-in (no metavar, "Print version") should be skipped.
+    fn version_flag_is_always_excluded_even_with_a_metavar() {
+        // -V/--version is reserved for clap's own builtin, full stop — a
+        // consumer CLI that wants a "version string to embed in output"
+        // flag names it something else (e.g. --crate-version, the fix
+        // gen-orb-mcp itself adopted) rather than clashing with the
+        // customary meaning users expect from --version.
         let help = r#"Generate something
 
 Usage: tool generate [OPTIONS]
@@ -1475,8 +1476,8 @@ Options:
 "#;
         let params = parse_parameters(help);
         assert!(
-            params.iter().any(|p| p.long_name == "version"),
-            "app --version <VALUE> flag must be included, got: {:?}",
+            !params.iter().any(|p| p.long_name == "version"),
+            "--version <VALUE> must still be excluded as the reserved builtin, got: {:?}",
             params.iter().map(|p| &p.long_name).collect::<Vec<_>>()
         );
     }
