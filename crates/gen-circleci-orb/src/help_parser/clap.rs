@@ -294,15 +294,20 @@ fn is_option_decl(trimmed: &str) -> bool {
 /// The built-in `--version` has no `<VALUE>` metavar; an application flag also
 /// named `--version` that accepts a value must NOT be excluded — the metavar
 /// tells them apart.
+/// True for clap's own builtin `-h, --help` / `-V, --version` declarations.
+///
+/// Keyed off `extract_long_flag`'s anchored declaration match rather than a
+/// raw substring search over the whole line: the line can carry both a
+/// declaration and (once clap renders inline) its description on the same
+/// text, and a raw `contains`/`find` for "--help"/"--version" matches inside
+/// an unrelated longer flag name (`--version-env`) or inside another flag's
+/// description that merely mentions one (#311).
 fn is_builtin_decl(trimmed: &str) -> bool {
-    if trimmed.contains("--help") {
-        return true;
+    match extract_long_flag(trimmed).as_deref() {
+        Some("help") => true,
+        Some("version") => !has_value_metavar(trimmed, "version"),
+        _ => false,
     }
-    if let Some(pos) = trimmed.find("--version") {
-        let after = trimmed[pos + "--version".len()..].trim_start();
-        return !after.starts_with('<') && !after.starts_with('[');
-    }
-    false
 }
 
 /// True for a line that declares a positional argument: `<VERSION>` (required)
@@ -1467,6 +1472,65 @@ Options:
         assert!(
             params.iter().any(|p| p.long_name == "version"),
             "app --version <VALUE> flag must be included, got: {:?}",
+            params.iter().map(|p| &p.long_name).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn flag_prefixed_with_version_is_not_treated_as_builtin() {
+        // #311 Case 1: a real flag whose name merely starts with "--version"
+        // (inline-rendered, as clap does once the name column is short
+        // enough) must not be dropped as the clap builtin --version.
+        let help = r#"Usage: tool release [OPTIONS]
+
+Options:
+      --version-env <VERSION_ENV>  Env var holding the release version
+  -h, --help                       Print help
+"#;
+        let params = parse_parameters(help);
+        assert!(
+            params.iter().any(|p| p.long_name == "version_env"),
+            "--version-env must not be dropped as the clap builtin, got: {:?}",
+            params.iter().map(|p| &p.long_name).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn flag_whose_description_mentions_a_version_prefixed_flag_is_not_dropped() {
+        // #311 Case 2: inline rendering puts a flag's declaration and
+        // description on the same line. A description that happens to
+        // mention a different --version*-prefixed flag must not cause the
+        // *declaring* flag itself to be misclassified as the clap builtin.
+        let help = r#"Usage: tool release [OPTIONS]
+
+Options:
+      --release-version <VERSION>  The release version being validated (e.g. "1.2.0"). When omitted it is read from the environment variable named by --version-env, since release pipelines compute the version at runtime
+  -h, --help                       Print help
+"#;
+        let params = parse_parameters(help);
+        assert!(
+            params.iter().any(|p| p.long_name == "release_version"),
+            "--release-version must not be dropped just because its own \
+             description mentions --version-env, got: {:?}",
+            params.iter().map(|p| &p.long_name).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn flag_prefixed_with_help_is_not_treated_as_builtin() {
+        // Same substring-search defect as Case 1, for --help instead of
+        // --version — is_builtin_decl's `trimmed.contains("--help")` check
+        // has the identical unanchored-match problem.
+        let help = r#"Usage: tool cmd [OPTIONS]
+
+Options:
+      --help-format <FORMAT>  Output format for help text
+  -h, --help                  Print help
+"#;
+        let params = parse_parameters(help);
+        assert!(
+            params.iter().any(|p| p.long_name == "help_format"),
+            "--help-format must not be dropped as the clap builtin, got: {:?}",
             params.iter().map(|p| &p.long_name).collect::<Vec<_>>()
         );
     }
