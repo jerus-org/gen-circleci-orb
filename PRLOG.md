@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - add version pin syntax to cargo_tools(pr [#352])
+- merge -v/-q into one log_level enum param(pr [#357])
 
 ### Fixed
 
@@ -993,6 +994,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#353]: https://github.com/jerus-org/gen-circleci-orb/pull/353
 [#354]: https://github.com/jerus-org/gen-circleci-orb/pull/354
 [#356]: https://github.com/jerus-org/gen-circleci-orb/pull/356
+[#357]: https://github.com/jerus-org/gen-circleci-orb/pull/357
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.10...HEAD
 [0.1.10]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.9...v0.1.10
 [0.1.9]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.8...v0.1.9
