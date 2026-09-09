@@ -376,6 +376,24 @@ fn orb_param_default(p: &crate::help_parser::types::Parameter) -> Option<serde_y
     }
 }
 
+/// Coerce a `[subcommand.<name>.param.<param>] default = "..."` override
+/// string into the YAML value shape the parameter's own type requires —
+/// mirrors `orb_param_default`'s type-aware coercion, which only runs on the
+/// non-overridden path. Without this, a boolean/integer param's override
+/// renders as a quoted YAML string (`default: "true"`), which CircleCI's orb
+/// schema rejects as a type mismatch against `type: boolean`/`type: integer`
+/// (#347).
+fn coerce_override_default(raw: &str, param_type: &str) -> serde_yaml::Value {
+    match param_type {
+        "boolean" => serde_yaml::Value::Bool(raw == "true"),
+        "integer" => raw
+            .parse::<i64>()
+            .map(|n| serde_yaml::Value::Number(n.into()))
+            .unwrap_or_else(|_| serde_yaml::Value::String(raw.to_string())),
+        _ => serde_yaml::Value::String(raw.to_string()),
+    }
+}
+
 fn build_command_orb_parameters(sub: &SubCommand) -> IndexMap<String, OrbParameter> {
     let mut params = IndexMap::new();
     for p in &sub.parameters {
@@ -456,7 +474,7 @@ fn render_job(sub: &SubCommand, opts: &GenerateOpts, config: Option<&OrbConfig>)
         for (param_name, override_) in param_overrides {
             if let Some(param) = parameters.get_mut(param_name) {
                 if let Some(new_default) = &override_.default {
-                    param.default = Some(serde_yaml::Value::String(new_default.clone()));
+                    param.default = Some(coerce_override_default(new_default, &param.param_type));
                 }
             }
         }
@@ -4499,6 +4517,110 @@ mod tests {
         assert!(
             !job.contains("src/@orb.yml"),
             "original default must be replaced by param override:\n{job}"
+        );
+    }
+
+    #[test]
+    fn param_override_coerces_boolean_default_not_a_quoted_string() {
+        use crate::help_parser::types::Parameter;
+        use crate::orb_config::{OrbConfig, ParamOverride, SubcommandConfig};
+        use indexmap::IndexMap;
+
+        let check_param = Parameter {
+            long_name: "check".to_string(),
+            short: None,
+            param_type: ParamType::Boolean,
+            default: Some("false".to_string()),
+            required: false,
+            description: "Check only.".to_string(),
+            ..Default::default()
+        };
+        let sub = make_leaf("wire_ci", vec![check_param]);
+        let cli = make_cli("mytool", vec![sub]);
+
+        let mut param_overrides = IndexMap::new();
+        param_overrides.insert(
+            "check".to_string(),
+            ParamOverride {
+                default: Some("true".to_string()),
+            },
+        );
+        let mut subcommands = IndexMap::new();
+        subcommands.insert(
+            "wire_ci".to_string(),
+            SubcommandConfig {
+                generate_job: None,
+                interactive: None,
+                param: Some(param_overrides),
+                label: None,
+                short_param: None,
+            },
+        );
+        let config = OrbConfig {
+            subcommand: Some(subcommands),
+            ..OrbConfig::default()
+        };
+        let files = generate(&cli, &default_opts(), Some(&config));
+        let job = &files[&PathBuf::from("src/jobs/wire_ci.yml")];
+        assert!(
+            job.contains("default: true"),
+            "boolean override must render as an unquoted YAML boolean:\n{job}"
+        );
+        assert!(
+            !job.contains("default: \"true\""),
+            "boolean override must not render as a quoted string:\n{job}"
+        );
+    }
+
+    #[test]
+    fn param_override_coerces_integer_default_not_a_quoted_string() {
+        use crate::help_parser::types::Parameter;
+        use crate::orb_config::{OrbConfig, ParamOverride, SubcommandConfig};
+        use indexmap::IndexMap;
+
+        let retries_param = Parameter {
+            long_name: "retries".to_string(),
+            short: None,
+            param_type: ParamType::Integer,
+            default: Some("1".to_string()),
+            required: false,
+            description: "Retry count.".to_string(),
+            ..Default::default()
+        };
+        let sub = make_leaf("publish", vec![retries_param]);
+        let cli = make_cli("mytool", vec![sub]);
+
+        let mut param_overrides = IndexMap::new();
+        param_overrides.insert(
+            "retries".to_string(),
+            ParamOverride {
+                default: Some("3".to_string()),
+            },
+        );
+        let mut subcommands = IndexMap::new();
+        subcommands.insert(
+            "publish".to_string(),
+            SubcommandConfig {
+                generate_job: None,
+                interactive: None,
+                param: Some(param_overrides),
+                label: None,
+                short_param: None,
+            },
+        );
+        let config = OrbConfig {
+            subcommand: Some(subcommands),
+            ..OrbConfig::default()
+        };
+        let files = generate(&cli, &default_opts(), Some(&config));
+        let job = &files[&PathBuf::from("src/jobs/publish.yml")];
+        assert!(
+            job.contains("default: 3"),
+            "integer override must render as an unquoted YAML number:\n{job}"
+        );
+        assert!(
+            !job.contains("default: \"3\""),
+            "integer override must not render as a quoted string:\n{job}"
         );
     }
 
