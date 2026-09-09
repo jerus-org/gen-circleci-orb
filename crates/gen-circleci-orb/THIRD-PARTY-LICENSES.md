@@ -13,7 +13,7 @@ from the dependency graph with [`cargo-about`](https://github.com/EmbarkStudios/
 
 ## Overview
 
-- **MIT License** — 328 crate(s)
+- **MIT License** — 332 crate(s)
 - **ISC License** — 21 crate(s)
 - **Unicode License v3** — 19 crate(s)
 - **Apache License 2.0** — 8 crate(s)
@@ -731,7 +731,7 @@ limitations under the License.
 
 Used by:
 
-- aws-lc-sys 0.44.0
+- aws-lc-sys 0.45.0
 - dunce 1.0.5
 - ryu 1.0.23
 - sync_wrapper 1.0.2
@@ -817,7 +817,7 @@ limitations under the License.
 
 Used by:
 
-- encoding_rs 0.8.35
+- encoding_rs 0.8.41
 
 ```text
 // Copyright © WHATWG (Apple, Google, Mozilla, Microsoft).
@@ -920,7 +920,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 Used by:
 
-- aws-lc-sys 0.44.0
+- aws-lc-sys 0.45.0
 
 ```text
 Copyright (c) <year> <owner>. 
@@ -941,7 +941,7 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
 
 Used by:
 
-- encoding_rs 0.8.35
+- encoding_rs 0.8.41
 
 ```text
 Copyright © WHATWG (Apple, Google, Mozilla, Microsoft).
@@ -1676,8 +1676,8 @@ third-party/chromium/LICENSE.
 
 Used by:
 
-- aws-lc-rs 1.18.0
-- aws-lc-sys 0.44.0
+- aws-lc-rs 1.18.1
+- aws-lc-sys 0.45.0
 
 ```text
 ISC License:
@@ -1934,27 +1934,27 @@ DEALINGS IN THE SOFTWARE.
 Used by:
 
 - backtrace 0.3.76
-- cc 1.4.4
+- cc 1.4.5
 - cfg-if 1.0.4
 - cmake 0.1.58
-- find-msvc-tools 0.1.11
+- find-msvc-tools 0.1.12
 - git2 0.21.0
 - jobserver 0.1.35
-- js-sys 0.3.104
+- js-sys 0.3.105
 - libgit2-sys 0.18.8+1.9.7
-- libssh2-sys 0.3.2
+- libssh2-sys 0.3.3
 - openssl-probe 0.1.6
 - openssl-probe 0.2.1
 - openssl-sys 0.9.117
 - pkg-config 0.3.34
 - rustc-demangle 0.1.28
 - socket2 0.6.5
-- wasm-bindgen-futures 0.4.77
-- wasm-bindgen-macro-support 0.2.127
-- wasm-bindgen-macro 0.2.127
-- wasm-bindgen-shared 0.2.127
-- wasm-bindgen 0.2.127
-- web-sys 0.3.104
+- wasm-bindgen-futures 0.4.78
+- wasm-bindgen-macro-support 0.2.128
+- wasm-bindgen-macro 0.2.128
+- wasm-bindgen-shared 0.2.128
+- wasm-bindgen 0.2.128
+- web-sys 0.3.105
 
 ```text
 Copyright (c) 2014 Alex Crichton
@@ -2025,7 +2025,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- mio 1.2.2
+- mio 1.2.3
 
 ```text
 Copyright (c) 2014 Carl Lerche and other MIO contributors
@@ -2658,7 +2658,7 @@ Used by:
 
 - hyper-rustls 0.27.9
 - rustls-native-certs 0.8.4
-- rustls 0.23.43
+- rustls 0.23.44
 
 ```text
 Copyright (c) 2016 Joseph Birr-Pixton <jpixton@gmail.com>
@@ -2796,7 +2796,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- indexmap 2.14.1
+- indexmap 2.14.2
 
 ```text
 Copyright (c) 2016--2017
@@ -2966,7 +2966,7 @@ THE SOFTWARE.
 
 Used by:
 
-- reqwest 0.13.4
+- reqwest 0.13.5
 
 ```text
 Copyright (c) 2016-2026 Sean McArthur
@@ -3336,7 +3336,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- tokio-rustls 0.26.4
+- tokio-rustls 0.26.5
 
 ```text
 Copyright (c) 2017 quininer kel
@@ -3375,6 +3375,41 @@ Used by:
 
 ```text
 Copyright (c) 2017 tokio-jsonrpc developers
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+
+```
+
+## MIT License
+
+Used by:
+
+- core_detect 1.0.0
+
+```text
+Copyright (c) 2017-2020 The Rust Project Developers
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated
@@ -4370,7 +4405,7 @@ SOFTWARE.
 
 Used by:
 
-- hybrid-array 0.4.14
+- hybrid-array 0.4.15
 
 ```text
 Copyright (c) 2022-2026 The RustCrypto Project Developers
@@ -4581,7 +4616,7 @@ Used by:
 - is_terminal_polyfill 1.70.2
 - once_cell_polyfill 1.70.2
 - serde_spanned 1.1.1
-- toml 1.1.4+spec-1.1.0
+- toml 1.1.5+spec-1.1.0
 - toml_datetime 1.1.1+spec-1.1.0
 - toml_edit 0.25.13+spec-1.1.0
 - toml_parser 1.1.3+spec-1.1.0
@@ -4761,7 +4796,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 Used by:
 
-- ipnet 2.12.1
+- ipnet 2.12.2
 
 ```text
 Copyright 2017 Juniper Networks, Inc.
@@ -4778,7 +4813,26 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 Used by:
 
-- encoding_rs 0.8.35
+- multiversion-macros 0.9.0
+- multiversion 0.9.0
+
+```text
+Copyright 2019 Caleb Zulawski
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+```
+
+## MIT License
+
+Used by:
+
+- encoding_rs 0.8.41
+- multiversion_no_op 1.0.0
 - utf8_iter 1.0.4
 
 ```text
@@ -5250,7 +5304,7 @@ SOFTWARE.
 
 Used by:
 
-- gen-circleci-orb 0.1.10
+- gen-circleci-orb 0.1.11
 
 ```text
 MIT License
@@ -5281,7 +5335,7 @@ SOFTWARE.
 
 Used by:
 
-- cargo_toml 1.0.0
+- cargo_toml 1.0.1
 - chrono 0.4.45
 - jni-macros 0.22.4
 - jni-sys-macros 0.4.1
@@ -5399,7 +5453,7 @@ SOFTWARE.
 
 Used by:
 
-- libssh2-sys 0.3.2
+- libssh2-sys 0.3.3
 
 ```text
 MIT License
@@ -5591,12 +5645,12 @@ Used by:
 - linux-raw-sys 0.12.1
 - once_cell 1.21.4
 - pathdiff 0.2.3
-- pest 2.9.0
-- pest_derive 2.9.0
-- pest_generator 2.9.0
-- pest_meta 2.9.0
+- pest 2.9.1
+- pest_derive 2.9.1
+- pest_generator 2.9.1
+- pest_meta 2.9.1
 - pin-project-lite 0.2.17
-- portable-atomic-util 0.2.7
+- portable-atomic-util 0.2.8
 - portable-atomic 1.15.0
 - proc-macro2 1.0.107
 - quote 1.0.47
@@ -5613,7 +5667,7 @@ Used by:
 - smol_str 0.3.6
 - syn 1.0.109
 - syn 2.0.119
-- syn 3.0.4
+- syn 3.0.5
 - thiserror-impl 1.0.69
 - thiserror-impl 2.0.20
 - thiserror 1.0.69
@@ -6060,7 +6114,7 @@ SOFTWARE.
 
 Used by:
 
-- aws-lc-sys 0.44.0
+- aws-lc-sys 0.45.0
 
 ```text
 The MIT License (MIT)
@@ -6253,9 +6307,9 @@ SOFTWARE.
 
 Used by:
 
-- async-compression 0.4.43
-- compression-codecs 0.4.38
-- compression-core 0.4.32
+- async-compression 0.4.46
+- compression-codecs 0.4.41
+- compression-core 0.4.33
 
 ```text
 The MIT License (MIT)
@@ -6286,10 +6340,10 @@ SOFTWARE.
 
 Used by:
 
-- crossbeam-channel 0.5.16
-- crossbeam-deque 0.8.7
-- crossbeam-epoch 0.9.20
-- crossbeam-utils 0.8.22
+- crossbeam-channel 0.5.17
+- crossbeam-deque 0.8.8
+- crossbeam-epoch 0.9.21
+- crossbeam-utils 0.8.23
 
 ```text
 The MIT License (MIT)
