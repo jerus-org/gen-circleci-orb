@@ -793,6 +793,16 @@ fn check_override_value(
                 Err("must be exactly \"true\" or \"false\" for a boolean parameter".to_string())
             }
         }
+        ParamType::Enum(values) => {
+            if values.iter().any(|v| v == raw) {
+                Ok(())
+            } else {
+                Err(format!(
+                    "not one of this parameter's declared enum values: {}",
+                    values.join(", ")
+                ))
+            }
+        }
         _ => Ok(()),
     }
 }
@@ -2482,6 +2492,35 @@ mod tests {
         let cli = cli_with_params("generate", vec![param("orb_path", ParamType::String)]);
         let config = config_with_override("generate", "orb_path", "custom/@orb.yml");
         assert!(validate_param_overrides(&cli, &config).is_ok());
+    }
+
+    #[test]
+    fn validate_param_overrides_accepts_a_declared_enum_value() {
+        let cli = cli_with_params(
+            "release",
+            vec![param(
+                "log_level",
+                ParamType::Enum(vec!["default".to_string(), "verbose".to_string()]),
+            )],
+        );
+        let config = config_with_override("release", "log_level", "verbose");
+        assert!(validate_param_overrides(&cli, &config).is_ok());
+    }
+
+    #[test]
+    fn validate_param_overrides_rejects_a_value_outside_the_declared_enum() {
+        let cli = cli_with_params(
+            "release",
+            vec![param(
+                "log_level",
+                ParamType::Enum(vec!["default".to_string(), "verbose".to_string()]),
+            )],
+        );
+        let config = config_with_override("release", "log_level", "bogus");
+        let err = validate_param_overrides(&cli, &config).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("log_level"), "got: {msg}");
+        assert!(msg.contains("bogus"), "got: {msg}");
     }
 
     #[test]
