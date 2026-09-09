@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - anchor is_builtin_decl match(pr [#354])
 - coerce param override default by type(pr [#356])
 - reject unparseable param override values(pr [#359])
+- deps: update rust:1-slim-trixie docker digest to bce1476(pr [#361])
 
 ## [0.1.10] - 2026-09-02
 
@@ -1002,6 +1003,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#357]: https://github.com/jerus-org/gen-circleci-orb/pull/357
 [#359]: https://github.com/jerus-org/gen-circleci-orb/pull/359
 [#360]: https://github.com/jerus-org/gen-circleci-orb/pull/360
+[#361]: https://github.com/jerus-org/gen-circleci-orb/pull/361
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.10...HEAD
 [0.1.10]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.9...v0.1.10
 [0.1.9]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.8...v0.1.9
