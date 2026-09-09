@@ -240,7 +240,7 @@ fn merge_verbosity_pair(parameters: &[Parameter]) -> Vec<Parameter> {
         long_name: LOG_LEVEL_PARAM.to_string(),
         short: None,
         kind: ParamKind::Long,
-        param_type: ParamType::Enum(LOG_LEVEL_VALUES.iter().map(|s| s.to_string()).collect()),
+        param_type: ParamType::Enum(LOG_LEVEL_VALUES.iter().map(ToString::to_string).collect()),
         default: Some("default".to_string()),
         required: false,
         description: "Logging verbosity, relative to this tool's own default level \

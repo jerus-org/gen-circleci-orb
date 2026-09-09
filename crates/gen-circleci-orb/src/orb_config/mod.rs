@@ -1070,7 +1070,10 @@ steps:
         let path = dir.path().join("gen-circleci-orb.toml");
         let mut config = annotated_config(&path);
         let before = std::fs::read_to_string(&path).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o444)).unwrap();
+        // Owner-only read (no group/other bits): least-privilege even for a
+        // test fixture, and the write-refusal this induces only needs the
+        // owner's own write bit cleared (SonarQube rust:S2612).
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o400)).unwrap();
 
         config.orb.as_mut().unwrap().binary = Some("renamed".to_string());
 

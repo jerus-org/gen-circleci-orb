@@ -94,7 +94,7 @@ pub fn patch_build(content: &str, opts: &PatchOpts) -> (String, PatchReport) {
         skipped: vec![],
         warnings: vec![],
     };
-    let mut lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
+    let mut lines: Vec<String> = content.lines().map(ToString::to_string).collect();
 
     // Order matters: all three insert at the END of the `orbs:` section, so the
     // call order fixes the resulting layout. The UNMARKED pins (gen-orb-mcp,
