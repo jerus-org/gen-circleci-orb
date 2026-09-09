@@ -82,7 +82,7 @@ pub fn generate(
     // else reads `cli.subcommands` — every consumer below (job/command param
     // building, script codegen, examples) then sees the merged shape
     // automatically, with nothing else in this function aware of #348.
-    let cli = normalize_verbosity_flags(cli);
+    let cli = normalize_verbosity_flags(cli, config);
     let cli = &cli;
 
     let mut files = HashMap::new();
@@ -182,22 +182,40 @@ const LOG_LEVEL_PARAM: &str = "log_level";
 /// clap-verbosity-flag's own two Count args, used org-wide — into one
 /// `log_level` enum parameter, so the generated orb never lets a consumer
 /// set both independently and get a self-canceling combination (#348).
-fn normalize_verbosity_flags(cli: &CliDefinition) -> CliDefinition {
+fn normalize_verbosity_flags(cli: &CliDefinition, config: Option<&OrbConfig>) -> CliDefinition {
     CliDefinition {
-        binary_name: cli.binary_name.clone(),
-        description: cli.description.clone(),
-        subcommands: cli.subcommands.iter().map(normalize_subcommand).collect(),
+        subcommands: cli
+            .subcommands
+            .iter()
+            .map(|s| normalize_subcommand(s, config))
+            .collect(),
+        ..cli.clone()
     }
 }
 
-fn normalize_subcommand(sub: &SubCommand) -> SubCommand {
+/// `..sub.clone()` (rather than naming every field) so a future field added
+/// to `SubCommand` is carried through by default instead of silently
+/// dropping out of the normalized tree.
+fn normalize_subcommand(sub: &SubCommand, config: Option<&OrbConfig>) -> SubCommand {
+    // Merging is the default; a consumer whose verbose/quiet aren't
+    // clap-verbosity-flag's linked counter pair can opt out per subcommand.
+    let merge_enabled = config
+        .and_then(|c| c.subcommand.as_ref())
+        .and_then(|sc| sc.get(&sub.name))
+        .and_then(|sc_config| sc_config.merge_verbosity)
+        .unwrap_or(true);
     SubCommand {
-        name: sub.name.clone(),
-        description: sub.description.clone(),
-        short_about: sub.short_about.clone(),
-        is_leaf: sub.is_leaf,
-        parameters: merge_verbosity_pair(&sub.parameters),
-        subcommands: sub.subcommands.iter().map(normalize_subcommand).collect(),
+        parameters: if merge_enabled {
+            merge_verbosity_pair(&sub.parameters)
+        } else {
+            sub.parameters.clone()
+        },
+        subcommands: sub
+            .subcommands
+            .iter()
+            .map(|s| normalize_subcommand(s, config))
+            .collect(),
+        ..sub.clone()
     }
 }
 
@@ -2696,6 +2714,38 @@ mod tests {
     }
 
     #[test]
+    fn merge_verbosity_false_opts_a_subcommand_out_of_the_merge() {
+        // A CLI whose verbose/quiet aren't clap-verbosity-flag's linked
+        // counter pair can opt out of the name-based merge heuristic.
+        use crate::orb_config::{OrbConfig, SubcommandConfig};
+
+        let sub = make_leaf("release", vec![verbose_param(), quiet_param()]);
+        let cli = make_cli("mytool", vec![sub]);
+        let mut subcommands = IndexMap::new();
+        subcommands.insert(
+            "release".to_string(),
+            SubcommandConfig {
+                merge_verbosity: Some(false),
+                ..SubcommandConfig::default()
+            },
+        );
+        let config = OrbConfig {
+            subcommand: Some(subcommands),
+            ..OrbConfig::default()
+        };
+        let files = generate(&cli, &default_opts(), Some(&config));
+        let job = &files[&PathBuf::from("src/jobs/release.yml")];
+        assert!(
+            !job.contains("log_level"),
+            "merge_verbosity = false must prevent the merge:\n{job}"
+        );
+        assert!(
+            job.contains("verbose:") && job.contains("quiet:"),
+            "verbose and quiet must both still appear unmerged:\n{job}"
+        );
+    }
+
+    #[test]
     fn merged_log_level_translates_to_repeated_verbose_quiet_flags_in_script() {
         let sub = make_leaf("release", vec![verbose_param(), quiet_param()]);
         let cli = make_cli("mytool", vec![sub]);
@@ -4483,10 +4533,7 @@ mod tests {
             "help".to_string(),
             SubcommandConfig {
                 generate_job: Some(false),
-                interactive: None,
-                param: None,
-                label: None,
-                short_param: None,
+                ..SubcommandConfig::default()
             },
         );
         let config = OrbConfig {
@@ -4512,10 +4559,7 @@ mod tests {
             "help".to_string(),
             SubcommandConfig {
                 generate_job: Some(false),
-                interactive: None,
-                param: None,
-                label: None,
-                short_param: None,
+                ..SubcommandConfig::default()
             },
         );
         let config = OrbConfig {
@@ -4663,10 +4707,7 @@ mod tests {
             "help".to_string(),
             SubcommandConfig {
                 generate_job: Some(false),
-                interactive: None,
-                param: None,
-                label: None,
-                short_param: None,
+                ..SubcommandConfig::default()
             },
         );
         let config = OrbConfig {
@@ -4710,11 +4751,8 @@ mod tests {
         subcommands.insert(
             "generate".to_string(),
             SubcommandConfig {
-                generate_job: None,
-                interactive: None,
                 param: Some(param_overrides),
-                label: None,
-                short_param: None,
+                ..SubcommandConfig::default()
             },
         );
         let config = OrbConfig {
@@ -4762,11 +4800,8 @@ mod tests {
         subcommands.insert(
             "wire_ci".to_string(),
             SubcommandConfig {
-                generate_job: None,
-                interactive: None,
                 param: Some(param_overrides),
-                label: None,
-                short_param: None,
+                ..SubcommandConfig::default()
             },
         );
         let config = OrbConfig {
@@ -4814,11 +4849,8 @@ mod tests {
         subcommands.insert(
             "publish".to_string(),
             SubcommandConfig {
-                generate_job: None,
-                interactive: None,
                 param: Some(param_overrides),
-                label: None,
-                short_param: None,
+                ..SubcommandConfig::default()
             },
         );
         let config = OrbConfig {

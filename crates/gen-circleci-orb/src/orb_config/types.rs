@@ -262,6 +262,13 @@ pub struct SubcommandConfig {
     /// generator falls back to the command's short about (the first sentence
     /// of its `--help`), then to the bare subcommand name.
     pub label: Option<String>,
+    /// Set `false` to stop this subcommand's repeatable `verbose`/`quiet`
+    /// pair (clap-verbosity-flag's own two Count args) from being merged
+    /// into one `log_level` enum parameter. Merging is the default: it
+    /// matches the naming convention used org-wide, but is a name-based
+    /// heuristic — a CLI whose `--verbose`/`--quiet` mean something other
+    /// than clap-verbosity-flag's linked counter pair can opt out here.
+    pub merge_verbosity: Option<bool>,
 }
 
 #[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq)]
