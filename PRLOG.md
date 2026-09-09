@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add version pin syntax to cargo_tools(pr [#352])
 - merge -v/-q into one log_level enum param(pr [#357])
 
+### Changed
+
+- chore-address 4 open SonarQube findings(pr [#360])
+
 ### Fixed
 
 - deps: lock file maintenance(pr [#351])
@@ -997,6 +1001,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#356]: https://github.com/jerus-org/gen-circleci-orb/pull/356
 [#357]: https://github.com/jerus-org/gen-circleci-orb/pull/357
 [#359]: https://github.com/jerus-org/gen-circleci-orb/pull/359
+[#360]: https://github.com/jerus-org/gen-circleci-orb/pull/360
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.10...HEAD
 [0.1.10]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.9...v0.1.10
 [0.1.9]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.8...v0.1.9
