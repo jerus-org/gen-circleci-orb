@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - run idiomatic_rust on main for sonarcloud(pr [#353])
 - anchor is_builtin_decl match(pr [#354])
 - coerce param override default by type(pr [#356])
+- reject unparseable param override values(pr [#359])
 
 ## [0.1.10] - 2026-09-02
 
@@ -995,6 +996,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#354]: https://github.com/jerus-org/gen-circleci-orb/pull/354
 [#356]: https://github.com/jerus-org/gen-circleci-orb/pull/356
 [#357]: https://github.com/jerus-org/gen-circleci-orb/pull/357
+[#359]: https://github.com/jerus-org/gen-circleci-orb/pull/359
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.10...HEAD
 [0.1.10]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.9...v0.1.10
 [0.1.9]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.8...v0.1.9
