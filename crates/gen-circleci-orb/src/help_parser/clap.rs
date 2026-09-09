@@ -623,6 +623,11 @@ fn parse_option_block(
 
     // Determine if boolean: no <VALUE> metavar after the flag
     let is_boolean = !has_value_metavar(block, &long_flag);
+    // A counting flag (`--verbose...`) is boolean-shaped with a repeat
+    // marker immediately after the flag itself — distinct from a
+    // value-taking flag that repeats (`--include <PATH>...`), where the
+    // marker follows the metavar instead (#348).
+    let repeatable = is_boolean && has_repeat_marker(block, &long_flag);
 
     let param_type = if !possible_values.is_empty() {
         ParamType::Enum(possible_values)
@@ -649,7 +654,25 @@ fn parse_option_block(
         default,
         required,
         description,
+        repeatable,
     })
+}
+
+/// True when a repeat marker (`...`) immediately follows `--{long_flag}` with
+/// nothing in between — a counting flag, not a value that itself repeats.
+fn has_repeat_marker(block: &str, long_flag: &str) -> bool {
+    match block.find(&format!("--{long_flag}")) {
+        Some(pos) => block[pos + 2 + long_flag.len()..].starts_with("..."),
+        None => false,
+    }
+}
+
+/// Short-form counterpart of [`has_repeat_marker`], for a flag with no long name.
+fn has_repeat_marker_short(block: &str, short: char) -> bool {
+    match block.find(&format!("-{short}")) {
+        Some(pos) => block[pos + 1 + short.len_utf8()..].starts_with("..."),
+        None => false,
+    }
 }
 
 /// Build the parameter for an option that has only a short form (`-f`).
@@ -675,6 +698,7 @@ fn parse_short_only_block(
 
     // A short-only option takes a value when a metavar follows it.
     let is_boolean = !has_short_value_metavar(block, short);
+    let repeatable = is_boolean && has_repeat_marker_short(block, short);
     let param_type = if !possible_values.is_empty() {
         ParamType::Enum(possible_values)
     } else if is_boolean {
@@ -693,6 +717,7 @@ fn parse_short_only_block(
         // line outside any `[...]` group.
         required: !is_boolean && required.shorts.contains(&short),
         description,
+        repeatable,
     })
 }
 
@@ -726,6 +751,7 @@ fn parse_positional_block(
         default,
         required,
         description,
+        repeatable: false,
     })
 }
 
@@ -1788,6 +1814,78 @@ Options:
         let verbose = params.iter().find(|p| p.long_name == "verbose").unwrap();
         assert_eq!(verbose.description, "Increase logging verbosity");
         assert_eq!(verbose.param_type, ParamType::Boolean);
+    }
+
+    #[test]
+    fn repeatable_boolean_flag_is_marked_repeatable() {
+        // #348: -v/--verbose... is a counting flag, not a one-shot toggle —
+        // the repeat marker must be captured on the parameter, not just
+        // stripped from the description text.
+        let help = r#"Do something
+
+Usage: tool cmd [OPTIONS]
+
+Options:
+  -v, --verbose...  Increase logging verbosity
+  -h, --help        Print help
+"#;
+        let params = parse_parameters(help);
+        let verbose = params.iter().find(|p| p.long_name == "verbose").unwrap();
+        assert!(verbose.repeatable, "--verbose... must be marked repeatable");
+    }
+
+    #[test]
+    fn plain_boolean_flag_is_not_marked_repeatable() {
+        let help = r#"Do something
+
+Usage: tool cmd [OPTIONS]
+
+Options:
+      --force  Overwrite existing files
+  -h, --help   Print help
+"#;
+        let params = parse_parameters(help);
+        let force = params.iter().find(|p| p.long_name == "force").unwrap();
+        assert!(
+            !force.repeatable,
+            "a plain one-shot boolean flag must not be marked repeatable"
+        );
+    }
+
+    #[test]
+    fn repeatable_value_taking_flag_is_not_marked_repeatable() {
+        // --include <PATH>... repeats a VALUE — a different, out-of-scope
+        // kind of repetition (#348) — must not be mistaken for a counting
+        // flag just because it also carries a repeat marker.
+        let help = r#"Do something
+
+Usage: tool cmd [OPTIONS]
+
+Options:
+      --include <PATH>...  Paths to include (repeatable)
+  -h, --help                Print help
+"#;
+        let params = parse_parameters(help);
+        let include = params.iter().find(|p| p.long_name == "include").unwrap();
+        assert!(
+            !include.repeatable,
+            "a value-taking repeatable flag must not be marked as a counting flag"
+        );
+    }
+
+    #[test]
+    fn repeatable_short_only_boolean_flag_is_marked_repeatable() {
+        let help = r#"Do something
+
+Usage: tool cmd [OPTIONS]
+
+Options:
+  -x...       Increase something a short-only way
+  -h, --help  Print help
+"#;
+        let params = parse_parameters(help);
+        let x = params.iter().find(|p| p.short == Some('x')).unwrap();
+        assert!(x.repeatable, "-x... must be marked repeatable");
     }
 
     /// A repeatable option that DOES take a value keeps its metavar handling.

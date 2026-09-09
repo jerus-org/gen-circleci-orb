@@ -35,6 +35,12 @@ pub struct Parameter {
     /// True when the parameter has no default and is not boolean.
     pub required: bool,
     pub description: String,
+    /// True for a boolean-shaped flag clap renders with a repeat marker
+    /// (`--verbose...`) — a *counting* flag, not a one-shot toggle. Distinct
+    /// from a value-taking flag that repeats (`--include <PATH>...`), which
+    /// keeps `param_type: ParamType::String`/whatever its value type is;
+    /// this only ever applies to `ParamType::Boolean` (#348).
+    pub repeatable: bool,
 }
 
 /// How an input is written on the command line.

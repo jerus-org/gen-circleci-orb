@@ -78,6 +78,13 @@ pub fn generate(
     opts: &GenerateOpts,
     config: Option<&OrbConfig>,
 ) -> HashMap<PathBuf, String> {
+    // Merge each subcommand's repeatable verbose/quiet pair before anything
+    // else reads `cli.subcommands` — every consumer below (job/command param
+    // building, script codegen, examples) then sees the merged shape
+    // automatically, with nothing else in this function aware of #348.
+    let cli = normalize_verbosity_flags(cli, config);
+    let cli = &cli;
+
     let mut files = HashMap::new();
 
     // @orb.yml — metadata only; hand-formatted so `version: 2.1` stays unquoted
@@ -152,6 +159,104 @@ pub fn generate(
     );
 
     files
+}
+
+/// The enum values a merged `log_level` parameter offers, in declaration
+/// order: named relative to the tool's own default level (`quiet`,
+/// `default`, `verbose`…`verbose4`), never absolute names like
+/// `warn`/`info`/`debug` — the generator has no way to know which level a
+/// given CLI's `clap-verbosity-flag` is actually configured to default to
+/// (`--help` text doesn't say), so an absolute name would be a guess that's
+/// right for some consumers and wrong for others (#348).
+const LOG_LEVEL_VALUES: &[&str] = &[
+    "quiet", "default", "verbose", "verbose2", "verbose3", "verbose4",
+];
+
+/// The synthetic parameter name a merged verbose/quiet pair becomes.
+/// `render_command_script_content` special-cases this exact name to emit a
+/// `case` translation instead of the generic enum handling — reserved the
+/// same way `attach_workspace`/`workspace_root` are elsewhere in this file.
+const LOG_LEVEL_PARAM: &str = "log_level";
+
+/// Recursively merges each subcommand's repeatable `verbose`/`quiet` pair —
+/// clap-verbosity-flag's own two Count args, used org-wide — into one
+/// `log_level` enum parameter, so the generated orb never lets a consumer
+/// set both independently and get a self-canceling combination (#348).
+fn normalize_verbosity_flags(cli: &CliDefinition, config: Option<&OrbConfig>) -> CliDefinition {
+    CliDefinition {
+        subcommands: cli
+            .subcommands
+            .iter()
+            .map(|s| normalize_subcommand(s, config))
+            .collect(),
+        ..cli.clone()
+    }
+}
+
+/// `..sub.clone()` (rather than naming every field) so a future field added
+/// to `SubCommand` is carried through by default instead of silently
+/// dropping out of the normalized tree.
+fn normalize_subcommand(sub: &SubCommand, config: Option<&OrbConfig>) -> SubCommand {
+    // Merging is the default; a consumer whose verbose/quiet aren't
+    // clap-verbosity-flag's linked counter pair can opt out per subcommand.
+    let merge_enabled = config
+        .and_then(|c| c.subcommand.as_ref())
+        .and_then(|sc| sc.get(&sub.name))
+        .and_then(|sc_config| sc_config.merge_verbosity)
+        .unwrap_or(true);
+    SubCommand {
+        parameters: if merge_enabled {
+            merge_verbosity_pair(&sub.parameters)
+        } else {
+            sub.parameters.clone()
+        },
+        subcommands: sub
+            .subcommands
+            .iter()
+            .map(|s| normalize_subcommand(s, config))
+            .collect(),
+        ..sub.clone()
+    }
+}
+
+/// When exactly one repeatable `verbose` and one repeatable `quiet`
+/// parameter are both present, replace both with a single `log_level` enum
+/// at the earlier of their two positions (keeps declaration order stable).
+/// A repeatable flag without its pair is left as-is — nothing to merge it
+/// into without guessing at a counterpart that isn't there.
+fn merge_verbosity_pair(parameters: &[Parameter]) -> Vec<Parameter> {
+    let verbose_idx = parameters
+        .iter()
+        .position(|p| p.repeatable && p.long_name == "verbose");
+    let quiet_idx = parameters
+        .iter()
+        .position(|p| p.repeatable && p.long_name == "quiet");
+    let (Some(verbose_idx), Some(quiet_idx)) = (verbose_idx, quiet_idx) else {
+        return parameters.to_vec();
+    };
+    let insert_at = verbose_idx.min(quiet_idx);
+
+    let log_level = Parameter {
+        long_name: LOG_LEVEL_PARAM.to_string(),
+        short: None,
+        kind: ParamKind::Long,
+        param_type: ParamType::Enum(LOG_LEVEL_VALUES.iter().map(|s| s.to_string()).collect()),
+        default: Some("default".to_string()),
+        required: false,
+        description: "Logging verbosity, relative to this tool's own default level \
+                       (quiet, default, verbose, verbose2, verbose3, verbose4)."
+            .to_string(),
+        repeatable: false,
+    };
+
+    let mut merged: Vec<Parameter> = parameters
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != verbose_idx && *i != quiet_idx)
+        .map(|(_, p)| p.clone())
+        .collect();
+    merged.insert(insert_at, log_level);
+    merged
 }
 
 fn render_orb_root(cli: &CliDefinition, opts: &GenerateOpts, config: Option<&OrbConfig>) -> String {
@@ -450,16 +555,22 @@ fn render_command_script_content(sub: &SubCommand, binary: &str) -> String {
             ParamKind::ShortOnly => p.short.map(|c| format!("-{c} ")).unwrap_or_default(),
             ParamKind::Long => format!("--{} ", p.long_name.replace('_', "-")),
         };
-        let line = match &p.param_type {
-            ParamType::Boolean => {
-                let flag = flag.trim_end();
-                format!(r#"[[ "${{{env_var}:-false}}" = "true" ]] && set -- "$@" {flag}"#)
-            }
-            _ => {
-                if p.required {
-                    format!(r#"set -- "$@" {flag}"${{{env_var}}}""#)
-                } else {
-                    format!(r#"[[ -n "${{{env_var}:-}}" ]] && set -- "$@" {flag}"${{{env_var}}}""#)
+        let line = if p.long_name == LOG_LEVEL_PARAM {
+            render_log_level_case(&env_var)
+        } else {
+            match &p.param_type {
+                ParamType::Boolean => {
+                    let flag = flag.trim_end();
+                    format!(r#"[[ "${{{env_var}:-false}}" = "true" ]] && set -- "$@" {flag}"#)
+                }
+                _ => {
+                    if p.required {
+                        format!(r#"set -- "$@" {flag}"${{{env_var}}}""#)
+                    } else {
+                        format!(
+                            r#"[[ -n "${{{env_var}:-}}" ]] && set -- "$@" {flag}"${{{env_var}}}""#
+                        )
+                    }
                 }
             }
         };
@@ -468,6 +579,21 @@ fn render_command_script_content(sub: &SubCommand, binary: &str) -> String {
 
     lines.push(r#""$@""#.to_string());
     lines.join("\n") + "\n"
+}
+
+/// Translates the merged `log_level` enum (see `merge_verbosity_pair`) into
+/// the repeated `--verbose`/`--quiet` occurrences the underlying CLI
+/// actually expects. `default` has no arm — it falls through and adds
+/// nothing, matching the tool's own baseline.
+fn render_log_level_case(env_var: &str) -> String {
+    let mut out = format!("case \"${{{env_var}:-default}}\" in\n");
+    out.push_str("  quiet) set -- \"$@\" --quiet ;;\n");
+    out.push_str("  verbose) set -- \"$@\" --verbose ;;\n");
+    out.push_str("  verbose2) set -- \"$@\" --verbose --verbose ;;\n");
+    out.push_str("  verbose3) set -- \"$@\" --verbose --verbose --verbose ;;\n");
+    out.push_str("  verbose4) set -- \"$@\" --verbose --verbose --verbose --verbose ;;\n");
+    out.push_str("esac");
+    out
 }
 
 fn render_job(sub: &SubCommand, opts: &GenerateOpts, config: Option<&OrbConfig>) -> String {
@@ -2518,6 +2644,131 @@ mod tests {
         );
     }
 
+    fn verbose_param() -> Parameter {
+        Parameter {
+            long_name: "verbose".to_string(),
+            short: Some('v'),
+            kind: ParamKind::Long,
+            param_type: ParamType::Boolean,
+            description: "Increase logging verbosity".to_string(),
+            repeatable: true,
+            ..Default::default()
+        }
+    }
+
+    fn quiet_param() -> Parameter {
+        Parameter {
+            long_name: "quiet".to_string(),
+            short: Some('q'),
+            kind: ParamKind::Long,
+            param_type: ParamType::Boolean,
+            description: "Decrease logging verbosity".to_string(),
+            repeatable: true,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn verbose_quiet_pair_merges_into_one_log_level_enum_param() {
+        // #348: a subcommand's repeatable verbose/quiet pair collapses into
+        // one log_level enum parameter, not two independent booleans that
+        // could be set simultaneously to a self-canceling combination.
+        let sub = make_leaf("release", vec![verbose_param(), quiet_param()]);
+        let cli = make_cli("mytool", vec![sub]);
+        let files = generate(&cli, &default_opts(), None);
+        let job = &files[&PathBuf::from("src/jobs/release.yml")];
+        assert!(
+            job.contains("log_level:") && job.contains("type: enum"),
+            "merged log_level enum param must appear in generated job:\n{job}"
+        );
+        assert!(
+            !job.contains("verbose:") && !job.contains("quiet:"),
+            "verbose/quiet booleans must not appear once merged:\n{job}"
+        );
+        for value in [
+            "quiet", "default", "verbose", "verbose2", "verbose3", "verbose4",
+        ] {
+            assert!(
+                job.contains(value),
+                "log_level enum must include {value:?}:\n{job}"
+            );
+        }
+    }
+
+    #[test]
+    fn lone_repeatable_flag_without_its_pair_is_not_merged() {
+        // Only verbose present, no quiet — nothing to merge into a single
+        // dial, so it must be left as-is rather than guessed at.
+        let sub = make_leaf("release", vec![verbose_param()]);
+        let cli = make_cli("mytool", vec![sub]);
+        let files = generate(&cli, &default_opts(), None);
+        let job = &files[&PathBuf::from("src/jobs/release.yml")];
+        assert!(
+            !job.contains("log_level"),
+            "a lone repeatable flag without its pair must not be merged:\n{job}"
+        );
+        assert!(
+            job.contains("verbose:"),
+            "the lone verbose param must still appear:\n{job}"
+        );
+    }
+
+    #[test]
+    fn merge_verbosity_false_opts_a_subcommand_out_of_the_merge() {
+        // A CLI whose verbose/quiet aren't clap-verbosity-flag's linked
+        // counter pair can opt out of the name-based merge heuristic.
+        use crate::orb_config::{OrbConfig, SubcommandConfig};
+
+        let sub = make_leaf("release", vec![verbose_param(), quiet_param()]);
+        let cli = make_cli("mytool", vec![sub]);
+        let mut subcommands = IndexMap::new();
+        subcommands.insert(
+            "release".to_string(),
+            SubcommandConfig {
+                merge_verbosity: Some(false),
+                ..SubcommandConfig::default()
+            },
+        );
+        let config = OrbConfig {
+            subcommand: Some(subcommands),
+            ..OrbConfig::default()
+        };
+        let files = generate(&cli, &default_opts(), Some(&config));
+        let job = &files[&PathBuf::from("src/jobs/release.yml")];
+        assert!(
+            !job.contains("log_level"),
+            "merge_verbosity = false must prevent the merge:\n{job}"
+        );
+        assert!(
+            job.contains("verbose:") && job.contains("quiet:"),
+            "verbose and quiet must both still appear unmerged:\n{job}"
+        );
+    }
+
+    #[test]
+    fn merged_log_level_translates_to_repeated_verbose_quiet_flags_in_script() {
+        let sub = make_leaf("release", vec![verbose_param(), quiet_param()]);
+        let cli = make_cli("mytool", vec![sub]);
+        let files = generate(&cli, &default_opts(), None);
+        let script = &files[&PathBuf::from("src/scripts/release.sh")];
+        assert!(
+            script.contains("case \"${LOG_LEVEL:-default}\" in"),
+            "script must translate log_level via a case statement:\n{script}"
+        );
+        for (arm, flags) in [
+            ("quiet", "--quiet"),
+            ("verbose)", "--verbose"),
+            ("verbose2", "--verbose --verbose"),
+            ("verbose3", "--verbose --verbose --verbose"),
+            ("verbose4", "--verbose --verbose --verbose --verbose"),
+        ] {
+            assert!(
+                script.contains(arm) && script.contains(flags),
+                "case arm {arm:?} must emit {flags:?}:\n{script}"
+            );
+        }
+    }
+
     /// A positional argument carries no flag and must follow every option, in
     /// declaration order — otherwise the CLI reads an option's value as the
     /// positional (#242).
@@ -4282,10 +4533,7 @@ mod tests {
             "help".to_string(),
             SubcommandConfig {
                 generate_job: Some(false),
-                interactive: None,
-                param: None,
-                label: None,
-                short_param: None,
+                ..SubcommandConfig::default()
             },
         );
         let config = OrbConfig {
@@ -4311,10 +4559,7 @@ mod tests {
             "help".to_string(),
             SubcommandConfig {
                 generate_job: Some(false),
-                interactive: None,
-                param: None,
-                label: None,
-                short_param: None,
+                ..SubcommandConfig::default()
             },
         );
         let config = OrbConfig {
@@ -4462,10 +4707,7 @@ mod tests {
             "help".to_string(),
             SubcommandConfig {
                 generate_job: Some(false),
-                interactive: None,
-                param: None,
-                label: None,
-                short_param: None,
+                ..SubcommandConfig::default()
             },
         );
         let config = OrbConfig {
@@ -4509,11 +4751,8 @@ mod tests {
         subcommands.insert(
             "generate".to_string(),
             SubcommandConfig {
-                generate_job: None,
-                interactive: None,
                 param: Some(param_overrides),
-                label: None,
-                short_param: None,
+                ..SubcommandConfig::default()
             },
         );
         let config = OrbConfig {
@@ -4561,11 +4800,8 @@ mod tests {
         subcommands.insert(
             "wire_ci".to_string(),
             SubcommandConfig {
-                generate_job: None,
-                interactive: None,
                 param: Some(param_overrides),
-                label: None,
-                short_param: None,
+                ..SubcommandConfig::default()
             },
         );
         let config = OrbConfig {
@@ -4613,11 +4849,8 @@ mod tests {
         subcommands.insert(
             "publish".to_string(),
             SubcommandConfig {
-                generate_job: None,
-                interactive: None,
                 param: Some(param_overrides),
-                label: None,
-                short_param: None,
+                ..SubcommandConfig::default()
             },
         );
         let config = OrbConfig {

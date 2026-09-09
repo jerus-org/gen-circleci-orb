@@ -151,6 +151,20 @@ override a derived name too.
 
 The option is still passed to the CLI by its short flag; only the orb parameter is named.
 
+### `merge_verbosity` — opt a subcommand out of the verbose/quiet merge
+
+A subcommand's repeatable `-v/--verbose`/`-q/--quiet` pair (clap-verbosity-flag's own two Count
+args, used org-wide) is merged by default into one `log_level` enum parameter
+(`quiet`/`default`/`verbose`/`verbose2`/`verbose3`/`verbose4`) rather than two independent counters
+a consumer could set simultaneously to a self-canceling combination. This is a name-based heuristic
+— a CLI whose `--verbose`/`--quiet` mean something other than clap-verbosity-flag's linked pair can
+opt out per subcommand:
+
+```toml
+[subcommand.check]
+merge_verbosity = false
+```
+
 ### `allow_unparsed_help` — generate despite a gap in the parse
 
 ```toml
