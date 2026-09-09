@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - reject unparseable param override values(pr [#359])
 - deps: update rust:1-slim-trixie docker digest to bce1476(pr [#361])
 - deps: update rust crate indexmap to 2.14.2(pr [#362])
+- deps: update rust crate toml to 1.1.5(pr [#363])
 
 ## [0.1.10] - 2026-09-02
 
@@ -1006,6 +1007,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#360]: https://github.com/jerus-org/gen-circleci-orb/pull/360
 [#361]: https://github.com/jerus-org/gen-circleci-orb/pull/361
 [#362]: https://github.com/jerus-org/gen-circleci-orb/pull/362
+[#363]: https://github.com/jerus-org/gen-circleci-orb/pull/363
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.10...HEAD
 [0.1.10]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.9...v0.1.10
 [0.1.9]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.8...v0.1.9
