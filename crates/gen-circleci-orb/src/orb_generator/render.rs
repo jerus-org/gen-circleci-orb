@@ -245,14 +245,12 @@ fn merge_verbosity_pair(parameters: &[Parameter]) -> Vec<Parameter> {
         required: false,
         description: "Logging verbosity: consolidates this tool's clap-verbosity-flag \
                        -q/--quiet and -v/--verbose repeat-counters (its own linked pair) into \
-                       one selector, so they can't be set independently and cancel out. Values \
-                       are steps relative to this tool's own configured default level — never \
-                       an absolute name like warn/info/debug, since that default is a per-tool \
-                       choice clap-verbosity-flag doesn't expose via --help, not something \
-                       generic to guess at: `quiet` steps one level below default (matching a \
-                       single -q); `default` is the tool's out-of-the-box level; `verbose` / \
-                       `verbose2` / `verbose3` / `verbose4` step one / two / three / four \
-                       levels above default (matching -v / -vv / -vvv / -vvvv)."
+                       one selector, so they can't be set independently and cancel out. \
+                       clap-verbosity-flag escalates off -> error -> warn -> info -> debug -> \
+                       trace, typically starting at error: `quiet` is a single -q (one step \
+                       quieter); `default` is this tool's own starting point on that scale; \
+                       `verbose` / `verbose2` / `verbose3` / `verbose4` are -v / -vv / -vvv / \
+                       -vvvv (one to four steps louder)."
             .to_string(),
         repeatable: false,
     };
