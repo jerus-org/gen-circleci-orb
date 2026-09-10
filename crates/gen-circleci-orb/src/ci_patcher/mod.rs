@@ -131,6 +131,7 @@ fn insert_block_at(lines: &mut Vec<String>, pos: usize, block: &[String]) {
 const MANAGED_VALIDATION_JOBS: &[&str] = &[
     "build-binary",
     "regenerate-orb",
+    "check-ci-wiring",
     "pack-orb",
     "review-orb",
     "push-orb",
@@ -566,12 +567,12 @@ fn pack_validate_steps(opts: &PatchOpts) -> Vec<String> {
     }
     steps.push(format!("          orb_dir: {orb_dir}"));
     steps.push("          attach_workspace: true".to_string());
-    // Validation opts INTO the wiring check (the param defaults false so it never
-    // runs at release; verify-orb leaves it off). This is where a consumer's config
-    // is verified against the generator on every PR. Safe in steady state — the
-    // fresh binary's version matches the published/pinned orb; the transient drift
-    // only exists in the window after a version bump until Renovate re-pins.
-    steps.push("          check_ci_wiring: true".to_string());
+    // The wiring check does NOT run here: attach_workspace puts the freshly-built
+    // (in-PR) binary ahead of the container's own pinned CLI on PATH, so its
+    // CARGO_PKG_VERSION is routinely ahead of the committed self-pin right after a
+    // release — comparing that to the self-pin would spuriously fail on every PR
+    // opened in that window. See the standalone check-ci-wiring job below, which
+    // runs the container's own pinned CLI instead.
     if records {
         if !opts.record_push_ssh_fingerprint.is_empty() {
             steps.push(format!(
@@ -597,6 +598,16 @@ fn pack_validate_steps(opts: &PatchOpts) -> Vec<String> {
     // The orb chain is a no-op on `main` (can't push; the orb-release verify gate
     // covers publish-time drift). Run on PR branches only; the regen still
     // validates on forked PRs (the binary's branch guard skips the push there).
+    push_branch_ignore(&mut steps, &["main"]);
+
+    // check-ci-wiring — the self-pin wiring check, isolated in its own job so it
+    // runs the container's own pinned CLI (no attach_workspace) rather than the
+    // freshly-built binary regenerate-orb uses. That keeps it deterministic: it
+    // validates the committed wiring against what the actually-pinned orb version
+    // would generate, not against whatever the current PR happens to build.
+    steps.push("      - gen-circleci-orb/update:".to_string());
+    steps.push("          name: check-ci-wiring".to_string());
+    steps.push("          check: true".to_string());
     push_branch_ignore(&mut steps, &["main"]);
 
     // orb-tools/pack — checkout:false + attach the regenerated orb from the
@@ -877,19 +888,52 @@ mod tests {
     // ── auto-record context wiring on regenerate-orb ──────────────────────────
 
     #[test]
-    fn validation_regenerate_orb_opts_into_wiring_check() {
-        // The validation regenerate-orb opts INTO the wiring check (check_ci_wiring:
-        // true) — this is where a consumer's config is verified against the
-        // generator on every PR. (The release verify-orb stays OFF; see
-        // verify_orb_keeps_source_check_but_disables_wiring_check.)
+    fn validation_regenerate_orb_does_not_run_wiring_check_itself() {
+        // regenerate-orb attaches the freshly-built (in-PR) binary to PATH via
+        // attach_workspace, so its own CARGO_PKG_VERSION is routinely ahead of the
+        // committed self-pin right after a release (the pin lags until someone runs
+        // `update`). Running `update --check` against that binary would compare
+        // "this PR's crate version" to the self-pin and spuriously fail on every PR
+        // opened in that window, even when the wiring is genuinely in sync — see
+        // check_ci_wiring_job_is_isolated_from_the_fresh_binary below.
         let steps = pack_validate_steps(&make_opts()).join("\n");
         let regen = steps
             .split("name: regenerate-orb")
             .nth(1)
-            .expect("regenerate-orb present");
+            .expect("regenerate-orb present")
+            .split("\n      - ")
+            .next()
+            .unwrap();
         assert!(
-            regen.contains("check_ci_wiring: true"),
-            "validation regenerate-orb must opt into the wiring check:\n{regen}"
+            !regen.contains("check_ci_wiring"),
+            "regenerate-orb must not opt into the wiring check itself:\n{regen}"
+        );
+    }
+
+    #[test]
+    fn check_ci_wiring_job_is_isolated_from_the_fresh_binary() {
+        // The wiring check must run the self-orb's OWN pinned/published CLI (the
+        // container's baked binary), not the fresh in-PR build — so it validates
+        // against what's actually deployed, deterministically, regardless of
+        // whether the crate version was just bumped ahead of the self-pin. That
+        // means: gen-circleci-orb/update (not /generate), check: true, and no
+        // attach_workspace to shadow the container's own binary on PATH.
+        let steps = pack_validate_steps(&make_opts()).join("\n");
+        assert!(
+            steps.contains("- gen-circleci-orb/update:"),
+            "a standalone gen-circleci-orb/update job must run the wiring check:\n{steps}"
+        );
+        let check_job = steps
+            .split("- gen-circleci-orb/update:")
+            .nth(1)
+            .expect("gen-circleci-orb/update step present");
+        assert!(
+            check_job.contains("check: true"),
+            "the wiring-check job must run in --check mode:\n{check_job}"
+        );
+        assert!(
+            !check_job.contains("attach_workspace: true"),
+            "the wiring-check job must not attach the fresh workspace binary:\n{check_job}"
         );
     }
 
