@@ -1,0 +1,12 @@
+description: >
+  Example usage of the fixture-cli orb.
+usage:
+  version: 2.1
+  orbs:
+    fixture-cli: jerus-org/fixture-cli@1.0
+  workflows:
+    use-my-orb:
+      jobs:
+        - fixture-cli/build:
+            target: your-target
+            name: your-name

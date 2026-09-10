@@ -36,6 +36,7 @@ uuid.workspace = true
 
 [features]
 integration = []
+test-fixtures = []
 
 [dev-dependencies]
 trycmd.workspace = true
@@ -44,6 +45,11 @@ tempfile.workspace = true
 [[bin]]
 name = "gen-circleci-orb"
 path = "src/main.rs"
+
+[[bin]]
+name = "fixture-cli"
+path = "src/bin/fixture-cli.rs"
+required-features = ["test-fixtures"]
 
 [lib]
 name = "gen_circleci_orb"
