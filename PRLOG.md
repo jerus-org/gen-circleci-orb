@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - test-trycmd fixture for update wiring resync (#367)(pr [#368])
+- test-fixture-cli generate coverage (#367 PR 1/3)(pr [#371])
 
 ### Fixed
 
@@ -1022,6 +1023,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#364]: https://github.com/jerus-org/gen-circleci-orb/pull/364
 [#365]: https://github.com/jerus-org/gen-circleci-orb/pull/365
 [#368]: https://github.com/jerus-org/gen-circleci-orb/pull/368
+[#371]: https://github.com/jerus-org/gen-circleci-orb/pull/371
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.11...HEAD
 [0.1.11]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.10...v0.1.11
 [0.1.10]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.9...v0.1.10
