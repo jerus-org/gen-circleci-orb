@@ -243,13 +243,16 @@ fn merge_verbosity_pair(parameters: &[Parameter]) -> Vec<Parameter> {
         param_type: ParamType::Enum(LOG_LEVEL_VALUES.iter().map(ToString::to_string).collect()),
         default: Some("default".to_string()),
         required: false,
-        description: "Logging verbosity, as a step count relative to this tool's own \
-                       default level (never an absolute level like warn/info/debug, which \
-                       varies by tool): `quiet` drops one level below default (like a single \
-                       -q); `default` is the tool's out-of-the-box logging; `verbose` adds one \
-                       level of detail above default (like a single -v), and `verbose2` / \
-                       `verbose3` / `verbose4` add two / three / four levels (like -vv / -vvv / \
-                       -vvvv), each step revealing more detail than the last."
+        description: "Logging verbosity: consolidates this tool's clap-verbosity-flag \
+                       -q/--quiet and -v/--verbose repeat-counters (its own linked pair) into \
+                       one selector, so they can't be set independently and cancel out. Values \
+                       are steps relative to this tool's own configured default level — never \
+                       an absolute name like warn/info/debug, since that default is a per-tool \
+                       choice clap-verbosity-flag doesn't expose via --help, not something \
+                       generic to guess at: `quiet` steps one level below default (matching a \
+                       single -q); `default` is the tool's out-of-the-box level; `verbose` / \
+                       `verbose2` / `verbose3` / `verbose4` step one / two / three / four \
+                       levels above default (matching -v / -vv / -vvv / -vvvv)."
             .to_string(),
         repeatable: false,
     };
