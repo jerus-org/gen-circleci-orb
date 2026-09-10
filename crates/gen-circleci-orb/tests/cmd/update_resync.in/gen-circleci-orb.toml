@@ -1,0 +1,8 @@
+[orb]
+binary = "mytool"
+namespaces = ["myorg"]
+
+[ci]
+crate_tag_prefix = "mytool-v"
+docker_namespace = "myorg"
+requires_job = "common-tests"

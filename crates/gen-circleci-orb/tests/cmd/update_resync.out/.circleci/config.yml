@@ -1,0 +1,136 @@
+version: 2.1
+
+orbs:
+  toolkit: jerus-org/circleci-toolkit@7.4.0
+  orb-tools: circleci/orb-tools@12.5.0
+
+  # >>> gen-circleci-orb (managed — edits overwritten by 'gen-circleci-orb update')
+  gen-circleci-orb: jerus-org/gen-circleci-orb@[..]
+  # <<< gen-circleci-orb
+jobs:
+  some-job:
+    docker:
+      - image: cimg/base:stable
+    steps:
+      - run: echo hello
+
+workflows:
+  validation:
+    jobs:
+      - some-job
+      # >>> gen-circleci-orb (managed — edits overwritten by 'gen-circleci-orb update')
+      - gen-circleci-orb/build_rust_binary:
+          name: build-binary
+          package: mytool
+      - gen-circleci-orb/generate:
+          name: regenerate-orb
+          binary: mytool
+          orb_namespace: myorg
+          orb_dir: orb
+          attach_workspace: true
+          no_record: true
+          persist_orb_workspace: true
+          requires: [build-binary, common-tests]
+          filters:
+            branches:
+              ignore:
+                - main
+      - gen-circleci-orb/update:
+          name: check-ci-wiring
+          check: true
+          filters:
+            branches:
+              ignore:
+                - main
+      - orb-tools/pack:
+          name: pack-orb
+          checkout: false
+          source_dir: orb/src
+          pre-steps:
+            - attach_workspace:
+                at: .
+          requires: [regenerate-orb]
+          filters:
+            branches:
+              ignore:
+                - main
+      - orb-tools/review:
+          name: review-orb
+          checkout: false
+          source_dir: orb/src
+          pre-steps:
+            - attach_workspace:
+                at: .
+          requires: [pack-orb]
+          filters:
+            branches:
+              ignore:
+                - main
+      # <<< gen-circleci-orb
+
+  # >>> gen-circleci-orb (managed — edits overwritten by 'gen-circleci-orb update')
+  orb-release:
+    jobs:
+      - orb-tools/pack:
+          name: orb-release-pack
+          checkout: false
+          source_dir: orb/src
+          pre-steps:
+            - checkout
+            - run:
+                name: Inject release version into executor default tag
+                command: |
+                  VERSION=${CIRCLE_TAG#mytool-v}
+                  echo "Injecting version: ${VERSION}"
+                  sed -i "s/default: latest/default: ${VERSION}/" orb/src/executors/default.yml
+                  echo "Updated executor:"
+                  cat orb/src/executors/default.yml
+          filters:
+            tags:
+              only: /^mytool-v.*/
+            branches:
+              ignore: /.*/
+
+      - gen-circleci-orb/build_container:
+          name: orb-release-container
+          binary: mytool
+          docker_namespace: myorg
+          orb_dir: orb
+          crate_tag_prefix: mytool-v
+          context: [docker-credentials]
+          filters:
+            tags:
+              only: /^mytool-v.*/
+            branches:
+              ignore: /.*/
+
+      - gen-circleci-orb/ensure_orb_registered:
+          name: orb-release-ensure-registered-myorg
+          orb_name: myorg/mytool
+          context: [orb-publishing]
+          filters:
+            tags:
+              only: /^mytool-v.*/
+            branches:
+              ignore: /.*/
+
+      - orb-tools/publish:
+          name: publish-orb-myorg
+          pre-steps:
+            - run:
+                name: Normalize CIRCLE_TAG for orb version
+                command: |
+                  VERSION=${CIRCLE_TAG#mytool-v}
+                  echo "export CIRCLE_TAG=v${VERSION}" >> "$BASH_ENV"
+          orb_name: myorg/mytool
+          pub_type: production
+          vcs_type: github
+          enable_pr_comment: false
+          requires: [orb-release-container, orb-release-pack, orb-release-ensure-registered-myorg]
+          context: [orb-publishing]
+          filters:
+            tags:
+              only: /^mytool-v.*/
+            branches:
+              ignore: /.*/
+  # <<< gen-circleci-orb
