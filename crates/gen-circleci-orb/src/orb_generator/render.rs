@@ -162,15 +162,13 @@ pub fn generate(
 }
 
 /// The enum values a merged `log_level` parameter offers, in declaration
-/// order: named relative to the tool's own default level (`quiet`,
-/// `default`, `verbose`…`verbose4`), never absolute names like
+/// order: named for the flag count they match (`v`, `vv`, `vvv`, `vvvv` —
+/// clap-verbosity-flag's own -v/-vv/-vvv/-vvvv), never absolute names like
 /// `warn`/`info`/`debug` — the generator has no way to know which level a
 /// given CLI's `clap-verbosity-flag` is actually configured to default to
 /// (`--help` text doesn't say), so an absolute name would be a guess that's
 /// right for some consumers and wrong for others (#348).
-const LOG_LEVEL_VALUES: &[&str] = &[
-    "quiet", "default", "verbose", "verbose2", "verbose3", "verbose4",
-];
+const LOG_LEVEL_VALUES: &[&str] = &["quiet", "default", "v", "vv", "vvv", "vvvv"];
 
 /// The synthetic parameter name a merged verbose/quiet pair becomes.
 /// `render_command_script_content` special-cases this exact name to emit a
@@ -243,8 +241,14 @@ fn merge_verbosity_pair(parameters: &[Parameter]) -> Vec<Parameter> {
         param_type: ParamType::Enum(LOG_LEVEL_VALUES.iter().map(ToString::to_string).collect()),
         default: Some("default".to_string()),
         required: false,
-        description: "Logging verbosity, relative to this tool's own default level \
-                       (quiet, default, verbose, verbose2, verbose3, verbose4)."
+        description: "Logging verbosity: consolidates this tool's clap-verbosity-flag \
+                       -q/--quiet and -v/--verbose repeat-counters (its own linked pair) into \
+                       one selector, so they can't be set independently and cancel out. \
+                       clap-verbosity-flag escalates off -> error -> warn -> info -> debug -> \
+                       trace, typically starting at error: `quiet` is a single -q (one step \
+                       quieter); `default` is this tool's own starting point on that scale; \
+                       `v` / `vv` / `vvv` / `vvvv` are -v / -vv / -vvv / -vvvv (one to four \
+                       steps louder)."
             .to_string(),
         repeatable: false,
     };
@@ -588,10 +592,10 @@ fn render_command_script_content(sub: &SubCommand, binary: &str) -> String {
 fn render_log_level_case(env_var: &str) -> String {
     let mut out = format!("case \"${{{env_var}:-default}}\" in\n");
     out.push_str("  quiet) set -- \"$@\" --quiet ;;\n");
-    out.push_str("  verbose) set -- \"$@\" --verbose ;;\n");
-    out.push_str("  verbose2) set -- \"$@\" --verbose --verbose ;;\n");
-    out.push_str("  verbose3) set -- \"$@\" --verbose --verbose --verbose ;;\n");
-    out.push_str("  verbose4) set -- \"$@\" --verbose --verbose --verbose --verbose ;;\n");
+    out.push_str("  v) set -- \"$@\" --verbose ;;\n");
+    out.push_str("  vv) set -- \"$@\" --verbose --verbose ;;\n");
+    out.push_str("  vvv) set -- \"$@\" --verbose --verbose --verbose ;;\n");
+    out.push_str("  vvvv) set -- \"$@\" --verbose --verbose --verbose --verbose ;;\n");
     out.push_str("esac");
     out
 }
@@ -2685,9 +2689,7 @@ mod tests {
             !job.contains("verbose:") && !job.contains("quiet:"),
             "verbose/quiet booleans must not appear once merged:\n{job}"
         );
-        for value in [
-            "quiet", "default", "verbose", "verbose2", "verbose3", "verbose4",
-        ] {
+        for value in ["quiet", "default", "v", "vv", "vvv", "vvvv"] {
             assert!(
                 job.contains(value),
                 "log_level enum must include {value:?}:\n{job}"
@@ -2756,11 +2758,11 @@ mod tests {
             "script must translate log_level via a case statement:\n{script}"
         );
         for (arm, flags) in [
-            ("quiet", "--quiet"),
-            ("verbose)", "--verbose"),
-            ("verbose2", "--verbose --verbose"),
-            ("verbose3", "--verbose --verbose --verbose"),
-            ("verbose4", "--verbose --verbose --verbose --verbose"),
+            ("  quiet)", "--quiet"),
+            ("  v)", "--verbose"),
+            ("  vv)", "--verbose --verbose"),
+            ("  vvv)", "--verbose --verbose --verbose"),
+            ("  vvvv)", "--verbose --verbose --verbose --verbose"),
         ] {
             assert!(
                 script.contains(arm) && script.contains(flags),

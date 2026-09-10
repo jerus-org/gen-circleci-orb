@@ -81,6 +81,12 @@ workflows:
       # material; the write key is loaded via the fingerprint.
       # pack/review consume the regenerated orb from the workspace (checkout:false
       # + attach_workspace), so they validate exactly what was just generated.
+      # check-ci-wiring runs gen-circleci-orb/update (not /generate) with no
+      # attach_workspace, so it validates against the container's own pinned CLI,
+      # not the fresh in-PR binary regenerate-orb uses (#366). Bootstrap note: this
+      # job stays red until the fix that introduced it is released and the
+      # self-pin above is deliberately bumped to that release — the pinned CLI's
+      # own generator predates the new shape and doesn't recognise it yet.
       # >>> gen-circleci-orb (managed — edits overwritten by 'gen-circleci-orb update')
       - gen-circleci-orb/build_rust_binary:
           name: build-binary
@@ -92,11 +98,17 @@ workflows:
           orb_namespace: jerus-org
           orb_dir: orb
           attach_workspace: true
-          check_ci_wiring: true
           ssh_fingerprint: "SHA256:OkxsH8Z6Iim6WDJBaII9eTT9aaO1f3eDc6IpsgYYPVg"
           persist_orb_workspace: true
           context: [release]
           requires: [build-binary, toolkit/common_tests]
+          filters:
+            branches:
+              ignore:
+                - main
+      - gen-circleci-orb/update:
+          name: check-ci-wiring
+          check: true
           filters:
             branches:
               ignore:
