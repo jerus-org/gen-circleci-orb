@@ -1,0 +1,63 @@
+version: 2.1
+
+orbs:
+  toolkit: jerus-org/circleci-toolkit@7.4.0
+  orb-tools: circleci/orb-tools@12.5.0
+  # >>> gen-circleci-orb (managed — edits overwritten by 'gen-circleci-orb update')
+  gen-circleci-orb: jerus-org/gen-circleci-orb@0.0.1
+  # <<< gen-circleci-orb
+
+jobs:
+  some-job:
+    docker:
+      - image: cimg/base:stable
+    steps:
+      - run: echo hello
+
+workflows:
+  validation:
+    jobs:
+      - some-job
+      # >>> gen-circleci-orb (managed — edits overwritten by 'gen-circleci-orb update')
+      - gen-circleci-orb/build_rust_binary:
+          name: build-binary
+          package: mytool
+      - gen-circleci-orb/generate:
+          name: regenerate-orb
+          binary: mytool
+          orb_namespace: myorg
+          orb_dir: orb
+          attach_workspace: true
+          check_ci_wiring: true
+          no_record: true
+          persist_orb_workspace: true
+          requires: [build-binary, common-tests]
+          filters:
+            branches:
+              ignore:
+                - main
+      - orb-tools/pack:
+          name: pack-orb
+          checkout: false
+          source_dir: orb/src
+          pre-steps:
+            - attach_workspace:
+                at: .
+          requires: [regenerate-orb]
+          filters:
+            branches:
+              ignore:
+                - main
+      - orb-tools/review:
+          name: review-orb
+          checkout: false
+          source_dir: orb/src
+          pre-steps:
+            - attach_workspace:
+                at: .
+          requires: [pack-orb]
+          filters:
+            branches:
+              ignore:
+                - main
+      # <<< gen-circleci-orb
