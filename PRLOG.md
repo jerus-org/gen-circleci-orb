@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- test-trycmd fixture for update wiring resync (#367)(pr [#368])
+
 ### Fixed
 
 - log_level enum description + isolate CI wiring check(pr [#365])
@@ -1017,6 +1021,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#363]: https://github.com/jerus-org/gen-circleci-orb/pull/363
 [#364]: https://github.com/jerus-org/gen-circleci-orb/pull/364
 [#365]: https://github.com/jerus-org/gen-circleci-orb/pull/365
+[#368]: https://github.com/jerus-org/gen-circleci-orb/pull/368
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.11...HEAD
 [0.1.11]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.10...v0.1.11
 [0.1.10]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.9...v0.1.10
