@@ -243,8 +243,13 @@ fn merge_verbosity_pair(parameters: &[Parameter]) -> Vec<Parameter> {
         param_type: ParamType::Enum(LOG_LEVEL_VALUES.iter().map(ToString::to_string).collect()),
         default: Some("default".to_string()),
         required: false,
-        description: "Logging verbosity, relative to this tool's own default level \
-                       (quiet, default, verbose, verbose2, verbose3, verbose4)."
+        description: "Logging verbosity, as a step count relative to this tool's own \
+                       default level (never an absolute level like warn/info/debug, which \
+                       varies by tool): `quiet` drops one level below default (like a single \
+                       -q); `default` is the tool's out-of-the-box logging; `verbose` adds one \
+                       level of detail above default (like a single -v), and `verbose2` / \
+                       `verbose3` / `verbose4` add two / three / four levels (like -vv / -vvv / \
+                       -vvvv), each step revealing more detail than the last."
             .to_string(),
         repeatable: false,
     };
