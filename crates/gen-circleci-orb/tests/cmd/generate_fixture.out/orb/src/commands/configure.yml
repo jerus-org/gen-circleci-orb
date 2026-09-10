@@ -1,0 +1,12 @@
+description: Configure the tool (interactivity is asserted via gen-circleci-orb.toml, not this --help)
+parameters:
+  config_path:
+    type: string
+    description: Config file path
+    default: ''
+steps:
+- run:
+    name: Configure the tool (interactivity is asserted via gen-circleci-orb.toml, not this --help)
+    command: <<include(scripts/configure.sh)>>
+    environment:
+      CONFIG_PATH: << parameters.config_path >>

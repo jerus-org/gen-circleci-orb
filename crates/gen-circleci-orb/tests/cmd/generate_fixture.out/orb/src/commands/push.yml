@@ -1,0 +1,12 @@
+description: Push one or more tags
+parameters:
+  tag:
+    type: string
+    description: Extra tag to attach (repeatable)
+    default: ''
+steps:
+- run:
+    name: Push one or more tags
+    command: <<include(scripts/push.sh)>>
+    environment:
+      TAG: << parameters.tag >>

@@ -1,0 +1,8 @@
+description: Execution environment with fixture-cli pre-installed.
+docker:
+- image: jerusdp/fixture-cli:<< parameters.tag >>
+parameters:
+  tag:
+    type: string
+    description: Docker image tag.
+    default: latest

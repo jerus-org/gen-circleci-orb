@@ -1,0 +1,2 @@
+bin.name = "gen-circleci-orb"
+args = ["generate", "--binary", "fixture-cli", "--orb-namespace", "jerus-org", "--output", ".", "--no-record"]
