@@ -199,7 +199,7 @@ for the generated orb and CI, so it is safe to commit and review.
 | Section | Purpose |
 |---------|---------|
 | `[orb]` | `binary`, `namespaces`, `orb_dir`, `base_image`, `builder_image`, `circleci_cli_version` — the orb's own source and container |
-| `[ci]` | Workflow/job wiring: `build_workflow`, `release_workflow`, `requires_job`, `release_after_job`, `crate_tag_prefix`, `docker_namespace`, `docker_context`, `orb_context`, MCP fields, and `rust_image` |
+| `[ci]` | Workflow/job wiring: `build_workflow`, `release_workflow`, `requires_job`, `release_after_job`, `crate_tag_prefix`, `docker_namespace`, `docker_context`, `orb_context`, MCP fields, `rust_image`, and `live_regenerate` |
 | `[record]` | Optional auto-record: after `generate`, commit the regenerated orb source back (GPG-signed) so the published orb stays in sync with the CLI. Stores only env-var **names** — the secrets stay in CI contexts |
 | `[orbs]`, `[[job_group]]`, `[[extra_job]]`, `[subcommand.*]` | Extra orb pins, composed jobs, custom jobs, and per-subcommand overrides (including `interactive` / `generate_job`) |
 
@@ -211,6 +211,14 @@ Two image knobs are easy to confuse:
   `orb-release-binary`) compile in. The default `rust:latest` has no libclang; set a
   clang-equipped, digest-pinned image (e.g. `jerusdp/ci-rust:rolling-6mo@sha256:…`) when
   the workspace pulls a bindgen-based `-sys` crate.
+
+`[ci].live_regenerate` (default `true`) controls whether the validation workflow builds a
+fresh binary and runs `generate` against it every PR (`build-binary`/`regenerate-orb`),
+packing/reviewing that freshly-generated output. Set it to `false` once you're ready to
+validate CI only against the already-committed, released orb source — `pack-orb`/
+`review-orb` then check out and validate the committed `orb/src` tree instead, and
+generator regressions are caught by this crate's own test suite rather than by
+production CI.
 
 For the full walkthrough of these settings — and of composing a single complex job from several
 commands (as gen-orb-mcp's `build_mcp_server` does) — see the

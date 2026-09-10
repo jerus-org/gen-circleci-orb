@@ -56,6 +56,19 @@ pub struct PatchOpts {
     /// libclang, so bindgen (e.g. openssl-sys via sequoia-openpgp's OpenSSL backend)
     /// fails there.
     pub rust_image: String,
+    /// When `true` (the default, preserving today's behavior for every existing
+    /// consumer): the validation workflow builds a fresh binary and runs
+    /// `generate` against it every PR (`build-binary`/`regenerate-orb`), then
+    /// packs/reviews that freshly-generated workspace output.
+    ///
+    /// When `false`: `build-binary`/`regenerate-orb` are omitted entirely.
+    /// `pack-orb`/`review-orb` check out and validate the already-committed
+    /// `{orb_dir}/src` tree instead of a freshly generated one — CI runs only
+    /// against released code, never against an unreleased in-PR binary.
+    /// Generator regressions are instead caught by this crate's own test suite
+    /// (the `generate_fixture` trycmd case + focused unit tests), not by
+    /// production CI. See gen-circleci-orb#367.
+    pub live_regenerate: bool,
 }
 
 pub struct PatchReport {
@@ -358,9 +371,15 @@ fn patch_step1_orb_tools(
 fn patch_step2_build_regen_jobs(
     content: &str,
     _lines: &mut Vec<String>,
-    _opts: &PatchOpts,
+    opts: &PatchOpts,
     report: &mut PatchReport,
 ) {
+    if !opts.live_regenerate {
+        // pack_validate_steps (patch_step3) never emits build-binary/
+        // regenerate-orb when live_regenerate is false — nothing was inserted
+        // or skipped, so nothing to report.
+        return;
+    }
     // Detect either the old inline-job approach or the orb-reference approach.
     // Both are considered "already present" for idempotency — no inline job defs are
     // added any more; the workflow steps reference gen-circleci-orb orb jobs directly.
@@ -537,68 +556,74 @@ fn pack_validate_steps(opts: &PatchOpts) -> Vec<String> {
     let records = !opts.record_contexts.is_empty();
     let mut steps = vec![managed_begin("      ")];
 
-    // build_rust_binary — compiles the (release) binary and persists it to the
-    // workspace. It does NOT depend on the test job: the slow release build runs
-    // in parallel with the test suite rather than serially after it. The test
-    // gate moves to regenerate-orb, so a regen is only pushed once tests pass.
-    steps.push("      - gen-circleci-orb/build_rust_binary:".to_string());
-    steps.push("          name: build-binary".to_string());
-    steps.push(format!("          package: {binary}"));
-    if !opts.rust_image.is_empty() {
-        steps.push(format!("          rust_image: {}", opts.rust_image));
-    }
+    if opts.live_regenerate {
+        // build_rust_binary — compiles the (release) binary and persists it to
+        // the workspace. It does NOT depend on the test job: the slow release
+        // build runs in parallel with the test suite rather than serially after
+        // it. The test gate moves to regenerate-orb, so a regen is only pushed
+        // once tests pass.
+        steps.push("      - gen-circleci-orb/build_rust_binary:".to_string());
+        steps.push("          name: build-binary".to_string());
+        steps.push(format!("          package: {binary}"));
+        if !opts.rust_image.is_empty() {
+            steps.push(format!("          rust_image: {}", opts.rust_image));
+        }
 
-    // regenerate-orb — regenerate the orb from the freshly-built binary.
-    //
-    // With auto-record on it regenerates WITH record: when the committed orb is
-    // out of date the binary commits + pushes the regen (no ci-skip marker). That
-    // push starts a fresh pipeline on the new HEAD and CircleCI auto-cancels this
-    // now-redundant run, so the expensive jobs are not run to completion twice;
-    // the fresh run finds the orb in sync and its required checks gate the merge.
-    // With auto-record off it just validates (no_record). Gated on build-binary +
-    // the configured test job so a regen is never pushed for broken code. Forked
-    // PRs still validate here — the binary's branch guard skips the push on a
-    // fork. (No separate push job: the push now happens here, early.)
-    steps.push("      - gen-circleci-orb/generate:".to_string());
-    steps.push("          name: regenerate-orb".to_string());
-    steps.push(format!("          binary: {binary}"));
-    for ns in &opts.namespaces {
-        steps.push(format!("          orb_namespace: {ns}"));
-    }
-    steps.push(format!("          orb_dir: {orb_dir}"));
-    steps.push("          attach_workspace: true".to_string());
-    // The wiring check does NOT run here: attach_workspace puts the freshly-built
-    // (in-PR) binary ahead of the container's own pinned CLI on PATH, so its
-    // CARGO_PKG_VERSION is routinely ahead of the committed self-pin right after a
-    // release — comparing that to the self-pin would spuriously fail on every PR
-    // opened in that window. See the standalone check-ci-wiring job below, which
-    // runs the container's own pinned CLI instead.
-    if records {
-        if !opts.record_push_ssh_fingerprint.is_empty() {
+        // regenerate-orb — regenerate the orb from the freshly-built binary.
+        //
+        // With auto-record on it regenerates WITH record: when the committed orb
+        // is out of date the binary commits + pushes the regen (no ci-skip
+        // marker). That push starts a fresh pipeline on the new HEAD and
+        // CircleCI auto-cancels this now-redundant run, so the expensive jobs
+        // are not run to completion twice; the fresh run finds the orb in sync
+        // and its required checks gate the merge. With auto-record off it just
+        // validates (no_record). Gated on build-binary + the configured test
+        // job so a regen is never pushed for broken code. Forked PRs still
+        // validate here — the binary's branch guard skips the push on a fork.
+        // (No separate push job: the push now happens here, early.)
+        steps.push("      - gen-circleci-orb/generate:".to_string());
+        steps.push("          name: regenerate-orb".to_string());
+        steps.push(format!("          binary: {binary}"));
+        for ns in &opts.namespaces {
+            steps.push(format!("          orb_namespace: {ns}"));
+        }
+        steps.push(format!("          orb_dir: {orb_dir}"));
+        steps.push("          attach_workspace: true".to_string());
+        // The wiring check does NOT run here: attach_workspace puts the
+        // freshly-built (in-PR) binary ahead of the container's own pinned CLI
+        // on PATH, so its CARGO_PKG_VERSION is routinely ahead of the committed
+        // self-pin right after a release — comparing that to the self-pin would
+        // spuriously fail on every PR opened in that window. See the standalone
+        // check-ci-wiring job below, which runs the container's own pinned CLI
+        // instead.
+        if records {
+            if !opts.record_push_ssh_fingerprint.is_empty() {
+                steps.push(format!(
+                    "          ssh_fingerprint: \"{}\"",
+                    opts.record_push_ssh_fingerprint
+                ));
+            }
+        } else {
+            steps.push("          no_record: true".to_string());
+        }
+        steps.push("          persist_orb_workspace: true".to_string());
+        if records {
             steps.push(format!(
-                "          ssh_fingerprint: \"{}\"",
-                opts.record_push_ssh_fingerprint
+                "          context: [{}]",
+                opts.record_contexts.join(", ")
             ));
         }
-    } else {
-        steps.push("          no_record: true".to_string());
+        let mut req = vec!["build-binary".to_string()];
+        if let Some(j) = &opts.requires_job {
+            req.push(j.clone());
+        }
+        steps.push(format!("          requires: [{}]", req.join(", ")));
+        // The orb chain is a no-op on `main` (can't push; the orb-release verify
+        // gate covers publish-time drift). Run on PR branches only; the regen
+        // still validates on forked PRs (the binary's branch guard skips the
+        // push there).
+        push_branch_ignore(&mut steps, &["main"]);
     }
-    steps.push("          persist_orb_workspace: true".to_string());
-    if records {
-        steps.push(format!(
-            "          context: [{}]",
-            opts.record_contexts.join(", ")
-        ));
-    }
-    let mut req = vec!["build-binary".to_string()];
-    if let Some(j) = &opts.requires_job {
-        req.push(j.clone());
-    }
-    steps.push(format!("          requires: [{}]", req.join(", ")));
-    // The orb chain is a no-op on `main` (can't push; the orb-release verify gate
-    // covers publish-time drift). Run on PR branches only; the regen still
-    // validates on forked PRs (the binary's branch guard skips the push there).
-    push_branch_ignore(&mut steps, &["main"]);
 
     // check-ci-wiring — the self-pin wiring check, isolated in its own job so it
     // runs the container's own pinned CLI (no attach_workspace) rather than the
@@ -610,29 +635,59 @@ fn pack_validate_steps(opts: &PatchOpts) -> Vec<String> {
     steps.push("          check: true".to_string());
     push_branch_ignore(&mut steps, &["main"]);
 
-    // orb-tools/pack — checkout:false + attach the regenerated orb from the
-    // workspace (persisted by regenerate-orb), so the packed/validated orb is
-    // exactly what was just generated, not the (possibly stale) committed copy.
-    steps.push("      - orb-tools/pack:".to_string());
-    steps.push("          name: pack-orb".to_string());
-    steps.push("          checkout: false".to_string());
-    steps.push(format!("          source_dir: {orb_dir}/src"));
-    steps.push("          pre-steps:".to_string());
-    steps.push("            - attach_workspace:".to_string());
-    steps.push("                at: .".to_string());
-    steps.push("          requires: [regenerate-orb]".to_string());
-    push_branch_ignore(&mut steps, &["main"]);
+    if opts.live_regenerate {
+        // orb-tools/pack — checkout:false + attach the regenerated orb from the
+        // workspace (persisted by regenerate-orb), so the packed/validated orb
+        // is exactly what was just generated, not the (possibly stale)
+        // committed copy.
+        steps.push("      - orb-tools/pack:".to_string());
+        steps.push("          name: pack-orb".to_string());
+        steps.push("          checkout: false".to_string());
+        steps.push(format!("          source_dir: {orb_dir}/src"));
+        steps.push("          pre-steps:".to_string());
+        steps.push("            - attach_workspace:".to_string());
+        steps.push("                at: .".to_string());
+        steps.push("          requires: [regenerate-orb]".to_string());
+        push_branch_ignore(&mut steps, &["main"]);
 
-    // orb-tools/review (best-practice review of the regenerated, packed orb)
-    steps.push("      - orb-tools/review:".to_string());
-    steps.push("          name: review-orb".to_string());
-    steps.push("          checkout: false".to_string());
-    steps.push(format!("          source_dir: {orb_dir}/src"));
-    steps.push("          pre-steps:".to_string());
-    steps.push("            - attach_workspace:".to_string());
-    steps.push("                at: .".to_string());
-    steps.push("          requires: [pack-orb]".to_string());
-    push_branch_ignore(&mut steps, &["main"]);
+        // orb-tools/review (best-practice review of the regenerated, packed orb)
+        steps.push("      - orb-tools/review:".to_string());
+        steps.push("          name: review-orb".to_string());
+        steps.push("          checkout: false".to_string());
+        steps.push(format!("          source_dir: {orb_dir}/src"));
+        steps.push("          pre-steps:".to_string());
+        steps.push("            - attach_workspace:".to_string());
+        steps.push("                at: .".to_string());
+        steps.push("          requires: [pack-orb]".to_string());
+        push_branch_ignore(&mut steps, &["main"]);
+    } else {
+        // orb-tools/pack — no live-generated workspace artifact exists (no
+        // build-binary/regenerate-orb above), so pack the already-committed
+        // orb/src tree directly via checkout:true. Always gated on
+        // check-ci-wiring (the one job guaranteed present in this shape), plus
+        // the consumer's own test job when configured — so pack-orb is never
+        // unconditional, preserving the "never pack broken code" invariant the
+        // old requires:[regenerate-orb, ...test] chain provided.
+        steps.push("      - orb-tools/pack:".to_string());
+        steps.push("          name: pack-orb".to_string());
+        steps.push("          checkout: true".to_string());
+        steps.push(format!("          source_dir: {orb_dir}/src"));
+        let mut pack_req = vec!["check-ci-wiring".to_string()];
+        if let Some(j) = &opts.requires_job {
+            pack_req.push(j.clone());
+        }
+        steps.push(format!("          requires: [{}]", pack_req.join(", ")));
+        push_branch_ignore(&mut steps, &["main"]);
+
+        // orb-tools/review — same committed-tree read; still gated on pack-orb
+        // so review never runs against an orb that failed to pack.
+        steps.push("      - orb-tools/review:".to_string());
+        steps.push("          name: review-orb".to_string());
+        steps.push("          checkout: true".to_string());
+        steps.push(format!("          source_dir: {orb_dir}/src"));
+        steps.push("          requires: [pack-orb]".to_string());
+        push_branch_ignore(&mut steps, &["main"]);
+    }
 
     steps.push(managed_end("      "));
     steps
@@ -833,6 +888,7 @@ mod tests {
             record_contexts: vec![],
             record_push_ssh_fingerprint: String::new(),
             rust_image: String::new(),
+            live_regenerate: true,
         }
     }
 
@@ -848,6 +904,138 @@ mod tests {
             namespaces: vec!["my-org".to_string(), "other-org".to_string()],
             ..make_opts()
         }
+    }
+
+    // ── live_regenerate toggle ─────────────────────────────────────────────────
+    //
+    // `true` (make_opts()'s default) is today's shape, still fully covered by
+    // every other test in this module — no dedicated regression test needed
+    // beyond `live_regenerate_true_keeps_build_and_regenerate_jobs` below, which
+    // pins the two job names that must stay present.
+
+    #[test]
+    fn live_regenerate_true_keeps_build_and_regenerate_jobs() {
+        let steps = pack_validate_steps(&make_opts()).join("\n");
+        assert!(steps.contains("name: build-binary"));
+        assert!(steps.contains("name: regenerate-orb"));
+        assert!(steps.contains("attach_workspace: true"));
+    }
+
+    #[test]
+    fn live_regenerate_false_omits_build_and_regenerate_jobs() {
+        let opts = PatchOpts {
+            live_regenerate: false,
+            ..make_opts()
+        };
+        let steps = pack_validate_steps(&opts).join("\n");
+        assert!(
+            !steps.contains("name: build-binary"),
+            "build-binary must be omitted when live_regenerate is false:\n{steps}"
+        );
+        assert!(
+            !steps.contains("name: regenerate-orb"),
+            "regenerate-orb must be omitted when live_regenerate is false:\n{steps}"
+        );
+    }
+
+    #[test]
+    fn live_regenerate_false_keeps_check_ci_wiring_pack_and_review() {
+        let opts = PatchOpts {
+            live_regenerate: false,
+            ..make_opts()
+        };
+        let steps = pack_validate_steps(&opts).join("\n");
+        assert!(steps.contains("name: check-ci-wiring"));
+        assert!(steps.contains("name: pack-orb"));
+        assert!(steps.contains("name: review-orb"));
+    }
+
+    #[test]
+    fn live_regenerate_false_pack_and_review_read_the_committed_tree() {
+        // No workspace artifact exists to attach once regenerate-orb is gone —
+        // pack-orb/review-orb must check out and read the committed orb/src tree
+        // directly rather than attaching a workspace that nothing populates.
+        let opts = PatchOpts {
+            live_regenerate: false,
+            ..make_opts()
+        };
+        let steps = pack_validate_steps(&opts).join("\n");
+        assert!(
+            !steps.contains("attach_workspace"),
+            "no attach_workspace anywhere once live_regenerate is false:\n{steps}"
+        );
+        let pack_job = steps
+            .split("name: pack-orb")
+            .nth(1)
+            .expect("pack-orb present");
+        assert!(
+            pack_job
+                .lines()
+                .take_while(|l| !l.trim_start().starts_with("- "))
+                .any(|l| l.trim() == "checkout: true"),
+            "pack-orb must read the committed tree via checkout: true:\n{pack_job}"
+        );
+        let review_job = steps
+            .split("name: review-orb")
+            .nth(1)
+            .expect("review-orb present");
+        assert!(
+            review_job
+                .lines()
+                .take_while(|l| !l.trim_start().starts_with("- "))
+                .any(|l| l.trim() == "checkout: true"),
+            "review-orb must read the committed tree via checkout: true:\n{review_job}"
+        );
+    }
+
+    #[test]
+    fn live_regenerate_false_pack_orb_still_requires_something_when_requires_job_unset() {
+        // Regression for a code-review finding on gen-circleci-orb#367 PR 2: with
+        // no requires_job configured, pack-orb previously got no `requires:` line
+        // at all and ran unconditionally, defeating the "never pack broken code"
+        // invariant the reduced shape is supposed to preserve.
+        let opts = PatchOpts {
+            live_regenerate: false,
+            requires_job: None,
+            ..make_opts()
+        };
+        let steps = pack_validate_steps(&opts).join("\n");
+        let pack_job = steps
+            .split("name: pack-orb")
+            .nth(1)
+            .expect("pack-orb present");
+        let pack_job_own_lines: Vec<&str> = pack_job
+            .lines()
+            .take_while(|l| !l.trim_start().starts_with("- "))
+            .collect();
+        assert!(
+            pack_job_own_lines
+                .iter()
+                .any(|l| l.trim_start().starts_with("requires:")),
+            "pack-orb must not be unconditional even with no requires_job configured:\n{pack_job}"
+        );
+    }
+
+    #[test]
+    fn live_regenerate_false_review_orb_still_requires_pack_orb() {
+        // Ordering within the reduced shape is still meaningful: review should
+        // not run against an orb that failed to pack.
+        let opts = PatchOpts {
+            live_regenerate: false,
+            ..make_opts()
+        };
+        let steps = pack_validate_steps(&opts).join("\n");
+        let review_job = steps
+            .split("name: review-orb")
+            .nth(1)
+            .expect("review-orb present");
+        assert!(
+            review_job
+                .lines()
+                .take_while(|l| !l.trim_start().starts_with("- "))
+                .any(|l| l.trim() == "requires: [pack-orb]"),
+            "review-orb must still require pack-orb:\n{review_job}"
+        );
     }
 
     // ── rust_image on the build_rust_binary jobs ──────────────────────────────
@@ -2156,6 +2344,43 @@ workflows:
         assert!(
             report.insertions.iter().any(|s| s.contains("workflow")),
             "report missing workflow steps"
+        );
+    }
+
+    #[test]
+    fn patch_build_live_regenerate_false_does_not_falsely_report_regen_job_insertion() {
+        // Regression for a code-review finding on gen-circleci-orb#367 PR 2:
+        // patch_step2_build_regen_jobs ignored live_regenerate and always
+        // reported "inserted build-binary and regenerate-orb jobs" — even when
+        // pack_validate_steps (guarded by live_regenerate) never emits either
+        // job, falsely claiming to the user (via init/update's println! of the
+        // report) that something happened that did not.
+        let opts = PatchOpts {
+            live_regenerate: false,
+            ..make_opts()
+        };
+        let (output, report) = patch_build(BUILD_FIXTURE_NO_JOBS, &opts);
+        assert!(
+            !output.contains("gen-circleci-orb/build_rust_binary:"),
+            "build-binary must not be emitted when live_regenerate is false:\n{output}"
+        );
+        assert!(
+            !report
+                .insertions
+                .iter()
+                .any(|s| s.contains("build-binary and regenerate-orb")),
+            "report must not claim build-binary/regenerate-orb jobs were inserted \
+             when live_regenerate is false: {:?}",
+            report.insertions
+        );
+        assert!(
+            !report
+                .skipped
+                .iter()
+                .any(|s| s.contains("build-binary and regenerate-orb")),
+            "report must not mention build-binary/regenerate-orb at all \
+             when live_regenerate is false: {:?}",
+            report.skipped
         );
     }
 
