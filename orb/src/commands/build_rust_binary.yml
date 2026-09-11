@@ -1,4 +1,6 @@
-description: Build a Rust binary from a workspace package and persist it to workspace.
+description: >-
+  Build a Rust binary (debug profile) from a workspace package and persist
+  it to workspace.
 parameters:
   package:
     type: string
@@ -9,7 +11,7 @@ parameters:
     default: ''
   cargo_args:
     type: string
-    description: Additional arguments passed to cargo build --release
+    description: Additional arguments passed to cargo build
     default: ''
 steps:
   - run:

@@ -1,1 +1,1 @@
-cargo build --release --package "${PACKAGE}" ${CARGO_ARGS:-}
+cargo build --package "${PACKAGE}" ${CARGO_ARGS:-}
