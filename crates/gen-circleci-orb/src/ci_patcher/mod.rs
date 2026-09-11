@@ -57,19 +57,21 @@ pub struct PatchOpts {
     /// enough; recommended to match whatever executor the consumer's other test
     /// jobs already use (e.g. the executor backing `[ci].requires_job`).
     pub build_executor: String,
-    /// When `true` (the default, preserving today's behavior for every existing
-    /// consumer): the validation workflow runs the full generation self-test
-    /// chain every PR — `check-ci-wiring` -> `build-binary` -> `regenerate-orb`
-    /// -> `pack-orb` -> `review-orb` — building a fresh binary, running
-    /// `generate` against it, then packing/reviewing that freshly-generated
-    /// workspace output.
+    /// Gates `pack-orb`/`review-orb` — the pack/review re-validation of
+    /// freshly-generated content. `true` (the default, preserving today's
+    /// behavior for every existing consumer) keeps them in the validation
+    /// workflow; `false` drops them, since generator regressions are instead
+    /// caught by this crate's own test suite (the `generate_fixture` trycmd
+    /// case + focused unit tests), not by production CI re-validating
+    /// already-proven output on every PR (gen-circleci-orb#378).
     ///
-    /// When `false`: only `check-ci-wiring` remains. None of `build-binary`,
-    /// `regenerate-orb`, `pack-orb`, `review-orb` run — CI validates wiring-vs-
-    /// config drift only, never generation-content validity, and never touches
-    /// an unreleased in-PR binary. Generator regressions are instead caught by
-    /// this crate's own test suite (the `generate_fixture` trycmd case +
-    /// focused unit tests), not by production CI. See gen-circleci-orb#367.
+    /// `build-binary`/`regenerate-orb` are independent of this flag alone —
+    /// see `needs_generation_regen`: they also keep running whenever
+    /// `[record]` is enabled (non-empty `record_contexts`), because that's
+    /// the mechanism keeping `orb/src` in sync with the CLI and reviewable
+    /// pre-merge, not a test (gen-circleci-orb#382). Only a consumer with
+    /// neither `[record]` nor `test_generation` enabled sees the whole
+    /// chain drop to `check-ci-wiring` alone. See gen-circleci-orb#367.
     pub test_generation: bool,
 }
 
@@ -376,10 +378,11 @@ fn patch_step2_build_regen_jobs(
     opts: &PatchOpts,
     report: &mut PatchReport,
 ) {
-    if !opts.test_generation {
+    if !needs_generation_regen(opts) {
         // pack_validate_steps (patch_step3) never emits build-binary/
-        // regenerate-orb when test_generation is false — nothing was inserted
-        // or skipped, so nothing to report.
+        // regenerate-orb when needs_generation_regen is false (test_generation
+        // off AND [record] disabled) — nothing was inserted or skipped, so
+        // nothing to report.
         return;
     }
     // Detect either the old inline-job approach or the orb-reference approach.
@@ -552,14 +555,21 @@ fn find_workflow_jobs_end(lines: &[String], workflow: &str) -> Option<usize> {
     Some(lines.len())
 }
 
+/// Whether build-binary/regenerate-orb should run at all: either there's a
+/// reason to keep orb/src in sync ([record] enabled) or a reason to feed
+/// pack-orb/review-orb (test_generation on). Independent of whether
+/// pack-orb/review-orb themselves run — see `pack_validate_steps`.
+/// gen-circleci-orb#382: regenerate-orb (with record) is the only mechanism
+/// that keeps orb/src in sync and reviewable pre-merge, so it must not be
+/// silently dropped just because the pack/review self-test is turned off.
+fn needs_generation_regen(opts: &PatchOpts) -> bool {
+    !opts.record_contexts.is_empty() || opts.test_generation
+}
+
 fn pack_validate_steps(opts: &PatchOpts) -> Vec<String> {
     let mut steps = vec![managed_begin("      ")];
 
-    // test_generation gates the whole generation self-test chain as one unit:
-    // build-binary/regenerate-orb/pack-orb/review-orb all appear together or
-    // not at all. check-ci-wiring is unconditional — a separate concern
-    // (wiring-vs-config drift), not generation-content validity.
-    if opts.test_generation {
+    if needs_generation_regen(opts) {
         push_build_and_regenerate_steps(&mut steps, opts);
     }
     push_check_ci_wiring_step(&mut steps);
@@ -571,7 +581,7 @@ fn pack_validate_steps(opts: &PatchOpts) -> Vec<String> {
     steps
 }
 
-/// build-binary + regenerate-orb — only emitted when `opts.test_generation`.
+/// build-binary + regenerate-orb — only emitted when `needs_generation_regen`.
 fn push_build_and_regenerate_steps(steps: &mut Vec<String>, opts: &PatchOpts) {
     let orb_dir = &opts.orb_dir;
     let binary = &opts.binary;
@@ -912,11 +922,14 @@ mod tests {
 
     #[test]
     fn test_generation_false_leaves_only_check_ci_wiring() {
-        // The whole generation self-test chain is one unit: turning it off
-        // removes build-binary, regenerate-orb, pack-orb AND review-orb — not
-        // just build/regenerate. Leaving pack/review running against static,
-        // already-known-good committed content served no purpose (#378) and
-        // undersold what the toggle actually controls.
+        // No-record case: with [record] also disabled (make_opts()'s
+        // record_contexts: vec![]), turning test_generation off removes the
+        // whole chain — build-binary, regenerate-orb, pack-orb AND
+        // review-orb. There's no reason left to regenerate at all: nothing
+        // consumes the output (no record to keep in sync, no pack/review to
+        // feed). See test_generation_false_with_record_keeps_regen_drops_
+        // pack_review below for the [record]-enabled case, where
+        // build-binary/regenerate-orb keep running (gen-circleci-orb#382).
         let opts = PatchOpts {
             test_generation: false,
             ..make_opts()
@@ -925,11 +938,11 @@ mod tests {
         assert!(steps.contains("name: check-ci-wiring"));
         assert!(
             !steps.contains("name: build-binary"),
-            "build-binary must be omitted when test_generation is false:\n{steps}"
+            "build-binary must be omitted when test_generation is false and no record:\n{steps}"
         );
         assert!(
             !steps.contains("name: regenerate-orb"),
-            "regenerate-orb must be omitted when test_generation is false:\n{steps}"
+            "regenerate-orb must be omitted when test_generation is false and no record:\n{steps}"
         );
         assert!(
             !steps.contains("name: pack-orb"),
@@ -941,7 +954,47 @@ mod tests {
         );
         assert!(
             !steps.contains("attach_workspace"),
-            "no attach_workspace anywhere once test_generation is false:\n{steps}"
+            "no attach_workspace anywhere once test_generation is false and no record:\n{steps}"
+        );
+    }
+
+    #[test]
+    fn test_generation_false_with_record_keeps_regen_drops_pack_review() {
+        // gen-circleci-orb#382 regression: with [record] enabled,
+        // regenerate-orb is the only mechanism that keeps orb/src in sync
+        // and reviewable pre-merge — turning test_generation off must NOT
+        // silently kill that too. Only pack-orb/review-orb (the redundant
+        // #378 CI expense) should drop.
+        let opts = PatchOpts {
+            test_generation: false,
+            record_contexts: vec!["release".to_string()],
+            ..make_opts()
+        };
+        let steps = pack_validate_steps(&opts).join("\n");
+        assert!(
+            steps.contains("name: build-binary"),
+            "build-binary must keep running when [record] is enabled, even with test_generation false:\n{steps}"
+        );
+        assert!(
+            steps.contains("name: regenerate-orb"),
+            "regenerate-orb must keep running when [record] is enabled, even with test_generation false:\n{steps}"
+        );
+        assert!(
+            steps.contains("attach_workspace: true"),
+            "regenerate-orb must still attach the freshly-built binary:\n{steps}"
+        );
+        assert!(
+            steps.contains("context: [release]"),
+            "regenerate-orb must still attach the record context:\n{steps}"
+        );
+        assert!(steps.contains("name: check-ci-wiring"));
+        assert!(
+            !steps.contains("name: pack-orb"),
+            "pack-orb must still be omitted when test_generation is false:\n{steps}"
+        );
+        assert!(
+            !steps.contains("name: review-orb"),
+            "review-orb must still be omitted when test_generation is false:\n{steps}"
         );
     }
 

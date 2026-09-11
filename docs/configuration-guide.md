@@ -209,11 +209,16 @@ executor some orb already defines and pins, there's no second copy for a pin-man
 keep in step (unlike `[orb].base_image` / `builder_image`, see
 [Container image pins](user-guide.md#container-image-pins)).
 
-`test_generation` (default `true`) gates the whole generation self-test chain — `build-binary`,
-`regenerate-orb`, `pack-orb`, `review-orb` — as one unit in the validation workflow. Set it to
-`false` once you're ready to validate CI only against the already-committed, released orb source:
-none of those four jobs run at all (only `check-ci-wiring` remains), and generator regressions
-are instead caught by this crate's own test suite rather than by production CI.
+`test_generation` (default `true`) gates `pack-orb`/`review-orb` in the validation workflow —
+the pack/review re-validation of freshly-generated content. Set it to `false` once you're ready
+to validate CI only against the already-committed, released orb source: generator regressions
+are instead caught by this crate's own test suite rather than by production CI re-validating
+already-proven output on every PR.
+
+`build-binary`/`regenerate-orb` also keep running whenever `[record]` is enabled, regardless of
+`test_generation` — that's the mechanism keeping the orb source in sync and reviewable
+pre-merge, not a test. Only a consumer with neither `[record]` nor `test_generation` enabled
+sees the whole chain drop to `check-ci-wiring` alone.
 
 MCP integration (`--mcp`) adds `mcp`, `mcp_context`, `mcp_earliest_version`, and
 `gen_orb_mcp_orb_version` here.
