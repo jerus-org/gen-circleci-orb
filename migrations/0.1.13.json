@@ -1,0 +1,10 @@
+[
+  {
+    "type": "ParameterRemoved",
+    "data": {
+      "job": "build_rust_binary",
+      "parameter": "rust_image",
+      "since_version": "0.1.13"
+    }
+  }
+]
