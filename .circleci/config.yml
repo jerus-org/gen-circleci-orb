@@ -13,7 +13,7 @@ orbs:
   # `update` skips re-inserting it and stays round-trip stable.
   gen-orb-mcp: jerus-org/gen-orb-mcp@0.2.3
   # >>> gen-circleci-orb (managed — edits overwritten by 'gen-circleci-orb update')
-  gen-circleci-orb: jerus-org/gen-circleci-orb@0.1.12
+  gen-circleci-orb: jerus-org/gen-circleci-orb@0.1.13
   # <<< gen-circleci-orb
 workflows:
   validation:
@@ -91,7 +91,6 @@ workflows:
       - gen-circleci-orb/build_rust_binary:
           name: build-binary
           package: gen-circleci-orb
-          rust_image: jerusdp/ci-rust:rolling-6mo@sha256:a0be475b440dfb940ee2b89e29c3299e161aa6868f7191871d70076769200c6d
       - gen-circleci-orb/generate:
           name: regenerate-orb
           binary: gen-circleci-orb
