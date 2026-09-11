@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- chore-cut over own CI to test_generation = false (#367 4/4)(pr [#381])
+
 ### Fixed
 
 - deps: update dependency gen-circleci-orb to v0.1.13(pr [#380])
@@ -1056,6 +1060,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#377]: https://github.com/jerus-org/gen-circleci-orb/pull/377
 [#379]: https://github.com/jerus-org/gen-circleci-orb/pull/379
 [#380]: https://github.com/jerus-org/gen-circleci-orb/pull/380
+[#381]: https://github.com/jerus-org/gen-circleci-orb/pull/381
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.13...HEAD
 [0.1.13]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.12...v0.1.13
 [0.1.12]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.11...v0.1.12
