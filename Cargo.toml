@@ -37,7 +37,7 @@ toml = "1.1.5"
 # annotates, so writes must keep comments (#248).
 toml_edit = "0.25.15"
 dialoguer = "0.12.0"
-console = "0.16.4"
+console = "0.16.6"
 
 # Signed commit + GitHub App push for `generate --record`
 pcu = { version = "0.6.34", default-features = false }
