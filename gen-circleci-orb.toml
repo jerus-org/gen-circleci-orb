@@ -92,12 +92,23 @@ orb_context = "orb-publishing"
 mcp = true
 mcp_context = ["release", "bot-check", "pcu-app"]
 mcp_earliest_version = "0.0.11"
-# Disables the generation self-test chain (build-binary -> regenerate-orb ->
-# pack-orb -> review-orb) in the validation workflow. This repo already
-# proves generation correctness via cargo test's fixture-cli/generate_fixture
-# coverage (crates/gen-circleci-orb/tests), so re-running generate/pack/review
-# against a freshly-built (unreleased) binary on every PR is pure CI expense
-# with no new information — see gen-circleci-orb#367. check-ci-wiring
-# (gen-circleci-orb/update --check) still runs unconditionally: it verifies
-# wiring vs. this file, a separate concern from generation-content validity.
-test_generation = false
+# STOPGAP REVERT (gen-circleci-orb#382): test_generation = false was tried
+# and found to break the dev workflow for THIS repo specifically — the
+# regenerate-orb job (test_generation's build-binary -> regenerate-orb step)
+# is currently the ONLY mechanism that regenerates orb/src/** and commits it
+# back for review before merge ([record], enabled above). The release
+# workflow only packs/publishes whatever's already committed to main; it
+# never generates. With test_generation = false, orb/src silently drifts out
+# of sync with the CLI and the next release would ship stale generated
+# content. Reverted to true until #382 designs a real fix (e.g. splitting
+# "regenerate + record" from "pack/review" so the former can stay on without
+# re-adding the pack/review CI cost #378 was about).
+test_generation = true
+# Orb executor the build-binary/regenerate-orb-binary compile step runs in.
+# Optional — the job's own bundled `rust_builder` default (rust:latest) has
+# NO libclang, and this crate needs it (bindgen via sequoia-openpgp's OpenSSL
+# backend once it pulls the ossl crate) — replaces the old raw [ci].rust_image
+# string with a proper orb-executor reference, matching whatever executor the
+# workspace's other test jobs use (toolkit/rust_env_rolling, from
+# requires_job above).
+build_executor = "toolkit/rust_env_rolling"
