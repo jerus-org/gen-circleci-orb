@@ -214,15 +214,19 @@ Two image knobs are easy to confuse:
   build tooling (e.g. libclang, for a bindgen-based `-sys` crate) the default doesn't
   carry. Recommended to match whatever executor `[ci].requires_job` already runs in.
 
-`[ci].test_generation` (default `true`) controls whether the validation workflow runs the
-whole generation self-test chain every PR — `build-binary` -> `regenerate-orb` ->
-`pack-orb` -> `review-orb`, building a fresh binary, running `generate` against it, then
-packing/reviewing that freshly-generated output. `check-ci-wiring` runs either way (a
-separate concern: wiring-vs-config drift, not generation-content validity). Set
-`test_generation` to `false` once you're ready to validate CI only against the
-already-committed, released orb source — none of the four testing jobs run at all, and
+`[ci].test_generation` (default `true`) gates `pack-orb`/`review-orb` — the pack/review
+re-validation of freshly-generated content — in the validation workflow. Set it to `false`
+once you're ready to validate CI only against the already-committed, released orb source:
 generator regressions are instead caught by this crate's own test suite rather than by
-production CI.
+production CI re-validating already-proven output on every PR.
+
+`build-binary`/`regenerate-orb` are independent of `test_generation` alone: they also keep
+running whenever `[record]` is enabled, because that's the mechanism keeping the orb source
+in sync with the CLI and reviewable pre-merge, not a test. Only a consumer with neither
+`[record]` nor `test_generation` enabled sees the whole chain — `build-binary`,
+`regenerate-orb`, `pack-orb`, `review-orb` — drop down to `check-ci-wiring` alone.
+`check-ci-wiring` itself runs unconditionally either way (a separate concern: wiring-vs-config
+drift, not generation-content validity).
 
 For the full walkthrough of these settings — and of composing a single complex job from several
 commands (as gen-orb-mcp's `build_mcp_server` does) — see the
