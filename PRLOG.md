@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- toggle-gated live-regenerate validation (#367 PR 2/3)(pr [#372])
+
 ### Changed
 
 - test-trycmd fixture for update wiring resync (#367)(pr [#368])
@@ -1024,6 +1028,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#365]: https://github.com/jerus-org/gen-circleci-orb/pull/365
 [#368]: https://github.com/jerus-org/gen-circleci-orb/pull/368
 [#371]: https://github.com/jerus-org/gen-circleci-orb/pull/371
+[#372]: https://github.com/jerus-org/gen-circleci-orb/pull/372
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.11...HEAD
 [0.1.11]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.10...v0.1.11
 [0.1.10]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.9...v0.1.10
