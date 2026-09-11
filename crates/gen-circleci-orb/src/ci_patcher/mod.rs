@@ -569,12 +569,6 @@ fn needs_generation_regen(opts: &PatchOpts) -> bool {
 fn pack_validate_steps(opts: &PatchOpts) -> Vec<String> {
     let mut steps = vec![managed_begin("      ")];
 
-    // build-binary/regenerate-orb and pack-orb/review-orb are gated
-    // independently (gen-circleci-orb#382): the former also runs whenever
-    // [record] is enabled (see needs_generation_regen), since that's a
-    // source-of-truth-sync concern, not a test. check-ci-wiring is
-    // unconditional either way — a separate concern (wiring-vs-config
-    // drift), not generation-content validity.
     if needs_generation_regen(opts) {
         push_build_and_regenerate_steps(&mut steps, opts);
     }
