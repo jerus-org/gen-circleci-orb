@@ -5,9 +5,29 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.12] - 2026-09-11
+
+Summary: Added[1], Changed[1], Fixed[5], Testing[2]
+
+### Added
+
+ - feat: toggle-gated live-regenerate validation
+
+### Fixed
+
+ - fix: rename verbose2-4 enum values to vv-vvvv
+ - fix: simplify log_level description per review
+ - fix: assert clap-verbosity-flag, not hedge it
+ - fix: isolate wiring check from the fresh binary
+ - fix: explain each log_level enum value's effect
+
+### Changed
+
+ - refactor: split pack_validate_steps helpers
+
 ## [0.1.11] - 2026-09-09
 
-Summary: Added[2], Chore[1], Fixed[10]
+Summary: Added[2], Chore[2], Fixed[10]
 
 ### Added
 
@@ -806,7 +826,8 @@ Summary: Added[2], Chore[1], Fixed[2], Testing[1]
 
 Summary: Chore[2]
 
-[Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.10...HEAD
+[Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.11...HEAD
+[0.1.11]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.10...v0.1.11
 [0.1.10]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.9...v0.1.10
 [0.1.9]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.8...v0.1.9
 [0.1.8]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.7...v0.1.8
