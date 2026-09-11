@@ -28,8 +28,8 @@ builder_image = "rust:1-slim-trixie"   # image for the Dockerfile's binstall bui
 ```
 
 `base_image` / `builder_image` configure the **orb's own container** — the image your orb's
-consumers run. Do not confuse them with `[ci].rust_image`, which is the image the *CI build jobs*
-compile in (below).
+consumers run. Do not confuse them with `[ci].build_executor`, which is the CircleCI executor
+the *CI build job* compiles in (below).
 
 ### `apt_packages` — extra OS packages in the executor
 
@@ -195,19 +195,25 @@ crate_tag_prefix = "my-tool-v"     # tags that trigger the orb-release workflow
 docker_namespace = "my-docker-org"
 docker_context = "docker-credentials"   # context holding Docker Hub creds
 orb_context = "orb-publishing"          # context holding orb publish creds
-rust_image = "my-org/ci-rust:pinned@sha256:…"   # image the CI build jobs compile in
+build_executor = "toolkit/rust_env_rolling"   # executor the build-binary job compiles in
+test_generation = true             # run the full generation self-test chain in CI (default)
 ```
 
-`rust_image` sets the image the `build-binary` / `orb-release-binary` jobs compile in. The default
-`rust:latest` has no libclang; set a clang-equipped, digest-pinned image here when the workspace
-pulls a bindgen-based `-sys` crate. This is the CI pipeline's image, distinct from the orb's own
-`[orb].base_image` / `builder_image`.
+`build_executor` sets the CircleCI executor the `build-binary` job compiles in — a named
+executor reference (e.g. an executor exposed by an orb you already depend on), not a raw image
+string. Unset falls back to this orb's own bundled `rust_builder` executor (`rust:latest`) —
+sufficient for most consumers; set it when a crate needs extra build tooling (e.g. libclang, for
+a bindgen-based `-sys` crate) the default doesn't carry. Recommended to match whatever executor
+your other test jobs (`[ci].requires_job`) already run in — since it's a named reference to an
+executor some orb already defines and pins, there's no second copy for a pin-management tool to
+keep in step (unlike `[orb].base_image` / `builder_image`, see
+[Container image pins](user-guide.md#container-image-pins)).
 
-If you pin it, note that `update` copies the value into the `rust_image:` lines of the generated
-CI config, so the pin is committed in two places and both must be bumped together — unlike
-`[orb].base_image` / `builder_image`, whose only artifact (`orb/Dockerfile`) is regenerated from
-this file on every run. See [Container image pins](user-guide.md#container-image-pins) for how to
-configure a pin-management tool to keep the two in step.
+`test_generation` (default `true`) gates the whole generation self-test chain — `build-binary`,
+`regenerate-orb`, `pack-orb`, `review-orb` — as one unit in the validation workflow. Set it to
+`false` once you're ready to validate CI only against the already-committed, released orb source:
+none of those four jobs run at all (only `check-ci-wiring` remains), and generator regressions
+are instead caught by this crate's own test suite rather than by production CI.
 
 MCP integration (`--mcp`) adds `mcp`, `mcp_context`, `mcp_earliest_version`, and
 `gen_orb_mcp_orb_version` here.

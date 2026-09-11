@@ -199,7 +199,7 @@ for the generated orb and CI, so it is safe to commit and review.
 | Section | Purpose |
 |---------|---------|
 | `[orb]` | `binary`, `namespaces`, `orb_dir`, `base_image`, `builder_image`, `circleci_cli_version` — the orb's own source and container |
-| `[ci]` | Workflow/job wiring: `build_workflow`, `release_workflow`, `requires_job`, `release_after_job`, `crate_tag_prefix`, `docker_namespace`, `docker_context`, `orb_context`, MCP fields, `rust_image`, and `live_regenerate` |
+| `[ci]` | Workflow/job wiring: `build_workflow`, `release_workflow`, `requires_job`, `release_after_job`, `crate_tag_prefix`, `docker_namespace`, `docker_context`, `orb_context`, MCP fields, `build_executor`, and `test_generation` |
 | `[record]` | Optional auto-record: after `generate`, commit the regenerated orb source back (GPG-signed) so the published orb stays in sync with the CLI. Stores only env-var **names** — the secrets stay in CI contexts |
 | `[orbs]`, `[[job_group]]`, `[[extra_job]]`, `[subcommand.*]` | Extra orb pins, composed jobs, custom jobs, and per-subcommand overrides (including `interactive` / `generate_job`) |
 
@@ -207,17 +207,21 @@ Two image knobs are easy to confuse:
 
 - `[orb].base_image` / `[orb].builder_image` configure the **orb's own** generated
   `Dockerfile` (the image your orb's consumers run).
-- `[ci].rust_image` configures the image the **CI build jobs** (`build-binary`,
-  `orb-release-binary`) compile in. The default `rust:latest` has no libclang; set a
-  clang-equipped, digest-pinned image (e.g. `jerusdp/ci-rust:rolling-6mo@sha256:…`) when
-  the workspace pulls a bindgen-based `-sys` crate.
+- `[ci].build_executor` configures the CircleCI executor the `build-binary` job
+  compiles in — an orb executor reference (e.g. `toolkit/rust_env_rolling`), not a raw
+  image string. Unset falls back to the job's own bundled default (`rust_builder`,
+  image `rust:latest`) — sufficient for most consumers; set it when a crate needs extra
+  build tooling (e.g. libclang, for a bindgen-based `-sys` crate) the default doesn't
+  carry. Recommended to match whatever executor `[ci].requires_job` already runs in.
 
-`[ci].live_regenerate` (default `true`) controls whether the validation workflow builds a
-fresh binary and runs `generate` against it every PR (`build-binary`/`regenerate-orb`),
-packing/reviewing that freshly-generated output. Set it to `false` once you're ready to
-validate CI only against the already-committed, released orb source — `pack-orb`/
-`review-orb` then check out and validate the committed `orb/src` tree instead, and
-generator regressions are caught by this crate's own test suite rather than by
+`[ci].test_generation` (default `true`) controls whether the validation workflow runs the
+whole generation self-test chain every PR — `build-binary` -> `regenerate-orb` ->
+`pack-orb` -> `review-orb`, building a fresh binary, running `generate` against it, then
+packing/reviewing that freshly-generated output. `check-ci-wiring` runs either way (a
+separate concern: wiring-vs-config drift, not generation-content validity). Set
+`test_generation` to `false` once you're ready to validate CI only against the
+already-committed, released orb source — none of the four testing jobs run at all, and
+generator regressions are instead caught by this crate's own test suite rather than by
 production CI.
 
 For the full walkthrough of these settings — and of composing a single complex job from several

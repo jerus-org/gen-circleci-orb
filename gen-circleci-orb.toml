@@ -35,6 +35,7 @@ custom_files = [
     "src/commands/build_container.yml",
     "src/commands/build_rust_binary.yml",
     "src/commands/set_https_remote.yml",
+    "src/executors/rust_builder.yml",
     "src/jobs/build_container.yml",
     "src/jobs/build_rust_binary.yml",
     "src/scripts/build-container.sh",
