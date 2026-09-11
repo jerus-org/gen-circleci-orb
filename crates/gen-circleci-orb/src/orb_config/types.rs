@@ -85,6 +85,13 @@ pub struct CiSection {
     /// clang-equipped image (e.g. `jerusdp/ci-rust:rolling-6mo@sha256:…`) when the
     /// workspace pulls a bindgen-based `-sys` crate so bindgen can run.
     pub rust_image: Option<String>,
+    /// `false` opts this consumer's validation workflow out of building a fresh
+    /// binary and running `generate` against it every PR — `pack-orb`/
+    /// `review-orb` instead validate the already-committed orb tree. Unset
+    /// (`None`) falls back to `true`, preserving today's live-dogfood behavior
+    /// for every existing consumer with zero action required. See
+    /// gen-circleci-orb#367.
+    pub live_regenerate: Option<bool>,
 }
 
 /// Default number of `cargo install` attempts in the generated Dockerfile's

@@ -1152,6 +1152,10 @@ impl Init {
                 .as_ref()
                 .map(|r| r.push_ssh_fingerprint.clone())
                 .unwrap_or_default(),
+            // Not gathered at init: a fresh consumer starts on the live-dogfood
+            // default; opt out later via `[ci] live_regenerate = false` in the
+            // toml when ready.
+            live_regenerate: true,
         };
 
         let mode = if self.dry_run {
@@ -1194,6 +1198,9 @@ impl Init {
             // Advanced knob — not gathered at init; set `[ci] rust_image` in the
             // toml when the workspace needs a clang-equipped build image.
             rust_image: None,
+            // Left unset (falls back to true) — a fresh consumer starts on the
+            // live-dogfood default; opt out later by setting this in the toml.
+            live_regenerate: None,
         });
         bootstrap.record = extras.record.clone();
         if self.dry_run {
@@ -1469,6 +1476,7 @@ mod tests {
             mcp_earliest_version: Some(extras.mcp_earliest_version.clone()),
             gen_orb_mcp_orb_version: None,
             rust_image: None,
+            live_regenerate: None,
         };
         assert_eq!(ci.build_workflow.as_deref(), Some("validation"));
         assert_eq!(ci.docker_context.as_deref(), Some(DEFAULT_DOCKER_CONTEXT));

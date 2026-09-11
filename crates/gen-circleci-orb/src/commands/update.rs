@@ -227,6 +227,7 @@ fn opts_from_config(config: &orb_config::OrbConfig) -> ci_patcher::PatchOpts {
         record_push_ssh_fingerprint: record
             .map(|r| r.push_ssh_fingerprint.clone())
             .unwrap_or_default(),
+        live_regenerate: ci.and_then(|c| c.live_regenerate).unwrap_or(true),
     }
 }
 
@@ -493,6 +494,23 @@ workflows:
         assert_eq!(opts.crate_tag_prefix, "mytool-v");
         // version pin is this binary's own version
         assert_eq!(opts.gen_circleci_orb_version, env!("CARGO_PKG_VERSION"));
+    }
+
+    #[test]
+    fn opts_from_config_live_regenerate_defaults_true_when_unset() {
+        // TOML has no [ci].live_regenerate — every existing consumer's committed
+        // config must keep today's live-dogfood behavior with zero action.
+        let config: orb_config::OrbConfig = toml::from_str(TOML).unwrap();
+        let opts = opts_from_config(&config);
+        assert!(opts.live_regenerate);
+    }
+
+    #[test]
+    fn opts_from_config_live_regenerate_honours_explicit_false() {
+        let toml_with_opt_out = format!("{TOML}live_regenerate = false\n");
+        let config: orb_config::OrbConfig = toml::from_str(&toml_with_opt_out).unwrap();
+        let opts = opts_from_config(&config);
+        assert!(!opts.live_regenerate);
     }
 
     #[test]
