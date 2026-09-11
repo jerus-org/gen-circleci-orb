@@ -2161,7 +2161,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- uuid 1.26.0
+- uuid 1.26.1
 
 ```text
 Copyright (c) 2014 The Rust Project Developers
@@ -4616,9 +4616,9 @@ Used by:
 - is_terminal_polyfill 1.70.2
 - once_cell_polyfill 1.70.2
 - serde_spanned 1.1.1
-- toml 1.1.5+spec-1.1.0
+- toml 1.1.6+spec-1.1.0
 - toml_datetime 1.1.1+spec-1.1.0
-- toml_edit 0.25.13+spec-1.1.0
+- toml_edit 0.25.15+spec-1.1.0
 - toml_parser 1.1.3+spec-1.1.0
 - toml_writer 1.1.2+spec-1.1.0
 
@@ -5304,7 +5304,7 @@ SOFTWARE.
 
 Used by:
 
-- gen-circleci-orb 0.1.12
+- gen-circleci-orb 0.1.13
 
 ```text
 MIT License
@@ -6242,7 +6242,7 @@ THE SOFTWARE.
 
 Used by:
 
-- console 0.16.4
+- console 0.16.6
 - dialoguer 0.12.0
 
 ```text
