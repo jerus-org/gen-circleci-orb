@@ -69,69 +69,19 @@ workflows:
                 - main
           requires:
             - security with sonarcloud
-      # build-binary (gen-circleci-orb/build_rust_binary) starts in parallel with
-      # the test suite; the gate moves to regenerate-orb so the slow release build
-      # overlaps the tests. regenerate-orb records (no_record=false): on a diff it
-      # GPG-signs, commits and
-      # pushes the regen early. That push starts a fresh pipeline and CircleCI
-      # auto-cancel-redundant kills this now-stale run, so the suite isn't run to
-      # completion twice; the fresh run finds the orb in sync and its required
-      # checks gate the merge. Gated on build-binary + common_tests so a regen is
-      # only pushed when the code passes. `release` supplies the BOT_* signing
-      # material; the write key is loaded via the fingerprint.
-      # pack/review consume the regenerated orb from the workspace (checkout:false
-      # + attach_workspace), so they validate exactly what was just generated.
-      # check-ci-wiring runs gen-circleci-orb/update (not /generate) with no
-      # attach_workspace, so it validates against the container's own pinned CLI,
-      # not the fresh in-PR binary regenerate-orb uses (#366). Bootstrap note: this
-      # job stays red until the fix that introduced it is released and the
-      # self-pin above is deliberately bumped to that release — the pinned CLI's
-      # own generator predates the new shape and doesn't recognise it yet.
+      # test_generation = false (gen-circleci-orb.toml): the generation
+      # self-test chain (build-binary -> regenerate-orb -> pack-orb ->
+      # review-orb) is omitted — this repo no longer builds and runs an
+      # unreleased binary as a gating CI step (#367). Generation correctness
+      # is instead proven by cargo test's fixture-cli/generate_fixture
+      # coverage. check-ci-wiring (gen-circleci-orb/update --check) still
+      # runs unconditionally: it validates this file's wiring against
+      # gen-circleci-orb.toml using the container's own pinned CLI — a pure
+      # text diff, unrelated to generation-content validity.
       # >>> gen-circleci-orb (managed — edits overwritten by 'gen-circleci-orb update')
-      - gen-circleci-orb/build_rust_binary:
-          name: build-binary
-          package: gen-circleci-orb
-      - gen-circleci-orb/generate:
-          name: regenerate-orb
-          binary: gen-circleci-orb
-          orb_namespace: jerus-org
-          orb_dir: orb
-          attach_workspace: true
-          ssh_fingerprint: "SHA256:OkxsH8Z6Iim6WDJBaII9eTT9aaO1f3eDc6IpsgYYPVg"
-          persist_orb_workspace: true
-          context: [release]
-          requires: [build-binary, toolkit/common_tests]
-          filters:
-            branches:
-              ignore:
-                - main
       - gen-circleci-orb/update:
           name: check-ci-wiring
           check: true
-          filters:
-            branches:
-              ignore:
-                - main
-      - orb-tools/pack:
-          name: pack-orb
-          checkout: false
-          source_dir: orb/src
-          pre-steps:
-            - attach_workspace:
-                at: .
-          requires: [regenerate-orb]
-          filters:
-            branches:
-              ignore:
-                - main
-      - orb-tools/review:
-          name: review-orb
-          checkout: false
-          source_dir: orb/src
-          pre-steps:
-            - attach_workspace:
-                at: .
-          requires: [pack-orb]
           filters:
             branches:
               ignore:
