@@ -69,19 +69,63 @@ workflows:
                 - main
           requires:
             - security with sonarcloud
-      # test_generation = false (gen-circleci-orb.toml): the generation
-      # self-test chain (build-binary -> regenerate-orb -> pack-orb ->
-      # review-orb) is omitted — this repo no longer builds and runs an
-      # unreleased binary as a gating CI step (#367). Generation correctness
-      # is instead proven by cargo test's fixture-cli/generate_fixture
-      # coverage. check-ci-wiring (gen-circleci-orb/update --check) still
-      # runs unconditionally: it validates this file's wiring against
-      # gen-circleci-orb.toml using the container's own pinned CLI — a pure
-      # text diff, unrelated to generation-content validity.
+      # test_generation = true (gen-circleci-orb.toml), STOPGAP REVERT of
+      # #381 (see gen-circleci-orb#382): regenerate-orb is currently the
+      # only mechanism that regenerates orb/src/** and commits it back for
+      # review before merge ([record]) — the release workflow only packs
+      # and publishes what's already committed, it never generates. build-
+      # binary uses [ci].build_executor = toolkit/rust_env_rolling (needs
+      # libclang for bindgen; the job's own bundled default is plain
+      # rust:latest). check-ci-wiring runs unconditionally regardless of
+      # test_generation — it validates wiring vs. gen-circleci-orb.toml
+      # using the container's own pinned CLI, a pure text diff unrelated to
+      # generation-content validity.
       # >>> gen-circleci-orb (managed — edits overwritten by 'gen-circleci-orb update')
+      - gen-circleci-orb/build_rust_binary:
+          name: build-binary
+          package: gen-circleci-orb
+          executor: toolkit/rust_env_rolling
+      - gen-circleci-orb/generate:
+          name: regenerate-orb
+          binary: gen-circleci-orb
+          orb_namespace: jerus-org
+          orb_dir: orb
+          attach_workspace: true
+          ssh_fingerprint: "SHA256:OkxsH8Z6Iim6WDJBaII9eTT9aaO1f3eDc6IpsgYYPVg"
+          persist_orb_workspace: true
+          context: [release]
+          requires: [build-binary, toolkit/common_tests]
+          filters:
+            branches:
+              ignore:
+                - main
       - gen-circleci-orb/update:
           name: check-ci-wiring
           check: true
+          filters:
+            branches:
+              ignore:
+                - main
+      - orb-tools/pack:
+          name: pack-orb
+          checkout: false
+          source_dir: orb/src
+          pre-steps:
+            - attach_workspace:
+                at: .
+          requires: [regenerate-orb]
+          filters:
+            branches:
+              ignore:
+                - main
+      - orb-tools/review:
+          name: review-orb
+          checkout: false
+          source_dir: orb/src
+          pre-steps:
+            - attach_workspace:
+                at: .
+          requires: [pack-orb]
           filters:
             branches:
               ignore:
