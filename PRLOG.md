@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - deps: update dependency gen-circleci-orb to v0.1.13(pr [#380])
+- decouple regen from pack/review (#382)(pr [#385])
 
 ## [0.1.13] - 2026-09-11
 
@@ -1063,6 +1064,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#380]: https://github.com/jerus-org/gen-circleci-orb/pull/380
 [#381]: https://github.com/jerus-org/gen-circleci-orb/pull/381
 [#383]: https://github.com/jerus-org/gen-circleci-orb/pull/383
+[#385]: https://github.com/jerus-org/gen-circleci-orb/pull/385
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.13...HEAD
 [0.1.13]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.12...v0.1.13
 [0.1.12]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.11...v0.1.12
