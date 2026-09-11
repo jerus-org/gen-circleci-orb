@@ -1,8 +1,8 @@
 BINARY="${BINARY_OVERRIDE:-$PACKAGE}"
 mkdir -p /tmp/workspace
-if [ -f "target/debug/$BINARY" ]; then
+if [[ -f "target/debug/$BINARY" ]]; then
   SRC="target/debug/$BINARY"
-elif [ -f "target/release/$BINARY" ]; then
+elif [[ -f "target/release/$BINARY" ]]; then
   # cargo_args passed --release (or -r), overriding the debug-profile default.
   SRC="target/release/$BINARY"
 else
