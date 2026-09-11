@@ -78,20 +78,22 @@ pub struct CiSection {
     /// jerus-org/gen-orb-mcp orb version pinned for the build_mcp_server job.
     /// Overrides the generator default when set. Only used when `mcp` is true.
     pub gen_orb_mcp_orb_version: Option<String>,
-    /// Docker image the `build_rust_binary` CI jobs (`build-binary`,
-    /// `orb-release-binary`) compile in. This configures the CI pipeline — not the
-    /// orb's own container (see `[orb].base_image`/`builder_image` for that). Unset
-    /// falls back to the job default (`rust:latest`), which has no libclang; set a
-    /// clang-equipped image (e.g. `jerusdp/ci-rust:rolling-6mo@sha256:…`) when the
-    /// workspace pulls a bindgen-based `-sys` crate so bindgen can run.
-    pub rust_image: Option<String>,
-    /// `false` opts this consumer's validation workflow out of building a fresh
-    /// binary and running `generate` against it every PR — `pack-orb`/
-    /// `review-orb` instead validate the already-committed orb tree. Unset
-    /// (`None`) falls back to `true`, preserving today's live-dogfood behavior
-    /// for every existing consumer with zero action required. See
-    /// gen-circleci-orb#367.
-    pub live_regenerate: Option<bool>,
+    /// CircleCI executor reference (e.g. `"toolkit/rust_env_rolling"`) the
+    /// `build-binary` CI job compiles in. This configures the CI pipeline — not
+    /// the orb's own container (see `[orb].base_image`/`builder_image` for
+    /// that). Unset falls back to the job's own bundled default executor
+    /// (`rust_builder`, image `rust:latest`) — sufficient for most consumers;
+    /// set this when a crate needs extra build tooling (e.g. libclang, for a
+    /// bindgen-based `-sys` crate) the default doesn't carry. Recommended to
+    /// match whatever executor `[ci].requires_job` already runs in.
+    pub build_executor: Option<String>,
+    /// `false` opts this consumer's validation workflow out of the entire
+    /// generation self-test chain — `build-binary`, `regenerate-orb`,
+    /// `pack-orb` and `review-orb` are all omitted (not just build/regenerate),
+    /// leaving only `check-ci-wiring`. Unset (`None`) falls back to `true`,
+    /// preserving today's live-dogfood behavior for every existing consumer
+    /// with zero action required. See gen-circleci-orb#367.
+    pub test_generation: Option<bool>,
 }
 
 /// Default number of `cargo install` attempts in the generated Dockerfile's

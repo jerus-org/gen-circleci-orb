@@ -1,0 +1,14 @@
+description: >-
+  Rust build environment for compiling a binary in CI (used by the
+  build_rust_binary job). Defaults to rust:latest — sufficient for most
+  consumers. Override via [ci].build_executor in gen-circleci-orb.toml for a
+  crate needing extra build tooling (e.g. libclang for a bindgen-based `-sys`
+  crate) that this default doesn't carry; recommended to match whatever
+  executor the consumer's other test jobs already use.
+docker:
+- image: rust:<< parameters.tag >>
+parameters:
+  tag:
+    type: string
+    description: Docker image tag.
+    default: latest

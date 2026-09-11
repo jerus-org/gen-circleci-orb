@@ -7,10 +7,15 @@ parameters:
     type: string
     description: Binary target name if it differs from the package name; defaults to package name
     default: ''
-  rust_image:
-    type: string
-    description: Docker image to use for the Rust build
-    default: rust:latest
+  executor:
+    type: executor
+    default: rust_builder
+    description: >-
+      Executor to compile in. Defaults to this orb's own rust_builder
+      executor (rust:latest) — sufficient for most consumers. Override for a
+      crate needing extra build tooling (e.g. libclang for a bindgen-based
+      `-sys` crate); recommended to match whatever executor the workspace's
+      other test jobs already use.
   cargo_args:
     type: string
     description: Additional arguments passed to cargo build --release
@@ -24,8 +29,7 @@ parameters:
       `medium` (2 vCPU / 4 GB) suits most cargo builds; override to a larger
       class if a heavy workspace OOMs.
 resource_class: << parameters.resource_class >>
-docker:
-  - image: << parameters.rust_image >>
+executor: << parameters.executor >>
 steps:
   - checkout
   - build_rust_binary:

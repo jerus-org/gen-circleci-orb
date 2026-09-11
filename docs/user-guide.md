@@ -587,11 +587,11 @@ it is ever needed, regardless of whether AI tooling is in use at the time.
 
 ### Container image pins
 
-The images you pin in `gen-circleci-orb.toml` — `[orb].base_image` / `builder_image` and
-`[ci].rust_image` — go stale: a newer tag supersedes the one you pinned, or the tag you
-pinned is rebuilt under a new digest. Either way the pin should move on its own, without a
-gen-circleci-orb release: it lives in your repo and is yours to control. A rebuild of the
-same tag routinely carries security fixes you want in promptly.
+The images you pin in `gen-circleci-orb.toml` — `[orb].base_image` / `builder_image` —
+go stale: a newer tag supersedes the one you pinned, or the tag you pinned is rebuilt
+under a new digest. Either way the pin should move on its own, without a gen-circleci-orb
+release: it lives in your repo and is yours to control. A rebuild of the same tag
+routinely carries security fixes you want in promptly.
 
 The toml is the single source of truth for every pin, but the two generated artifacts it
 feeds behave differently, and that difference is what a pin-management tool must account
@@ -602,29 +602,36 @@ for:
 | `orb/Dockerfile` | Yes — rebuilt from the toml on every run | Toml only; a pin written into the Dockerfile is stripped on the next regeneration |
 | `.circleci/config.yml` | No — CircleCI reads it from the commit | Toml **and** the committed config, which must agree |
 
-So `[ci].rust_image` is stored twice: in the toml, and in the `rust_image:` lines `update`
-emits into the CI config. **Both copies have to move together.** Bump one without the
-other and `update --check` fails on the drift — correctly, since the wiring genuinely no
-longer matches the toml. This applies to whatever the pin holds: a tag bump splits the two
-copies exactly as a digest bump does.
+`base_image`/`builder_image` only feed `orb/Dockerfile`, which is fully rebuilt from the
+toml on every run — a single source of truth, no second copy to keep in step. The
+dual-copy problem in the table's second row only bites a pin that also feeds
+`.circleci/config.yml`; none of `[orb]`'s image fields do that today, so this section is
+forward-looking guidance for any future pin that does.
+
+**`[ci].build_executor` is not an image pin and does not need this treatment.** It's a
+named CircleCI executor reference (e.g. `toolkit/rust_env_rolling`), not an image string —
+whichever orb defines that executor (e.g. `circleci-toolkit`) owns its own digest pinning.
+Setting `build_executor` just tells `build-binary` which already-pinned executor to run
+in; there is no second copy for a pin-management tool to keep in step.
 
 #### Example: Renovate
 
-Any pin-management tool works, provided it updates both copies in the same change.
-Renovate needs a custom manager per pin, because an image inside a toml value or a
-CircleCI job parameter is not something its built-in managers recognise. The example
-below pins by digest, the usual case; the same shape works for a tag-only pin with the
-`currentDigest` group dropped:
+For a pin that *does* feed `.circleci/config.yml` (hypothetically — none of this orb's
+config currently does), any pin-management tool works, provided it updates both the toml
+copy and the CI-config copy in the same change. Renovate needs a custom manager per pin,
+because an image inside a toml value or a CircleCI job parameter is not something its
+built-in managers recognise. Shape (digest pin; drop the `currentDigest` group for a
+tag-only pin):
 
 ```json
 {
   "customManagers": [
     {
       "customType": "regex",
-      "description": "Pinned build image digest in gen-circleci-orb.toml ([ci].rust_image)",
+      "description": "Pinned image digest in gen-circleci-orb.toml",
       "managerFilePatterns": ["/^gen-circleci-orb\\.toml$/"],
       "matchStrings": [
-        "rust_image\\s*=\\s*\"(?<depName>[^:\"]+):(?<currentValue>[^@\"]+)@(?<currentDigest>sha256:[a-f0-9]+)\""
+        "some_field\\s*=\\s*\"(?<depName>[^:\"]+):(?<currentValue>[^@\"]+)@(?<currentDigest>sha256:[a-f0-9]+)\""
       ],
       "datasourceTemplate": "docker"
     },
@@ -633,7 +640,7 @@ below pins by digest, the usual case; the same shape works for a tag-only pin wi
       "description": "The same digest, as emitted into the CircleCI config",
       "managerFilePatterns": ["/^\\.circleci/.+\\.ya?ml$/"],
       "matchStrings": [
-        "rust_image:\\s*(?<depName>[^:\\s]+):(?<currentValue>[^@\\s]+)@(?<currentDigest>sha256:[a-f0-9]+)"
+        "some_field:\\s*(?<depName>[^:\\s]+):(?<currentValue>[^@\\s]+)@(?<currentDigest>sha256:[a-f0-9]+)"
       ],
       "datasourceTemplate": "docker"
     }

@@ -185,7 +185,9 @@ fn opts_from_config(config: &orb_config::OrbConfig) -> ci_patcher::PatchOpts {
     let record = config.record.as_ref();
     ci_patcher::PatchOpts {
         binary: orb.and_then(|o| o.binary.clone()).unwrap_or_default(),
-        rust_image: ci.and_then(|c| c.rust_image.clone()).unwrap_or_default(),
+        build_executor: ci
+            .and_then(|c| c.build_executor.clone())
+            .unwrap_or_default(),
         namespaces: orb.and_then(|o| o.namespaces.clone()).unwrap_or_default(),
         orb_dir: crate::orb_config::non_empty(orb.map(|o| o.orb_dir.clone()))
             .unwrap_or_else(|| crate::orb_config::DEFAULT_ORB_DIR.to_string()),
@@ -227,7 +229,7 @@ fn opts_from_config(config: &orb_config::OrbConfig) -> ci_patcher::PatchOpts {
         record_push_ssh_fingerprint: record
             .map(|r| r.push_ssh_fingerprint.clone())
             .unwrap_or_default(),
-        live_regenerate: ci.and_then(|c| c.live_regenerate).unwrap_or(true),
+        test_generation: ci.and_then(|c| c.test_generation).unwrap_or(true),
     }
 }
 
@@ -497,20 +499,37 @@ workflows:
     }
 
     #[test]
-    fn opts_from_config_live_regenerate_defaults_true_when_unset() {
-        // TOML has no [ci].live_regenerate — every existing consumer's committed
+    fn opts_from_config_test_generation_defaults_true_when_unset() {
+        // TOML has no [ci].test_generation — every existing consumer's committed
         // config must keep today's live-dogfood behavior with zero action.
         let config: orb_config::OrbConfig = toml::from_str(TOML).unwrap();
         let opts = opts_from_config(&config);
-        assert!(opts.live_regenerate);
+        assert!(opts.test_generation);
     }
 
     #[test]
-    fn opts_from_config_live_regenerate_honours_explicit_false() {
-        let toml_with_opt_out = format!("{TOML}live_regenerate = false\n");
+    fn opts_from_config_test_generation_honours_explicit_false() {
+        let toml_with_opt_out = format!("{TOML}test_generation = false\n");
         let config: orb_config::OrbConfig = toml::from_str(&toml_with_opt_out).unwrap();
         let opts = opts_from_config(&config);
-        assert!(!opts.live_regenerate);
+        assert!(!opts.test_generation);
+    }
+
+    #[test]
+    fn opts_from_config_build_executor_defaults_empty_when_unset() {
+        // TOML has no [ci].build_executor — the job falls back to its own
+        // bundled default executor.
+        let config: orb_config::OrbConfig = toml::from_str(TOML).unwrap();
+        let opts = opts_from_config(&config);
+        assert!(opts.build_executor.is_empty());
+    }
+
+    #[test]
+    fn opts_from_config_build_executor_honours_explicit_value() {
+        let toml_with_executor = format!("{TOML}build_executor = \"toolkit/rust_env_rolling\"\n");
+        let config: orb_config::OrbConfig = toml::from_str(&toml_with_executor).unwrap();
+        let opts = opts_from_config(&config);
+        assert_eq!(opts.build_executor, "toolkit/rust_env_rolling");
     }
 
     #[test]
