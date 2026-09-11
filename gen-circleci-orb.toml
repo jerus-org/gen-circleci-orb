@@ -92,12 +92,12 @@ orb_context = "orb-publishing"
 mcp = true
 mcp_context = ["release", "bot-check", "pcu-app"]
 mcp_earliest_version = "0.0.11"
-# Image the build_rust_binary CI jobs (build-binary, orb-release-binary) compile
-# in. This configures the CI pipeline, not the orb's own container ([orb].base_image
-# / builder_image do that). Overrides the job default (rust:latest), which has NO
-# libclang — bindgen fails there (openssl-sys via sequoia-openpgp's OpenSSL backend
-# once it pulls the ossl crate). ci-rust:rolling-6mo is the toolkit's compile image
-# and carries clang + libclang. Digest-pinned so it survives regeneration and
-# CircleCI can't serve a stale moving tag from cache; Renovate updates the digest
-# via a customManager (renovate.json).
-rust_image = "jerusdp/ci-rust:rolling-6mo@sha256:a0be475b440dfb940ee2b89e29c3299e161aa6868f7191871d70076769200c6d"
+# Disables the generation self-test chain (build-binary -> regenerate-orb ->
+# pack-orb -> review-orb) in the validation workflow. This repo already
+# proves generation correctness via cargo test's fixture-cli/generate_fixture
+# coverage (crates/gen-circleci-orb/tests), so re-running generate/pack/review
+# against a freshly-built (unreleased) binary on every PR is pure CI expense
+# with no new information — see gen-circleci-orb#367. check-ci-wiring
+# (gen-circleci-orb/update --check) still runs unconditionally: it verifies
+# wiring vs. this file, a separate concern from generation-content validity.
+test_generation = false
