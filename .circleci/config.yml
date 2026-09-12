@@ -69,17 +69,20 @@ workflows:
                 - main
           requires:
             - security with sonarcloud
-      # test_generation = true (gen-circleci-orb.toml), STOPGAP REVERT of
-      # #381 (see gen-circleci-orb#382): regenerate-orb is currently the
-      # only mechanism that regenerates orb/src/** and commits it back for
-      # review before merge ([record]) — the release workflow only packs
-      # and publishes what's already committed, it never generates. build-
-      # binary uses [ci].build_executor = toolkit/rust_env_rolling (needs
-      # libclang for bindgen; the job's own bundled default is plain
-      # rust:latest). check-ci-wiring runs unconditionally regardless of
-      # test_generation — it validates wiring vs. gen-circleci-orb.toml
-      # using the container's own pinned CLI, a pure text diff unrelated to
-      # generation-content validity.
+      # test_generation = false (gen-circleci-orb.toml): pack-orb/review-orb
+      # (redundant re-validation of already-proven generator output, #378)
+      # are omitted. build-binary/regenerate-orb keep running because
+      # [record] is enabled — regenerate-orb is the mechanism that
+      # regenerates orb/src/** and commits it back for review before merge;
+      # the release workflow only packs/publishes what's already committed,
+      # it never generates (gen-circleci-orb#382). build-binary uses
+      # [ci].build_executor = toolkit/rust_env_rolling (needs libclang for
+      # bindgen; the job's own bundled default is plain rust:latest, debug
+      # profile — release optimization isn't needed since the binary is
+      # only ever introspected via --help, #384). check-ci-wiring runs
+      # unconditionally regardless of test_generation — it validates wiring
+      # vs. gen-circleci-orb.toml using the container's own pinned CLI, a
+      # pure text diff unrelated to generation-content validity.
       # >>> gen-circleci-orb (managed — edits overwritten by 'gen-circleci-orb update')
       - gen-circleci-orb/build_rust_binary:
           name: build-binary
@@ -102,30 +105,6 @@ workflows:
       - gen-circleci-orb/update:
           name: check-ci-wiring
           check: true
-          filters:
-            branches:
-              ignore:
-                - main
-      - orb-tools/pack:
-          name: pack-orb
-          checkout: false
-          source_dir: orb/src
-          pre-steps:
-            - attach_workspace:
-                at: .
-          requires: [regenerate-orb]
-          filters:
-            branches:
-              ignore:
-                - main
-      - orb-tools/review:
-          name: review-orb
-          checkout: false
-          source_dir: orb/src
-          pre-steps:
-            - attach_workspace:
-                at: .
-          requires: [pack-orb]
           filters:
             branches:
               ignore:
