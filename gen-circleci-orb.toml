@@ -92,18 +92,13 @@ orb_context = "orb-publishing"
 mcp = true
 mcp_context = ["release", "bot-check", "pcu-app"]
 mcp_earliest_version = "0.0.11"
-# STOPGAP REVERT (gen-circleci-orb#382): test_generation = false was tried
-# and found to break the dev workflow for THIS repo specifically — the
-# regenerate-orb job (test_generation's build-binary -> regenerate-orb step)
-# is currently the ONLY mechanism that regenerates orb/src/** and commits it
-# back for review before merge ([record], enabled above). The release
-# workflow only packs/publishes whatever's already committed to main; it
-# never generates. With test_generation = false, orb/src silently drifts out
-# of sync with the CLI and the next release would ship stale generated
-# content. Reverted to true until #382 designs a real fix (e.g. splitting
-# "regenerate + record" from "pack/review" so the former can stay on without
-# re-adding the pack/review CI cost #378 was about).
-test_generation = true
+# gen-circleci-orb#382: build-binary/regenerate-orb keep running whenever
+# [record] is enabled (see needs_generation_regen() in ci_patcher), so
+# setting this to false here no longer breaks the dev workflow the way it
+# did in PR #381 — orb/src still regenerates and gets committed back for
+# review on every PR. Only pack-orb/review-orb (redundant re-validation of
+# already-proven generator output, #378) are dropped.
+test_generation = false
 # Orb executor the build-binary/regenerate-orb-binary compile step runs in.
 # Optional — the job's own bundled `rust_builder` default (rust:latest) has
 # NO libclang, and this crate needs it (bindgen via sequoia-openpgp's OpenSSL
