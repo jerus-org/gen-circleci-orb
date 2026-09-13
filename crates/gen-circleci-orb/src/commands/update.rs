@@ -41,48 +41,86 @@ impl Update {
         }
         let opts = opts_from_config(&config);
 
-        let config_path = self.ci_dir.join("config.yml");
-        let current = std::fs::read_to_string(&config_path)
-            .with_context(|| format!("reading {}", config_path.display()))?;
-        let (resynced, report) = ci_patcher::resync_build(&current, &opts);
+        let mut out_of_date = false;
+        for (filename, resync_fn) in resync_targets(&opts) {
+            let path = self.ci_dir.join(&filename);
+            // The post_merge_ci_file is the one target most consumers won't
+            // already have (see docs/post-merge-regeneration.md): its
+            // absence means "create it," not a real missing-file error —
+            // unlike config.yml, which every consumer already has.
+            let is_post_merge_target = !opts.post_merge_branch_patterns.is_empty()
+                && filename == opts.post_merge_ci_file
+                && filename != "config.yml";
+            let current = if is_post_merge_target && !path.exists() {
+                String::new()
+            } else {
+                std::fs::read_to_string(&path)
+                    .with_context(|| format!("reading {}", path.display()))?
+            };
+            let (resynced, report) = resync_fn(&current, &opts);
 
-        // Content the strip kept because it was not recognised as ours, yet sat
-        // inside a managed-marker region: preserved, but worth a human's eyes.
-        if !report.warnings.is_empty() {
-            eprintln!(
-                "warning: {} item(s) inside a gen-circleci-orb managed region were not recognised \
-                 and have been preserved — review them (a marker may be damaged, or custom content \
-                 was added inside a managed block):",
-                report.warnings.len()
-            );
-            for w in &report.warnings {
-                eprintln!("  - {w}");
+            // Content the strip kept because it was not recognised as ours, yet
+            // sat inside a managed-marker region: preserved, but worth a human's
+            // eyes.
+            if !report.warnings.is_empty() {
+                eprintln!(
+                    "warning: {} item(s) inside a gen-circleci-orb managed region in {} \
+                     were not recognised and have been preserved — review them (a marker \
+                     may be damaged, or custom content was added inside a managed block):",
+                    report.warnings.len(),
+                    filename,
+                );
+                for w in &report.warnings {
+                    eprintln!("  - {w}");
+                }
+            }
+
+            if self.check {
+                if resynced != current {
+                    eprintln!(
+                        "{}",
+                        drift_message(&opts.gen_circleci_orb_version, &current, &resynced)
+                    );
+                    out_of_date = true;
+                }
+                continue;
+            }
+
+            if resynced != current {
+                // The consumer's own jobs and comments live in this file and are
+                // rewritten wholesale, so it is replaced rather than truncated.
+                crate::fs_atomic::write_atomically(&path, &resynced)
+                    .with_context(|| format!("writing {}", path.display()))?;
+                println!("Re-synced CI wiring in {}", path.display());
+            } else {
+                println!("{} CI wiring already up to date.", path.display());
             }
         }
 
         if self.check {
-            if resynced != current {
-                eprintln!(
-                    "{}",
-                    drift_message(&opts.gen_circleci_orb_version, &current, &resynced)
-                );
+            if out_of_date {
                 anyhow::bail!("CI wiring is out of date — run `gen-circleci-orb update`");
             }
             println!("CI wiring is up to date.");
-            return Ok(());
-        }
-
-        if resynced != current {
-            // The consumer's own jobs and comments live in this file and are
-            // rewritten wholesale, so it is replaced rather than truncated.
-            crate::fs_atomic::write_atomically(&config_path, &resynced)
-                .with_context(|| format!("writing {}", config_path.display()))?;
-            println!("Re-synced CI wiring in {}", config_path.display());
-        } else {
-            println!("{} CI wiring already up to date.", config_path.display());
         }
         Ok(())
     }
+}
+
+/// Files (relative to `ci_dir`) `update` resyncs, and the function that
+/// resyncs each — always `config.yml`, plus `[post_merge_regen]`'s named file
+/// when it differs from `config.yml` (the same-file case is folded into
+/// `config.yml`'s own resync via `resync_build_composed`).
+fn resync_targets(opts: &ci_patcher::PatchOpts) -> Vec<(String, ci_patcher::PatchFn)> {
+    let mut targets: Vec<(String, ci_patcher::PatchFn)> =
+        vec![("config.yml".to_string(), ci_patcher::resync_build_composed)];
+    if !opts.post_merge_branch_patterns.is_empty() && opts.post_merge_ci_file != "config.yml" {
+        targets.push((
+            opts.post_merge_ci_file.clone(),
+            ci_patcher::resync_post_merge_regen,
+        ));
+    }
+    targets
 }
 
 /// Validate that the loaded config carries the sections/fields `update` needs to
@@ -157,6 +195,19 @@ fn validate_config_completeness(config: &orb_config::OrbConfig) -> Result<Vec<St
                 .to_string(),
         );
     }
+    if config.post_merge_regen.is_some() {
+        let record_enabled = config.record.as_ref().is_some_and(|r| r.enabled);
+        if !record_enabled {
+            anyhow::bail!(
+                "gen-circleci-orb.toml has a [post_merge_regen] section but \
+                 [record].enabled is not true — [post_merge_regen] relocates \
+                 regen+record, and there is nothing to relocate without \
+                 [record] enabled. Either enable [record] or remove \
+                 [post_merge_regen]."
+            );
+        }
+    }
+
     if ci.mcp.unwrap_or(false) {
         if is_blank(&ci.mcp_earliest_version) {
             warnings.push(
@@ -183,6 +234,7 @@ fn opts_from_config(config: &orb_config::OrbConfig) -> ci_patcher::PatchOpts {
     let orb = config.orb.as_ref();
     let ci = config.ci.as_ref();
     let record = config.record.as_ref();
+    let post_merge_regen = config.post_merge_regen.as_ref();
     ci_patcher::PatchOpts {
         binary: orb.and_then(|o| o.binary.clone()).unwrap_or_default(),
         build_executor: ci
@@ -230,6 +282,13 @@ fn opts_from_config(config: &orb_config::OrbConfig) -> ci_patcher::PatchOpts {
             .map(|r| r.push_ssh_fingerprint.clone())
             .unwrap_or_default(),
         test_generation: ci.and_then(|c| c.test_generation).unwrap_or(true),
+        post_merge_branch_patterns: post_merge_regen
+            .map(|p| p.branch_patterns.clone())
+            .unwrap_or_default(),
+        post_merge_workflow: post_merge_regen
+            .map(|p| p.workflow.clone())
+            .unwrap_or_default(),
+        post_merge_ci_file: post_merge_regen.map(|p| p.file.clone()).unwrap_or_default(),
     }
 }
 
@@ -272,7 +331,7 @@ fn line_diff(current: &str, would_be: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::orb_config::{CiSection, OrbConfig, OrbSection, RecordConfig};
+    use crate::orb_config::{CiSection, OrbConfig, OrbSection, PostMergeRegenConfig, RecordConfig};
 
     // ── config completeness (#155): update must rely on init-captured config ──
 
@@ -405,6 +464,61 @@ mod tests {
     }
 
     #[test]
+    fn validate_fails_when_post_merge_regen_present_without_record_enabled() {
+        // [post_merge_regen] relocates regen+record — nothing to relocate
+        // without [record].enabled = true. gen-circleci-orb#328.
+        let config = OrbConfig {
+            record: None,
+            post_merge_regen: Some(PostMergeRegenConfig {
+                branch_patterns: vec!["renovate/*".to_string()],
+                workflow: "update_prlog".to_string(),
+                file: "update_prlog.yml".to_string(),
+            }),
+            ..complete_config()
+        };
+        let err = validate_config_completeness(&config).unwrap_err();
+        assert!(
+            err.to_string().contains("[post_merge_regen]") && err.to_string().contains("[record]"),
+            "error must name both sections: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_fails_when_post_merge_regen_present_with_record_disabled() {
+        let config = OrbConfig {
+            record: Some(RecordConfig {
+                enabled: false,
+                ..RecordConfig::default()
+            }),
+            post_merge_regen: Some(PostMergeRegenConfig {
+                branch_patterns: vec!["renovate/*".to_string()],
+                workflow: "update_prlog".to_string(),
+                file: "update_prlog.yml".to_string(),
+            }),
+            ..complete_config()
+        };
+        let err = validate_config_completeness(&config).unwrap_err();
+        assert!(err.to_string().contains("[post_merge_regen]"));
+    }
+
+    #[test]
+    fn validate_passes_when_post_merge_regen_present_with_record_enabled() {
+        let config = OrbConfig {
+            post_merge_regen: Some(PostMergeRegenConfig {
+                branch_patterns: vec!["renovate/*".to_string()],
+                workflow: "update_prlog".to_string(),
+                file: "update_prlog.yml".to_string(),
+            }),
+            ..complete_config()
+        };
+        let warnings = validate_config_completeness(&config).unwrap();
+        assert!(
+            warnings.is_empty(),
+            "a complete config with valid post_merge_regen must produce no warnings: {warnings:?}"
+        );
+    }
+
+    #[test]
     fn validate_no_record_warning_when_record_present_even_if_disabled() {
         let config = OrbConfig {
             record: Some(RecordConfig {
@@ -533,6 +647,32 @@ workflows:
     }
 
     #[test]
+    fn opts_from_config_post_merge_regen_defaults_empty_when_unset() {
+        // TOML has no [post_merge_regen] — the feature is off, zero behavior
+        // change for every existing consumer.
+        let config: orb_config::OrbConfig = toml::from_str(TOML).unwrap();
+        let opts = opts_from_config(&config);
+        assert!(opts.post_merge_branch_patterns.is_empty());
+        assert_eq!(opts.post_merge_workflow, "");
+        assert_eq!(opts.post_merge_ci_file, "");
+    }
+
+    #[test]
+    fn opts_from_config_maps_post_merge_regen_section() {
+        let toml_with_pmr = format!(
+            "{TOML}\n[post_merge_regen]\nbranch_patterns = [\"renovate/*\"]\nworkflow = \"update_prlog\"\nfile = \"update_prlog.yml\"\n"
+        );
+        let config: orb_config::OrbConfig = toml::from_str(&toml_with_pmr).unwrap();
+        let opts = opts_from_config(&config);
+        assert_eq!(
+            opts.post_merge_branch_patterns,
+            vec!["renovate/*".to_string()]
+        );
+        assert_eq!(opts.post_merge_workflow, "update_prlog");
+        assert_eq!(opts.post_merge_ci_file, "update_prlog.yml");
+    }
+
+    #[test]
     fn update_check_fails_on_drift_and_writes_nothing() {
         let dir = TempDir::new().unwrap();
         let (toml, ci_dir) = write_repo(&dir, TOML, OLD_CONFIG);
@@ -587,5 +727,92 @@ workflows:
             check: true,
         };
         cmd2.run().unwrap();
+    }
+
+    const TOML_WITH_POST_MERGE_REGEN: &str = "\
+[orb]
+binary = \"mytool\"
+namespaces = [\"my-org\"]
+orb_dir = \"orb\"
+
+[ci]
+build_workflow = \"validation\"
+requires_job = \"toolkit/common_tests\"
+crate_tag_prefix = \"mytool-v\"
+docker_namespace = \"my-docker-org\"
+
+[record]
+enabled = true
+contexts = [\"release\"]
+
+[post_merge_regen]
+branch_patterns = [\"renovate/*\"]
+workflow = \"update_prlog\"
+file = \"update_prlog.yml\"
+";
+
+    const UPDATE_PRLOG_CONFIG: &str = "\
+version: 2.1
+
+orbs:
+  toolkit: jerus-org/circleci-toolkit@7.4.0
+
+workflows:
+  update_prlog:
+    jobs:
+      - toolkit/update_prlog:
+          context: [pcu-app]
+";
+
+    #[test]
+    fn update_resyncs_the_post_merge_regen_file_too() {
+        // gen-circleci-orb#328: when [post_merge_regen] names a dedicated
+        // file, `update` must resync it alongside config.yml, not just
+        // config.yml.
+        let dir = TempDir::new().unwrap();
+        let (toml, ci_dir) = write_repo(&dir, TOML_WITH_POST_MERGE_REGEN, OLD_CONFIG);
+        fs::write(ci_dir.join("update_prlog.yml"), UPDATE_PRLOG_CONFIG).unwrap();
+        let cmd = Update {
+            config: toml,
+            ci_dir: ci_dir.clone(),
+            check: false,
+        };
+        cmd.run().unwrap();
+        let after = fs::read_to_string(ci_dir.join("update_prlog.yml")).unwrap();
+        assert!(
+            after.contains("name: post-merge-build-binary"),
+            "update_prlog.yml must gain the relocated chain:\n{after}"
+        );
+        assert!(
+            after.contains("toolkit/update_prlog:"),
+            "the consumer's pre-existing job must survive:\n{after}"
+        );
+
+        // re-running update is now a no-op (both files current).
+        let cmd2 = Update {
+            config: dir.path().join("gen-circleci-orb.toml"),
+            ci_dir,
+            check: true,
+        };
+        cmd2.run().unwrap();
+    }
+
+    #[test]
+    fn update_creates_a_missing_post_merge_regen_file() {
+        // gen-circleci-orb#328 review finding: most consumers won't already
+        // have a dedicated post-merge file — `update` must create it, not
+        // error out reading a file that was never there.
+        let dir = TempDir::new().unwrap();
+        let (toml, ci_dir) = write_repo(&dir, TOML_WITH_POST_MERGE_REGEN, OLD_CONFIG);
+        // Deliberately no update_prlog.yml written.
+        let cmd = Update {
+            config: toml,
+            ci_dir: ci_dir.clone(),
+            check: false,
+        };
+        cmd.run().unwrap();
+        let created = fs::read_to_string(ci_dir.join("update_prlog.yml")).unwrap();
+        assert!(created.starts_with("version: 2.1"));
+        assert!(created.contains("name: post-merge-build-binary"));
     }
 }

@@ -555,6 +555,7 @@ pub(crate) fn build_bootstrap_config(
         job_group: existing.job_group.clone(),
         extra_job: existing.extra_job.clone(),
         record: None, // populated by run() after gathering extras
+        post_merge_regen: existing.post_merge_regen.clone(),
     }
 }
 
@@ -1115,6 +1116,8 @@ impl Init {
             no_record: true,
             // init writes the orb for real; verify-only check mode is off.
             check: false,
+            // init never records (no_record above), so this is moot either way.
+            allow_main_record: false,
         };
         gen.run()?;
 
@@ -1157,6 +1160,12 @@ impl Init {
             // default; opt out later via `[ci] test_generation = false` in the
             // toml when ready.
             test_generation: true,
+            // Not gathered at init — an advanced knob configured later via
+            // `[post_merge_regen]` in the toml, once the consumer has set up
+            // the CircleCI "PR merged" trigger this feature depends on.
+            post_merge_branch_patterns: vec![],
+            post_merge_workflow: String::new(),
+            post_merge_ci_file: String::new(),
         };
 
         let mode = if self.dry_run {
@@ -1205,6 +1214,12 @@ impl Init {
             test_generation: None,
         });
         bootstrap.record = extras.record.clone();
+        if bootstrap.post_merge_regen.is_some() {
+            println!(
+                "{}",
+                crate::commands::generate::post_merge_regen_trigger_reminder()
+            );
+        }
         if self.dry_run {
             let content = toml::to_string_pretty(&bootstrap)?;
             println!("(dry-run) Would write {}", config_path.display());

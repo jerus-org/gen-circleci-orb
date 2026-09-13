@@ -15,4 +15,5 @@ set -- gen-circleci-orb generate
 [[ -n "${CONFIG:-}" ]] && set -- "$@" --config "${CONFIG}"
 [[ "${NO_RECORD:-false}" = "true" ]] && set -- "$@" --no-record
 [[ "${CHECK:-false}" = "true" ]] && set -- "$@" --check
+[[ "${ALLOW_MAIN_RECORD:-false}" = "true" ]] && set -- "$@" --allow-main-record
 "$@"

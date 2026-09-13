@@ -10,6 +10,7 @@ pub struct OrbConfig {
     pub job_group: Option<Vec<JobGroup>>,
     pub extra_job: Option<Vec<ExtraJob>>,
     pub record: Option<RecordConfig>,
+    pub post_merge_regen: Option<PostMergeRegenConfig>,
 }
 
 /// Auto-record configuration: after `generate`, commit the regenerated orb
@@ -58,6 +59,47 @@ pub struct RecordConfig {
     /// The record CI job attaches these so the signing material is available at
     /// runtime.
     pub contexts: Vec<String>,
+}
+
+/// Relocates regen+record (and, per `[ci].test_generation`, the pack/review
+/// self-test) off a qualifying PR branch into a CI-managed post-merge
+/// workflow — see gen-circleci-orb#328. Depends on `[record]` being enabled;
+/// there is nothing to relocate otherwise.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(default)]
+pub struct PostMergeRegenConfig {
+    /// Bash-glob branch-name pattern(s) identifying a PR whose regen+record
+    /// should be relocated here instead of running on the PR's own branch
+    /// (e.g. `["renovate/*", "dependabot/*"]`). Any branch matching any
+    /// pattern qualifies.
+    pub branch_patterns: Vec<String>,
+    /// Name of the workflow (within `file` below) the relocated jobs are
+    /// added to.
+    pub workflow: String,
+    /// CI file (relative to the CI directory, e.g. `.circleci/`) containing
+    /// that workflow. Defaults to `config.yml` (the primary file) — only
+    /// specify this when the target workflow lives in a separate file (e.g.
+    /// a dedicated "pull_request merged"-triggered pipeline).
+    #[serde(default = "default_post_merge_regen_file")]
+    pub file: String,
+}
+
+fn default_post_merge_regen_file() -> String {
+    "config.yml".to_string()
+}
+
+/// Hand-written (not derived) so a bare `::default()` agrees with what
+/// deserializing an omitted `file` key produces — `derive(Default)` would
+/// give `String::default()` (empty), silently disagreeing with the
+/// `#[serde(default = "default_post_merge_regen_file")]` on the field itself.
+impl Default for PostMergeRegenConfig {
+    fn default() -> Self {
+        Self {
+            branch_patterns: Vec::new(),
+            workflow: String::new(),
+            file: default_post_merge_regen_file(),
+        }
+    }
 }
 
 /// CI pipeline values gathered at `init` time, stored so future re-runs

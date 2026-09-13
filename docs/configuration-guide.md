@@ -15,6 +15,7 @@ single complex job from several commands, see the
 | `[orb]` | The orb's own source and container |
 | `[ci]` | Workflow and job wiring for the release pipeline |
 | `[record]` | Optional auto-record of the regenerated orb source |
+| `[post_merge_regen]` | Optional: relocate regen+record for a qualifying bot PR into a post-merge workflow |
 
 ## `[orb]` — the orb's source and container
 
@@ -241,6 +242,28 @@ push_ssh_fingerprint = "SHA256:…"  # a public key hash, not a secret
 contexts = ["my-release-context"]
 ```
 
+## `[post_merge_regen]` — relocate regen+record for a qualifying bot PR
+
+Optional, and requires `[record].enabled = true`. Auto-record normally runs on every PR branch,
+including a bot-authored one (Renovate, Dependabot, ...) — and a bot generally treats any
+foreign commit pushed to its own branch as manual intervention, permanently freezing that PR.
+`[post_merge_regen]` fixes this by relocating the regen+record chain (and, per
+`[ci].test_generation`, the pack/review self-test) off a *qualifying* branch entirely, into a
+CI-managed workflow that runs on `main` after the PR has already merged:
+
+```toml
+[post_merge_regen]
+branch_patterns = ["renovate/*"]     # bash-glob branch name pattern(s) that qualify
+workflow = "update_prlog"            # workflow (within `file`) to add the relocated jobs to
+file = "update_prlog.yml"            # CI file containing that workflow; defaults to config.yml
+```
+
+**You must configure the CircleCI "PR merged" trigger yourself** — it's a CircleCI project
+setting, not something this tool can commit for you. See the
+[Post-merge regeneration guide](post-merge-regeneration.md#prerequisite-you-must-configure-the-circleci-trigger-yourself)
+for the full mechanism, the two CircleCI doc pages describing that trigger, and a known ordering
+limitation when your target workflow already has another job that pushes to `main`.
+
 ## How CLI inputs become orb parameters
 
 Every option and argument in the binary's `--help` becomes an orb parameter:
@@ -340,3 +363,5 @@ steps, see the [Advanced Configuration Guide](advanced-configuration.md).
 
 - [Advanced Configuration Guide](advanced-configuration.md) — composing a single complex job
 - [Getting Started](getting-started.md) — install to running pipeline
+- [Post-merge regeneration](post-merge-regeneration.md) — relocating regen+record for a
+  qualifying bot PR (`[post_merge_regen]`)

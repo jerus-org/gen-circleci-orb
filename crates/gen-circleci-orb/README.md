@@ -201,6 +201,7 @@ for the generated orb and CI, so it is safe to commit and review.
 | `[orb]` | `binary`, `namespaces`, `orb_dir`, `base_image`, `builder_image`, `circleci_cli_version` — the orb's own source and container |
 | `[ci]` | Workflow/job wiring: `build_workflow`, `release_workflow`, `requires_job`, `release_after_job`, `crate_tag_prefix`, `docker_namespace`, `docker_context`, `orb_context`, MCP fields, `build_executor`, and `test_generation` |
 | `[record]` | Optional auto-record: after `generate`, commit the regenerated orb source back (GPG-signed) so the published orb stays in sync with the CLI. Stores only env-var **names** — the secrets stay in CI contexts |
+| `[post_merge_regen]` | Optional (requires `[record].enabled = true`): relocate regen+record for a qualifying bot PR (e.g. Renovate) off its own branch into a post-merge workflow, so auto-record never freezes it |
 | `[orbs]`, `[[job_group]]`, `[[extra_job]]`, `[subcommand.*]` | Extra orb pins, composed jobs, custom jobs, and per-subcommand overrides (including `interactive` / `generate_job`) |
 
 Two image knobs are easy to confuse:
@@ -227,6 +228,14 @@ in sync with the CLI and reviewable pre-merge, not a test. Only a consumer with 
 `regenerate-orb`, `pack-orb`, `review-orb` — drop down to `check-ci-wiring` alone.
 `check-ci-wiring` itself runs unconditionally either way (a separate concern: wiring-vs-config
 drift, not generation-content validity).
+
+`[post_merge_regen]` relocates the regen+record chain for a *qualifying* bot-authored PR (e.g.
+Renovate) off its own branch and into a CI-managed workflow that runs after merge — otherwise
+auto-record's commit-back can look like manual intervention to the bot and permanently freeze
+the PR. **You must configure the CircleCI "PR merged" trigger yourself first** — it's a CircleCI
+project setting, not something this tool can commit — see the
+[Post-merge regeneration guide](https://github.com/jerus-org/gen-circleci-orb/blob/main/docs/post-merge-regeneration.md)
+for the full mechanism and that prerequisite.
 
 For the full walkthrough of these settings — and of composing a single complex job from several
 commands (as gen-orb-mcp's `build_mcp_server` does) — see the
