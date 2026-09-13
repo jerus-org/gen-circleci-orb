@@ -633,13 +633,15 @@ fn render_job(sub: &SubCommand, opts: &GenerateOpts, config: Option<&OrbConfig>)
         );
         parameters.insert("ssh_fingerprint".to_string(), build_ssh_fingerprint_param());
         parameters.insert("check_ci_wiring".to_string(), build_check_ci_wiring_param());
+        parameters.insert("target_branch".to_string(), build_target_branch_param());
     }
 
     let invoke_step = build_invoke_step(sub, RESERVED_JOB_PARAMS);
-    let mut steps = vec![
-        serde_yaml::Value::String("checkout".to_string()),
-        build_attach_workspace_step(),
-    ];
+    let mut steps = vec![serde_yaml::Value::String("checkout".to_string())];
+    if is_orb_producing {
+        steps.push(build_target_branch_switch_step());
+    }
+    steps.push(build_attach_workspace_step());
     if opts.git_push_subcommands.contains(&sub.name) {
         steps.push(serde_yaml::Value::String("set_https_remote".to_string()));
     }
@@ -1292,6 +1294,66 @@ fn build_check_ci_wiring_step() -> serde_yaml::Value {
     when_inner.insert(
         serde_yaml::Value::String("condition".to_string()),
         serde_yaml::Value::String("<< parameters.check_ci_wiring >>".to_string()),
+    );
+    when_inner.insert(serde_yaml::Value::String("steps".to_string()), inner_steps);
+    let mut when_map = serde_yaml::Mapping::new();
+    when_map.insert(
+        serde_yaml::Value::String("when".to_string()),
+        serde_yaml::Value::Mapping(when_inner),
+    );
+    serde_yaml::Value::Mapping(when_map)
+}
+
+/// Optional string job parameter naming a branch to switch onto before invoking
+/// the command. Empty (the default) is a no-op. See
+/// `build_target_branch_switch_step` for why this exists.
+fn build_target_branch_param() -> OrbParameter {
+    OrbParameter {
+        param_type: "string".to_string(),
+        description: "Branch to switch onto (fetch + checkout) right after the initial \
+                      checkout, overriding CIRCLE_BRANCH to match. Empty (default) is a \
+                      no-op — the job stays on whatever branch triggered the pipeline. \
+                      Needed for a \"pr merged\"-triggered pipeline (gen-circleci-orb#328), \
+                      where `checkout` lands on the deleted PR branch and CIRCLE_BRANCH \
+                      stays stale — set this to the real target (e.g. `main`) so the \
+                      generate invocation, and any auto-record push it makes, operates on \
+                      the right branch."
+            .to_string(),
+        default: Some(serde_yaml::Value::String(String::new())),
+        enum_values: None,
+    }
+}
+
+/// Conditional step: when `target_branch` is non-empty, fetch and check it out,
+/// then override `CIRCLE_BRANCH` in `$BASH_ENV` so tools reading it (e.g. the
+/// record push) see the new branch, not the stale value `checkout` left behind.
+/// Plain git — this job runs in the orb's own `default` executor, not a
+/// toolkit container, so no extra tool dependency is introduced.
+fn build_target_branch_switch_step() -> serde_yaml::Value {
+    let mut run_map = serde_yaml::Mapping::new();
+    run_map.insert(
+        serde_yaml::Value::String("name".to_string()),
+        serde_yaml::Value::String("Switch onto target_branch".to_string()),
+    );
+    run_map.insert(
+        serde_yaml::Value::String("command".to_string()),
+        serde_yaml::Value::String(
+            "git fetch origin << parameters.target_branch >>\n\
+             git checkout -B << parameters.target_branch >> origin/<< parameters.target_branch >>\n\
+             echo 'export CIRCLE_BRANCH=<< parameters.target_branch >>' >> \"$BASH_ENV\"\n"
+                .to_string(),
+        ),
+    );
+    let mut run_step = serde_yaml::Mapping::new();
+    run_step.insert(
+        serde_yaml::Value::String("run".to_string()),
+        serde_yaml::Value::Mapping(run_map),
+    );
+    let inner_steps = serde_yaml::Value::Sequence(vec![serde_yaml::Value::Mapping(run_step)]);
+    let mut when_inner = serde_yaml::Mapping::new();
+    when_inner.insert(
+        serde_yaml::Value::String("condition".to_string()),
+        serde_yaml::Value::String("<< parameters.target_branch >>".to_string()),
     );
     when_inner.insert(serde_yaml::Value::String("steps".to_string()), inner_steps);
     let mut when_map = serde_yaml::Mapping::new();
@@ -3404,6 +3466,80 @@ mod tests {
         assert!(
             job.contains("ssh-add -d"),
             "must trim the read-only checkout key from the agent:\n{job}"
+        );
+    }
+
+    #[test]
+    fn orb_producing_job_has_optional_target_branch_switch() {
+        // gen-circleci-orb#328: the relocated post-merge-regen chain runs on a
+        // "pr merged" pipeline, where checkout lands on the deleted PR branch
+        // and CIRCLE_BRANCH is stale. An orb-producing job must expose an
+        // optional `target_branch` param (default empty — no-op) that, when
+        // set, switches onto it (fetch + checkout + CIRCLE_BRANCH override)
+        // right after checkout, before the generate invocation.
+        let params = vec![Parameter {
+            long_name: "orb_dir".to_string(),
+            short: None,
+            param_type: ParamType::String,
+            default: Some("orb".to_string()),
+            required: false,
+            description: "Orb output directory.".to_string(),
+            ..Default::default()
+        }];
+        let sub = make_leaf("generate", params);
+        let cli = make_cli("mytool", vec![sub]);
+        let files = generate(&cli, &default_opts(), None);
+        let job = &files[&PathBuf::from("src/jobs/generate.yml")];
+        assert!(
+            job.contains("target_branch:"),
+            "orb-producing job must expose target_branch:\n{job}"
+        );
+        assert!(
+            job.contains("git fetch origin") && job.contains("git checkout"),
+            "must switch onto the target branch via plain git:\n{job}"
+        );
+        assert!(
+            job.contains("git checkout -B << parameters.target_branch >> origin/<< parameters.target_branch >>"),
+            "must checkout via -B against the just-fetched remote ref, not bare `git checkout \
+             <branch>` — that relies on git's remote-tracking DWIM, which can fail on a \
+             shallow/single-branch clone:\n{job}"
+        );
+        assert!(
+            job.contains("CIRCLE_BRANCH"),
+            "must override CIRCLE_BRANCH so downstream tooling (e.g. record) sees the new branch:\n{job}"
+        );
+        assert!(
+            job.contains("<< parameters.target_branch >>"),
+            "the switch step must be gated on / use the target_branch param:\n{job}"
+        );
+        // Must run right after checkout, before the invoke step.
+        let checkout_at = job.find("- checkout").expect("checkout step");
+        let switch_at = job.find("target_branch >>").expect("target_branch usage");
+        let invoke_at = job.find("- generate:").expect("generate invoke step");
+        assert!(
+            checkout_at < switch_at && switch_at < invoke_at,
+            "target_branch switch must run after checkout and before generate:\n{job}"
+        );
+    }
+
+    #[test]
+    fn non_orb_job_has_no_target_branch_param() {
+        let params = vec![Parameter {
+            long_name: "output".to_string(),
+            short: Some('o'),
+            param_type: ParamType::String,
+            default: Some(String::new()),
+            required: false,
+            description: "Output.".to_string(),
+            ..Default::default()
+        }];
+        let sub = make_leaf("show", params);
+        let cli = make_cli("mytool", vec![sub]);
+        let files = generate(&cli, &default_opts(), None);
+        let job = &files[&PathBuf::from("src/jobs/show.yml")];
+        assert!(
+            !job.contains("target_branch"),
+            "non-orb job must not gain target_branch:\n{job}"
         );
     }
 

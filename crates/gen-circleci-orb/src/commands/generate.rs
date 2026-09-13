@@ -172,6 +172,14 @@ pub struct Generate {
     /// orb is never published.
     #[arg(long, conflicts_with = "dry_run")]
     pub check: bool,
+
+    /// Allow auto-record to push to `main`. A narrow, explicit relaxation of
+    /// the default main-exclusion (see `should_record_on_branch`) — only for
+    /// the post-merge-regen chain (gen-circleci-orb#328), which has already
+    /// switched CIRCLE_BRANCH onto `main` itself via `--target-branch`.
+    /// Never set this for an ordinary `generate --record` run.
+    #[arg(long)]
+    pub allow_main_record: bool,
 }
 
 /// Convert any git remote URL to a plain HTTPS URL, stripping the `.git` suffix.
@@ -923,6 +931,10 @@ impl Generate {
         let config_path = resolve_config_path(self.config.as_ref(), &self.output);
         let orb_config = orb_config::load_config(&config_path)?;
 
+        if orb_config.post_merge_regen.is_some() {
+            println!("{}", post_merge_regen_trigger_reminder());
+        }
+
         // Resolve fields that may come from config when not provided on CLI.
         let binary = resolve_binary(self.binary.as_deref(), &orb_config)?;
         let namespaces = resolve_namespaces(&self.namespaces, &orb_config)?;
@@ -1040,14 +1052,18 @@ impl Generate {
         // Auto-record is config-driven: only when `[record].enabled = true` and
         // not suppressed by --no-record / --dry-run. The branch policy is
         // centralized here so the orb "just works" — we only record on a regular
-        // PR branch, never on `main` or a forked-PR build (see
-        // should_record_on_branch). `--check` already returned above, so `mode`
-        // can only be `Preview` or `Commit` here — reading it instead of
-        // `self.dry_run` keeps this decision derived from the same value that
-        // decided whether anything was written.
+        // PR branch, never on `main` (unless --allow-main-record) or a
+        // forked-PR build (see should_record_on_branch_allowing_main).
+        // `--check` already returned above, so `mode` can only be `Preview` or
+        // `Commit` here — reading it instead of `self.dry_run` keeps this
+        // decision derived from the same value that decided whether anything
+        // was written.
         if !self.no_record && mode == output_writer::WriteMode::Commit {
             if let Some(record) = orb_config.record.as_ref().filter(|r| r.enabled) {
-                if should_record_on_branch(|k| std::env::var(k).ok()) {
+                if should_record_on_branch_allowing_main(
+                    |k| std::env::var(k).ok(),
+                    self.allow_main_record,
+                ) {
                     record_orb(&orb_root, record)?;
                 } else {
                     println!(
@@ -1080,16 +1096,28 @@ fn verify_no_drift(report: &output_writer::WriteReport) -> Result<()> {
 
 /// Whether the current CI branch is one we should record (commit + push) to.
 /// We only record on a regular PR branch:
-/// - never on `main` — a push there would need branch-protection bypass we
-///   deliberately do not use (the write token has only `contents:write`);
+/// - never on `main`, unless `allow_main` is true — a push there would
+///   normally need branch-protection bypass we deliberately do not use (the
+///   write token has only `contents:write`). `allow_main` is a narrow,
+///   explicit relaxation: only the relocated post-merge-regen chain
+///   (gen-circleci-orb#328) ever passes `true`, after it has switched onto
+///   `main` itself via `--target-branch`; ordinary `generate --record`
+///   (validation, or a developer's local run) always passes `false` and is
+///   unaffected;
 /// - never on a forked-PR build — no write access to the fork, and CircleCI
 ///   withholds context secrets from fork builds anyway;
 /// - never when `CIRCLE_BRANCH` is unset — i.e. local runs, which must not push.
 ///
 /// The injectable getter keeps this unit-testable.
-fn should_record_on_branch(get: impl Fn(&str) -> Option<String>) -> bool {
+fn should_record_on_branch_allowing_main(
+    get: impl Fn(&str) -> Option<String>,
+    allow_main: bool,
+) -> bool {
     let branch = get("CIRCLE_BRANCH").unwrap_or_default();
-    if branch.is_empty() || branch == "main" {
+    if branch.is_empty() {
+        return false;
+    }
+    if branch == "main" && !allow_main {
         return false;
     }
     // CIRCLE_PR_REPONAME is set only on builds originating from a fork.
@@ -1135,6 +1163,22 @@ fn read_record_env(
         user_email: req(&record.user_email_env)?,
         sign_key: req(&record.signing_key_env)?,
     })
+}
+
+/// Reminder printed when `[post_merge_regen]` is configured: the CircleCI
+/// "PR merged" trigger it depends on is a project setting, not something this
+/// tool can commit for the consumer — see
+/// docs/post-merge-regeneration.md#prerequisite-you-must-configure-the-circleci-trigger-yourself.
+pub(crate) fn post_merge_regen_trigger_reminder() -> String {
+    "[post_merge_regen] is configured — this relocates regen+record for a qualifying PR, \
+     but only fires if CircleCI's \"PR merged\" trigger is configured for this project. \
+     That trigger is a CircleCI project setting, not something this tool can commit for \
+     you. If you have not set it up yet, see:\n  \
+     - https://circleci.com/docs/guides/orchestrate/github-trigger-event-options/ \
+     (Project Settings -> \"GitHub trigger +\" -> the \"PR merged\" event)\n  \
+     - https://circleci.com/docs/guides/orchestrate/pipelines/ \
+     (the Config File Path field, if your workflow lives outside config.yml)"
+        .to_string()
 }
 
 /// Build the educational message shown when the ambient push is rejected.
@@ -1465,7 +1509,30 @@ mod tests {
         );
     }
 
-    // ── should_record_on_branch ─────────────────────────────────────────────
+    // ── post_merge_regen_trigger_reminder ───────────────────────────────────
+
+    /// A consumer who configures `[post_merge_regen]` must be told, in the
+    /// tool's own output (not only a doc they may never open), that CircleCI's
+    /// "PR merged" trigger is a project setting they must configure
+    /// themselves — with both real doc links, so it's actionable immediately.
+    #[test]
+    fn post_merge_regen_trigger_reminder_names_prerequisite_and_links_docs() {
+        let msg = post_merge_regen_trigger_reminder();
+        assert!(
+            msg.to_lowercase().contains("pr merged"),
+            "must name the CircleCI trigger event: {msg}"
+        );
+        assert!(
+            msg.contains("circleci.com/docs/guides/orchestrate/github-trigger-event-options/"),
+            "must link the trigger-configuration doc: {msg}"
+        );
+        assert!(
+            msg.contains("circleci.com/docs/guides/orchestrate/pipelines/"),
+            "must link the Config File Path doc: {msg}"
+        );
+    }
+
+    // ── should_record_on_branch_allowing_main ───────────────────────────────
 
     #[test]
     fn record_on_regular_pr_branch() {
@@ -1473,7 +1540,7 @@ mod tests {
             "CIRCLE_BRANCH" => Some("feat/x".to_string()),
             _ => None,
         };
-        assert!(should_record_on_branch(env));
+        assert!(should_record_on_branch_allowing_main(env, false));
     }
 
     #[test]
@@ -1482,7 +1549,7 @@ mod tests {
             "CIRCLE_BRANCH" => Some("main".to_string()),
             _ => None,
         };
-        assert!(!should_record_on_branch(env));
+        assert!(!should_record_on_branch_allowing_main(env, false));
     }
 
     #[test]
@@ -1492,12 +1559,40 @@ mod tests {
             "CIRCLE_PR_REPONAME" => Some("contributor-fork".to_string()),
             _ => None,
         };
-        assert!(!should_record_on_branch(env));
+        assert!(!should_record_on_branch_allowing_main(env, false));
     }
 
     #[test]
     fn no_record_when_branch_unset_locally() {
-        assert!(!should_record_on_branch(|_| None));
+        assert!(!should_record_on_branch_allowing_main(|_| None, false));
+    }
+
+    #[test]
+    fn record_on_main_when_allow_main_record_true() {
+        // gen-circleci-orb#328: the relocated post-merge-regen chain runs on
+        // main after switching branches — a narrow, explicit opt-in.
+        let env = |k: &str| match k {
+            "CIRCLE_BRANCH" => Some("main".to_string()),
+            _ => None,
+        };
+        assert!(should_record_on_branch_allowing_main(env, true));
+    }
+
+    #[test]
+    fn no_record_on_forked_pr_even_with_allow_main_record_true() {
+        // allow_main_record only relaxes the main exclusion — forked-PR and
+        // empty-branch exclusions stay unconditional.
+        let env = |k: &str| match k {
+            "CIRCLE_BRANCH" => Some("pull/42".to_string()),
+            "CIRCLE_PR_REPONAME" => Some("contributor-fork".to_string()),
+            _ => None,
+        };
+        assert!(!should_record_on_branch_allowing_main(env, true));
+    }
+
+    #[test]
+    fn no_record_when_branch_unset_even_with_allow_main_record_true() {
+        assert!(!should_record_on_branch_allowing_main(|_| None, true));
     }
 
     #[test]

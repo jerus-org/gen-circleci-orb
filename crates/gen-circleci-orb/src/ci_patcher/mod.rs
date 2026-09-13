@@ -73,6 +73,20 @@ pub struct PatchOpts {
     /// neither `[record]` nor `test_generation` enabled sees the whole
     /// chain drop to `check-ci-wiring` alone. See gen-circleci-orb#367.
     pub test_generation: bool,
+    /// Bash-glob branch-name pattern(s) qualifying a PR whose regen+record
+    /// (and, per `test_generation`, pack/review) is relocated off its own
+    /// branch into `post_merge_workflow`/`post_merge_ci_file` instead of
+    /// running in `build_workflow`. Empty disables the feature entirely —
+    /// zero behavior change from today. See gen-circleci-orb#328.
+    pub post_merge_branch_patterns: Vec<String>,
+    /// Name of the workflow (within `post_merge_ci_file`) the relocated
+    /// jobs are added to. Only meaningful when
+    /// `post_merge_branch_patterns` is non-empty.
+    pub post_merge_workflow: String,
+    /// CI file (relative to the CI directory) containing
+    /// `post_merge_workflow`. Only meaningful when
+    /// `post_merge_branch_patterns` is non-empty.
+    pub post_merge_ci_file: String,
 }
 
 pub struct PatchReport {
@@ -137,6 +151,23 @@ pub fn patch_build(content: &str, opts: &PatchOpts) -> (String, PatchReport) {
     (output, report)
 }
 
+/// As `patch_build`, but when `[post_merge_regen]` targets `config.yml`
+/// itself, also inserts that block on the same content. Mirrors
+/// `resync_build_composed`'s composition for the fresh-`init` (insert-only)
+/// path. A no-op addition when `post_merge_ci_file` names a different file
+/// (or the feature is off) — `patch_post_merge_regen` itself no-ops then.
+fn patch_build_composed(content: &str, opts: &PatchOpts) -> (String, PatchReport) {
+    let (out, mut report) = patch_build(content, opts);
+    if opts.post_merge_ci_file == "config.yml" {
+        let (out, pm_report) = patch_post_merge_regen(&out, opts);
+        report.insertions.extend(pm_report.insertions);
+        report.skipped.extend(pm_report.skipped);
+        report.warnings.extend(pm_report.warnings);
+        return (out, report);
+    }
+    (out, report)
+}
+
 fn insert_block_at(lines: &mut Vec<String>, pos: usize, block: &[String]) {
     for (i, l) in block.iter().enumerate() {
         lines.insert(pos + i, l.clone());
@@ -168,6 +199,25 @@ pub fn resync_build(content: &str, opts: &PatchOpts) -> (String, PatchReport) {
     let (stripped, warnings) = strip_managed(content);
     let (out, mut report) = patch_build(&stripped, opts);
     report.warnings.extend(warnings);
+    (out, report)
+}
+
+/// As `resync_build`, but when `[post_merge_regen]` targets `config.yml`
+/// itself (rather than a dedicated file), also resyncs that block on the same
+/// content — composing the two managed regions in one file. A no-op addition
+/// when `post_merge_ci_file` names a different file (or the feature is off):
+/// `resync_build`'s own strip already recognises and removes a stray
+/// post-merge-regen block from `config.yml` in that case (via
+/// `MANAGED_POST_MERGE_REGEN_JOBS`), and nothing re-inserts it here.
+pub fn resync_build_composed(content: &str, opts: &PatchOpts) -> (String, PatchReport) {
+    let (out, mut report) = resync_build(content, opts);
+    if opts.post_merge_ci_file == "config.yml" {
+        let (out, pm_report) = patch_post_merge_regen(&out, opts);
+        report.insertions.extend(pm_report.insertions);
+        report.skipped.extend(pm_report.skipped);
+        report.warnings.extend(pm_report.warnings);
+        return (out, report);
+    }
     (out, report)
 }
 
@@ -307,6 +357,7 @@ fn block_is_managed_validation(block: &[&str]) -> bool {
         let t = l.trim_start();
         MANAGED_VALIDATION_JOBS
             .iter()
+            .chain(MANAGED_POST_MERGE_REGEN_JOBS)
             .any(|n| t == format!("name: {n}"))
     })
 }
@@ -439,6 +490,275 @@ fn patch_step5_orb_release_workflow(
     report.insertions.push("orb-release workflow".to_string());
 }
 
+/// Job names emitted by `patch_post_merge_regen` — recognised by `strip_managed`
+/// (via `managed_item_end`) alongside `MANAGED_VALIDATION_JOBS`, so a re-sync
+/// removes and re-inserts them cleanly whether they live in a dedicated file or
+/// (composed) inside `config.yml` alongside the validation block.
+const MANAGED_POST_MERGE_REGEN_JOBS: &[&str] = &[
+    "post-merge-build-binary",
+    "post-merge-regenerate-orb",
+    "post-merge-pack-orb",
+    "post-merge-review-orb",
+];
+
+/// Patch an arbitrary CircleCI config string, relocating regen+record (and, per
+/// `test_generation`, pack/review) into `opts.post_merge_workflow` — the
+/// workflow a qualifying bot-authored PR's chain runs in post-merge instead of
+/// on its own branch. See gen-circleci-orb#328.
+///
+/// No-ops when `opts.post_merge_branch_patterns` is empty (feature off).
+/// Idempotent: skips re-inserting when the block is already present.
+///
+/// Most consumers do not already run a post-merge workflow (see the
+/// prerequisite in docs/post-merge-regeneration.md), so `content` may be
+/// empty (a brand-new dedicated file), or already valid but missing the
+/// named `workflow` or the orb pins the relocated jobs need — all three are
+/// created/added here rather than left as a silent no-op.
+pub fn patch_post_merge_regen(content: &str, opts: &PatchOpts) -> (String, PatchReport) {
+    let mut report = PatchReport {
+        insertions: vec![],
+        skipped: vec![],
+        warnings: vec![],
+    };
+    if opts.post_merge_branch_patterns.is_empty() {
+        return (content.to_string(), report);
+    }
+    if content.contains("name: post-merge-build-binary") {
+        report
+            .skipped
+            .push("post-merge-regen workflow steps".to_string());
+        return (content.to_string(), report);
+    }
+    let is_fresh_file = content.trim().is_empty();
+    let mut lines: Vec<String> = if is_fresh_file {
+        vec!["version: 2.1".to_string()]
+    } else {
+        content.lines().map(ToString::to_string).collect()
+    };
+
+    ensure_post_merge_regen_orb_pins(content, &mut lines, opts, &mut report);
+    ensure_workflow_exists(&mut lines, &opts.post_merge_workflow);
+
+    let step_block = post_merge_regen_steps(opts);
+    let pos = find_workflow_jobs_end(&lines, &opts.post_merge_workflow)
+        .expect("ensure_workflow_exists guarantees the workflow now exists");
+    insert_block_at(&mut lines, pos, &step_block);
+    report
+        .insertions
+        .push("post-merge-regen workflow steps".to_string());
+
+    let mut output = lines.join("\n");
+    if is_fresh_file || content.ends_with('\n') {
+        output.push('\n');
+    }
+    (output, report)
+}
+
+/// Insertion point for entries directly under a top-level `header:` section,
+/// creating an empty section at the end of the file first when the header
+/// doesn't exist yet — unlike `find_section_end`, which returns `None` in
+/// that case. Used where the target file may be new or minimal (a dedicated
+/// `[post_merge_regen]` file), where `config.yml`'s always-present `orbs:`/
+/// `workflows:` sections make the non-creating version safe to use as-is.
+fn find_or_create_section_end(lines: &mut Vec<String>, header: &str) -> usize {
+    if find_top_level(lines, header).is_some() {
+        return find_section_end(lines, header).unwrap_or(lines.len());
+    }
+    if lines.last().is_some_and(|l| !l.is_empty()) {
+        lines.push(String::new());
+    }
+    lines.push(header.to_string());
+    lines.len()
+}
+
+/// Ensure `workflow` exists as a top-level entry under `workflows:`, creating
+/// the `workflows:` section itself first when the file doesn't have one yet.
+/// Idempotent: a no-op when the workflow is already there.
+fn ensure_workflow_exists(lines: &mut Vec<String>, workflow: &str) {
+    let wf_line = format!("  {workflow}:");
+    if lines.iter().any(|l| l.trim_end() == wf_line) {
+        return;
+    }
+    let pos = find_or_create_section_end(lines, "workflows:");
+    let block = vec![wf_line, "    jobs:".to_string()];
+    insert_block_at(lines, pos, &block);
+}
+
+/// Ensure `orbs:` declares `gen-circleci-orb` (always — every relocated job
+/// references it) and `orb-tools` (only when `opts.test_generation`, since
+/// only then do `post-merge-pack-orb`/`review-orb` exist to need it) —
+/// creating the `orbs:` section itself first when the target file doesn't
+/// have one yet. Checks against `content` (the pre-mutation string), so a
+/// pin already declared — hand-authored, or Renovate-owned — is respected
+/// and never overwritten, matching `patch_step0_gen_circleci_orb_orb` /
+/// `patch_step1_orb_tools`'s behaviour for `config.yml`.
+fn ensure_post_merge_regen_orb_pins(
+    content: &str,
+    lines: &mut Vec<String>,
+    opts: &PatchOpts,
+    report: &mut PatchReport,
+) {
+    // Order matters, and must match patch_build's (patch_step1_orb_tools then
+    // patch_step0_gen_circleci_orb_orb): the UNMARKED orb-tools pin goes in
+    // FIRST. On a strip+repatch, strip_managed removes only the MARKED
+    // gen-circleci-orb block — orb-tools survives untouched — so inserting
+    // gen-circleci-orb second, at the (then-current) end of `orbs:`, is what
+    // reliably reproduces the same layout on every resync. Reversing this
+    // order is non-idempotent: the first patch (orb-tools absent yet) and
+    // every resync after it (orb-tools already present) would place the
+    // gen-circleci-orb block on opposite sides of the orb-tools line.
+    if opts.test_generation {
+        if content.contains("orb-tools:") {
+            report.skipped.push("orb-tools orb".to_string());
+        } else {
+            let pos = find_or_create_section_end(lines, "orbs:");
+            let entry = format!("  orb-tools: circleci/orb-tools@{}", opts.orb_tools_version);
+            lines.insert(pos, entry);
+            report.insertions.push("orb-tools orb".to_string());
+        }
+    }
+    if content.contains("gen-circleci-orb:") {
+        report.skipped.push("gen-circleci-orb orb".to_string());
+    } else {
+        let pos = find_or_create_section_end(lines, "orbs:");
+        let entry = format!(
+            "  gen-circleci-orb: jerus-org/gen-circleci-orb@{}",
+            opts.gen_circleci_orb_version
+        );
+        let block = vec![managed_begin("  "), entry, managed_end("  ")];
+        insert_block_at(lines, pos, &block);
+        report.insertions.push("gen-circleci-orb orb".to_string());
+    }
+}
+
+/// Re-sync a file's post-merge-regen content to the current generator flow:
+/// strip the existing gen-circleci-orb-managed content and re-insert it fresh
+/// via `patch_post_merge_regen`. Mirrors `resync_build` for the dedicated
+/// `post_merge_ci_file` case; other content in the file (the consumer's own
+/// jobs, or, when the file is shared with `config.yml`, the validation/
+/// orb-release blocks `resync_build` owns) is untouched.
+pub fn resync_post_merge_regen(content: &str, opts: &PatchOpts) -> (String, PatchReport) {
+    let (stripped, warnings) = strip_managed(content);
+    let (out, mut report) = patch_post_merge_regen(&stripped, opts);
+    report.warnings.extend(warnings);
+    (out, report)
+}
+
+/// Bash `case` guard: halts the job (marks it successful, skips remaining
+/// steps) unless `CIRCLE_BRANCH` matches one of `patterns`. Branch filters are
+/// blocked entirely on a "pr merged" pipeline (see gen-circleci-orb#328's
+/// design notes), so this pre-step is the only way to keep a non-qualifying
+/// merge a no-op — every relocated job carries its own copy, since a halted
+/// job is still reported successful and would not otherwise block jobs that
+/// `requires:` it.
+fn qualifying_branch_guard_steps(patterns: &[String]) -> Vec<String> {
+    let mut steps = vec!["          pre-steps:".to_string()];
+    steps.extend(qualifying_branch_guard_run_step(patterns));
+    steps
+}
+
+/// As `qualifying_branch_guard_steps`, but folded into a single `pre-steps:`
+/// list alongside `attach_workspace` — `orb-tools/pack`/`review` already carry
+/// their own `pre-steps:`, and YAML forbids a duplicate `pre-steps:` key on
+/// the same job invocation.
+fn qualifying_branch_guard_pre_steps_with_attach_workspace(patterns: &[String]) -> Vec<String> {
+    let mut steps = vec!["          pre-steps:".to_string()];
+    steps.extend(qualifying_branch_guard_run_step(patterns));
+    steps.push("            - attach_workspace:".to_string());
+    steps.push("                at: .".to_string());
+    steps
+}
+
+/// The `run:` step itself (everything after `pre-steps:`) shared by both
+/// wrapping functions above — kept in exactly one place so a future change to
+/// the guard (its message, or a new pattern-matching edge case) can't be
+/// applied to one job's copy and missed on another's.
+fn qualifying_branch_guard_run_step(patterns: &[String]) -> Vec<String> {
+    let pattern_arm = patterns.join("|");
+    vec![
+        "            - run:".to_string(),
+        "                name: Check qualifying branch".to_string(),
+        "                command: |".to_string(),
+        "                  case \"$CIRCLE_BRANCH\" in".to_string(),
+        format!("                    {pattern_arm}) ;;"),
+        "                    *) echo \"Not a qualifying branch ($CIRCLE_BRANCH) - nothing to do.\"; circleci-agent step halt ;;".to_string(),
+        "                  esac".to_string(),
+    ]
+}
+
+/// The relocated post-merge-regen job chain: `post-merge-build-binary` ->
+/// `post-merge-regenerate-orb` (switching onto `main` and allowed to record
+/// there) -> (if `test_generation`) `post-merge-pack-orb` ->
+/// `post-merge-review-orb`. Every job carries the qualifying-branch guard and
+/// no `filters:` block (filters are blocked on a "pr merged" pipeline).
+/// `[record].enabled` is a hard prerequisite of `[post_merge_regen]`
+/// (validated at config-load time), so — unlike `push_build_and_regenerate_steps`
+/// — there is no no-record fallback here.
+fn post_merge_regen_steps(opts: &PatchOpts) -> Vec<String> {
+    let orb_dir = &opts.orb_dir;
+    let binary = &opts.binary;
+    let mut steps = vec![managed_begin("      ")];
+
+    steps.push("      - gen-circleci-orb/build_rust_binary:".to_string());
+    steps.push("          name: post-merge-build-binary".to_string());
+    steps.push(format!("          package: {binary}"));
+    if !opts.build_executor.is_empty() {
+        steps.push(format!("          executor: {}", opts.build_executor));
+    }
+    steps.extend(qualifying_branch_guard_steps(
+        &opts.post_merge_branch_patterns,
+    ));
+
+    steps.push("      - gen-circleci-orb/generate:".to_string());
+    steps.push("          name: post-merge-regenerate-orb".to_string());
+    steps.push(format!("          binary: {binary}"));
+    for ns in &opts.namespaces {
+        steps.push(format!("          orb_namespace: {ns}"));
+    }
+    steps.push(format!("          orb_dir: {orb_dir}"));
+    steps.push("          attach_workspace: true".to_string());
+    steps.push("          target_branch: main".to_string());
+    steps.push("          allow_main_record: true".to_string());
+    if !opts.record_push_ssh_fingerprint.is_empty() {
+        steps.push(format!(
+            "          ssh_fingerprint: \"{}\"",
+            opts.record_push_ssh_fingerprint
+        ));
+    }
+    steps.push("          persist_orb_workspace: true".to_string());
+    steps.push(format!(
+        "          context: [{}]",
+        opts.record_contexts.join(", ")
+    ));
+    steps.push("          requires: [post-merge-build-binary]".to_string());
+    steps.extend(qualifying_branch_guard_steps(
+        &opts.post_merge_branch_patterns,
+    ));
+
+    if opts.test_generation {
+        steps.push("      - orb-tools/pack:".to_string());
+        steps.push("          name: post-merge-pack-orb".to_string());
+        steps.push("          checkout: false".to_string());
+        steps.push(format!("          source_dir: {orb_dir}/src"));
+        steps.extend(qualifying_branch_guard_pre_steps_with_attach_workspace(
+            &opts.post_merge_branch_patterns,
+        ));
+        steps.push("          requires: [post-merge-regenerate-orb]".to_string());
+
+        steps.push("      - orb-tools/review:".to_string());
+        steps.push("          name: post-merge-review-orb".to_string());
+        steps.push("          checkout: false".to_string());
+        steps.push(format!("          source_dir: {orb_dir}/src"));
+        steps.extend(qualifying_branch_guard_pre_steps_with_attach_workspace(
+            &opts.post_merge_branch_patterns,
+        ));
+        steps.push("          requires: [post-merge-pack-orb]".to_string());
+    }
+
+    steps.push(managed_end("      "));
+    steps
+}
+
 /// Patch a release CircleCI config string.
 ///
 /// The orb release pipeline (Docker build, orb pack, orb publish) is now wired into
@@ -461,6 +781,11 @@ pub fn patch_release(content: &str, _opts: &PatchOpts) -> (String, PatchReport) 
 /// leave one patched and another not. What makes that safe is that patching is
 /// idempotent — every insertion checks whether it is already present — so the
 /// answer to a half-finished run is to run it again.
+/// A patch/resync function: given a file's current content and opts, returns
+/// the new content plus a report of what changed. Shared by `apply_patches`'s
+/// insert-only entries and `commands::update`'s resync-fn entries.
+pub type PatchFn = fn(&str, &PatchOpts) -> (String, PatchReport);
+
 pub fn apply_patches(
     ci_dir: &std::path::Path,
     opts: &PatchOpts,
@@ -468,22 +793,32 @@ pub fn apply_patches(
 ) -> Result<Vec<String>> {
     let mut summary = vec![];
 
-    for (filename, patch_fn) in &[
-        (
-            "config.yml",
-            patch_build as fn(&str, &PatchOpts) -> (String, PatchReport),
-        ),
-        (
-            "release.yml",
-            patch_release as fn(&str, &PatchOpts) -> (String, PatchReport),
-        ),
-    ] {
+    let mut targets: Vec<(String, PatchFn)> = vec![
+        ("config.yml".to_string(), patch_build_composed),
+        ("release.yml".to_string(), patch_release),
+    ];
+    if !opts.post_merge_branch_patterns.is_empty() && opts.post_merge_ci_file != "config.yml" {
+        targets.push((opts.post_merge_ci_file.clone(), patch_post_merge_regen));
+    }
+
+    for (filename, patch_fn) in &targets {
         let path = ci_dir.join(filename);
-        if !path.exists() {
+        // The post_merge_ci_file is the one target most consumers won't
+        // already have (see docs/post-merge-regeneration.md): most don't
+        // already run a post-merge workflow, so its absence means "create
+        // it," not "skip, nothing to do" — unlike config.yml/release.yml,
+        // which every consumer already has from `init`.
+        let is_post_merge_target = !opts.post_merge_branch_patterns.is_empty()
+            && filename == &opts.post_merge_ci_file
+            && filename != "config.yml";
+        let content = if path.exists() {
+            std::fs::read_to_string(&path)?
+        } else if is_post_merge_target {
+            String::new()
+        } else {
             summary.push(format!("{filename}: not found, skipped"));
             continue;
-        }
-        let content = std::fs::read_to_string(&path)?;
+        };
         let (patched, report) = patch_fn(&content, opts);
 
         for ins in &report.insertions {
@@ -888,6 +1223,9 @@ mod tests {
             record_push_ssh_fingerprint: String::new(),
             build_executor: String::new(),
             test_generation: true,
+            post_merge_branch_patterns: vec![],
+            post_merge_workflow: String::new(),
+            post_merge_ci_file: String::new(),
         }
     }
 
@@ -2790,6 +3128,264 @@ workflows:
             "commit must write the patched content"
         );
         assert!(written.contains("gen-circleci-orb: jerus-org/gen-circleci-orb@0.0.1"));
+    }
+
+    #[test]
+    fn apply_patches_creates_a_missing_post_merge_regen_file() {
+        // gen-circleci-orb#328 review finding: most consumers won't already
+        // have a dedicated post-merge file — apply_patches must create it,
+        // not silently skip it like an optional file that isn't relevant.
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("config.yml"), BUILD_FIXTURE).unwrap();
+        let opts = PatchOpts {
+            record_contexts: vec!["release".to_string()],
+            post_merge_branch_patterns: vec!["renovate/*".to_string()],
+            post_merge_workflow: "update_prlog".to_string(),
+            post_merge_ci_file: "update_prlog.yml".to_string(),
+            ..make_opts()
+        };
+
+        let summary = apply_patches(dir.path(), &opts, WriteMode::Commit).unwrap();
+
+        assert!(
+            summary
+                .iter()
+                .any(|s| s.contains("update_prlog.yml") && s.contains("post-merge-regen")),
+            "summary must report the new file: {summary:?}"
+        );
+        let written = std::fs::read_to_string(dir.path().join("update_prlog.yml")).unwrap();
+        assert!(written.starts_with("version: 2.1"));
+        assert!(written.contains("name: post-merge-build-binary"));
+    }
+
+    // ── patch_post_merge_regen (gen-circleci-orb#328) ───────────────────────
+
+    const UPDATE_PRLOG_FIXTURE: &str = "\
+version: 2.1
+
+orbs:
+  toolkit: jerus-org/circleci-toolkit@7.4.0
+
+workflows:
+  update_prlog:
+    jobs:
+      - toolkit/update_prlog:
+          context: [pcu-app]
+";
+
+    fn opts_with_post_merge_regen() -> PatchOpts {
+        PatchOpts {
+            record_contexts: vec!["release".to_string()],
+            post_merge_branch_patterns: vec!["renovate/*".to_string()],
+            post_merge_workflow: "update_prlog".to_string(),
+            post_merge_ci_file: "update_prlog.yml".to_string(),
+            ..make_opts()
+        }
+    }
+
+    #[test]
+    fn patch_post_merge_regen_noops_when_branch_patterns_empty() {
+        let opts = make_opts(); // post_merge_branch_patterns defaults empty
+        let (output, report) = patch_post_merge_regen(UPDATE_PRLOG_FIXTURE, &opts);
+        assert_eq!(
+            output, UPDATE_PRLOG_FIXTURE,
+            "feature off must change nothing"
+        );
+        assert!(report.insertions.is_empty());
+        assert!(report.skipped.is_empty());
+    }
+
+    #[test]
+    fn patch_post_merge_regen_inserts_relocated_chain_into_named_workflow() {
+        let opts = opts_with_post_merge_regen();
+        let (output, report) = patch_post_merge_regen(UPDATE_PRLOG_FIXTURE, &opts);
+        assert!(!report.insertions.is_empty());
+        assert!(
+            output.contains("name: post-merge-build-binary"),
+            "must insert the relocated build-binary job:\n{output}"
+        );
+        assert!(
+            output.contains("name: post-merge-regenerate-orb"),
+            "must insert the relocated generate job:\n{output}"
+        );
+        assert!(
+            output.contains("target_branch: main"),
+            "the relocated generate job must switch onto main:\n{output}"
+        );
+        assert!(
+            output.contains("allow_main_record: true"),
+            "the relocated generate job must allow recording on main:\n{output}"
+        );
+        // The pre-existing job in the workflow must be preserved untouched.
+        assert!(output.contains("toolkit/update_prlog:"));
+    }
+
+    #[test]
+    fn patch_post_merge_regen_pins_gen_circleci_orb_orb_when_absent() {
+        // The relocated jobs (gen-circleci-orb/build_rust_binary,
+        // gen-circleci-orb/generate) resolve only if the target file itself
+        // declares the orb — UPDATE_PRLOG_FIXTURE does not.
+        let opts = opts_with_post_merge_regen();
+        let (output, _) = patch_post_merge_regen(UPDATE_PRLOG_FIXTURE, &opts);
+        assert!(
+            output.contains(&format!(
+                "gen-circleci-orb: jerus-org/gen-circleci-orb@{}",
+                opts.gen_circleci_orb_version
+            )),
+            "target file must declare the gen-circleci-orb orb pin:\n{output}"
+        );
+    }
+
+    #[test]
+    fn patch_post_merge_regen_pins_orb_tools_when_test_generation_true() {
+        let opts = PatchOpts {
+            test_generation: true,
+            ..opts_with_post_merge_regen()
+        };
+        let (output, _) = patch_post_merge_regen(UPDATE_PRLOG_FIXTURE, &opts);
+        assert!(
+            output.contains(&format!(
+                "orb-tools: circleci/orb-tools@{}",
+                opts.orb_tools_version
+            )),
+            "post-merge-pack-orb/review-orb need orb-tools declared:\n{output}"
+        );
+    }
+
+    #[test]
+    fn patch_post_merge_regen_omits_orb_tools_pin_when_test_generation_false() {
+        let opts = PatchOpts {
+            test_generation: false,
+            ..opts_with_post_merge_regen()
+        };
+        let (output, _) = patch_post_merge_regen(UPDATE_PRLOG_FIXTURE, &opts);
+        assert!(
+            !output.contains("orb-tools:"),
+            "no pack/review jobs means no need for orb-tools:\n{output}"
+        );
+    }
+
+    #[test]
+    fn patch_post_merge_regen_creates_workflow_when_absent_from_existing_file() {
+        // gen-circleci-orb#328 review finding: a typo'd or not-yet-created
+        // workflow name must not silently no-op — most consumers won't
+        // already have a post-merge workflow, so creating it is expected.
+        let content = "\
+version: 2.1
+
+orbs:
+  toolkit: jerus-org/circleci-toolkit@7.4.0
+  gen-circleci-orb: jerus-org/gen-circleci-orb@0.0.1
+
+workflows:
+  other_workflow:
+    jobs:
+      - some-job
+";
+        let opts = opts_with_post_merge_regen();
+        let (output, report) = patch_post_merge_regen(content, &opts);
+        assert!(!report.insertions.is_empty());
+        assert!(
+            output.contains("  update_prlog:") && output.contains("    jobs:"),
+            "must create the named workflow:\n{output}"
+        );
+        assert!(
+            output.contains("name: post-merge-build-binary"),
+            "must insert the relocated chain into the newly created workflow:\n{output}"
+        );
+        // The pre-existing, unrelated workflow must survive untouched.
+        assert!(output.contains("  other_workflow:") && output.contains("- some-job"));
+    }
+
+    #[test]
+    fn patch_post_merge_regen_creates_file_from_scratch() {
+        // A brand-new dedicated post_merge_ci_file (nothing on disk yet) must
+        // get a minimal, valid CircleCI config: version, the orb pin(s), and
+        // the named workflow with the relocated chain.
+        let opts = opts_with_post_merge_regen();
+        let (output, report) = patch_post_merge_regen("", &opts);
+        assert!(!report.insertions.is_empty());
+        assert!(output.starts_with("version: 2.1"), "output:\n{output}");
+        assert!(output.contains(&format!(
+            "gen-circleci-orb: jerus-org/gen-circleci-orb@{}",
+            opts.gen_circleci_orb_version
+        )));
+        assert!(output.contains("  update_prlog:") && output.contains("    jobs:"));
+        assert!(output.contains("name: post-merge-build-binary"));
+        assert!(output.ends_with('\n'));
+    }
+
+    #[test]
+    fn patch_post_merge_regen_guards_every_relocated_job_on_qualifying_branch() {
+        let opts = opts_with_post_merge_regen();
+        let (output, _) = patch_post_merge_regen(UPDATE_PRLOG_FIXTURE, &opts);
+        let guard_count = output.matches("circleci-agent step halt").count();
+        assert_eq!(
+            guard_count, 4,
+            "every relocated job (build-binary, regenerate-orb, pack-orb, \
+             review-orb — test_generation defaults true) must carry its own \
+             qualifying-branch guard, not just the first:\n{output}"
+        );
+        assert!(output.contains("case \"$CIRCLE_BRANCH\" in"));
+        assert!(output.contains("renovate/*)"));
+    }
+
+    #[test]
+    fn patch_post_merge_regen_omits_pack_review_when_test_generation_false() {
+        let opts = PatchOpts {
+            test_generation: false,
+            ..opts_with_post_merge_regen()
+        };
+        let (output, _) = patch_post_merge_regen(UPDATE_PRLOG_FIXTURE, &opts);
+        assert!(!output.contains("post-merge-pack-orb"));
+        assert!(!output.contains("post-merge-review-orb"));
+    }
+
+    #[test]
+    fn patch_post_merge_regen_includes_pack_review_when_test_generation_true() {
+        let opts = PatchOpts {
+            test_generation: true,
+            ..opts_with_post_merge_regen()
+        };
+        let (output, _) = patch_post_merge_regen(UPDATE_PRLOG_FIXTURE, &opts);
+        assert!(output.contains("name: post-merge-pack-orb"));
+        assert!(output.contains("name: post-merge-review-orb"));
+    }
+
+    #[test]
+    fn patch_post_merge_regen_is_idempotent() {
+        let opts = opts_with_post_merge_regen();
+        let (once, _) = patch_post_merge_regen(UPDATE_PRLOG_FIXTURE, &opts);
+        let (twice, report) = patch_post_merge_regen(&once, &opts);
+        assert_eq!(once, twice, "a second patch must be a no-op");
+        assert!(!report.skipped.is_empty());
+    }
+
+    #[test]
+    fn resync_post_merge_regen_is_idempotent_via_strip_and_repatch() {
+        // The real `update --check` path: strip whatever managed content is
+        // already there, then re-patch fresh. Two resyncs of the same source
+        // must converge byte-for-byte (the same discipline `resync_build`
+        // already gives config.yml), and the pre-existing job must survive.
+        let opts = opts_with_post_merge_regen();
+        let (once, _) = resync_post_merge_regen(UPDATE_PRLOG_FIXTURE, &opts);
+        let (twice, _) = resync_post_merge_regen(&once, &opts);
+        assert_eq!(once, twice, "a second resync must be a no-op");
+        assert!(once.contains("toolkit/update_prlog:"));
+    }
+
+    #[test]
+    fn patch_post_merge_regen_does_not_filter_branches() {
+        // Branch filters are blocked entirely on "pr merged" pipelines
+        // (CIRCLE_BRANCH is the PR's HEAD branch, not main) — the relocated
+        // jobs must rely solely on the qualifying-branch guard, never a
+        // `filters: branches:` block.
+        let opts = opts_with_post_merge_regen();
+        let (output, _) = patch_post_merge_regen(UPDATE_PRLOG_FIXTURE, &opts);
+        assert!(
+            !output.contains("filters:"),
+            "relocated jobs must not use branch filters:\n{output}"
+        );
     }
 }
 

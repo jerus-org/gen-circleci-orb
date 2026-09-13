@@ -2,9 +2,9 @@ mod types;
 
 pub use types::{
     CiSection, ExtraJob, JobGroup, JobGroupParam, JobGroupStep, OrbConfig, OrbSection,
-    ParamOverride, RecordConfig, SubcommandConfig, DEFAULT_BASE_IMAGE, DEFAULT_BUILDER_IMAGE,
-    DEFAULT_CRATE_WAIT_ATTEMPTS, DEFAULT_CRATE_WAIT_SECONDS, DEFAULT_INSTALL_METHOD,
-    DEFAULT_ORB_DIR, MAX_CRATE_WAIT_ATTEMPTS, MCP_DEFAULT_BASE_IMAGE,
+    ParamOverride, PostMergeRegenConfig, RecordConfig, SubcommandConfig, DEFAULT_BASE_IMAGE,
+    DEFAULT_BUILDER_IMAGE, DEFAULT_CRATE_WAIT_ATTEMPTS, DEFAULT_CRATE_WAIT_SECONDS,
+    DEFAULT_INSTALL_METHOD, DEFAULT_ORB_DIR, MAX_CRATE_WAIT_ATTEMPTS, MCP_DEFAULT_BASE_IMAGE,
 };
 
 use anyhow::{Context, Result};
@@ -352,6 +352,63 @@ enabled = false
     }
 
     #[test]
+    fn post_merge_regen_config_default_file_matches_serde_default() {
+        // Code review finding (gen-circleci-orb#328): a bare `::default()`
+        // must agree with what deserializing an omitted `file` key produces
+        // ("config.yml") — not the derived empty string — or a future
+        // `..PostMergeRegenConfig::default()` construction would silently
+        // target an empty filename.
+        assert_eq!(PostMergeRegenConfig::default().file, "config.yml");
+    }
+
+    #[test]
+    fn load_config_parses_post_merge_regen() {
+        // #328: a [post_merge_regen] section relocates regen+record off a
+        // qualifying bot branch into a config-named workflow/file.
+        let dir = TempDir::new().unwrap();
+        let path = write_toml(
+            &dir,
+            r#"
+[post_merge_regen]
+branch_patterns = ["renovate/*", "dependabot/*"]
+workflow = "update_prlog"
+file = "update_prlog.yml"
+"#,
+        );
+        let config = load_config(&path).unwrap();
+        let pmr = config
+            .post_merge_regen
+            .expect("[post_merge_regen] must parse");
+        assert_eq!(
+            pmr.branch_patterns,
+            vec!["renovate/*".to_string(), "dependabot/*".to_string()]
+        );
+        assert_eq!(pmr.workflow, "update_prlog");
+        assert_eq!(pmr.file, "update_prlog.yml");
+    }
+
+    #[test]
+    fn load_config_post_merge_regen_file_defaults_to_config_yml() {
+        // `file` is optional — most consumers relocate into the primary
+        // config.yml, only a dedicated-file consumer (this org's
+        // update_prlog.yml) needs to name one explicitly.
+        let dir = TempDir::new().unwrap();
+        let path = write_toml(
+            &dir,
+            r#"
+[post_merge_regen]
+branch_patterns = ["renovate/*"]
+workflow = "validation"
+"#,
+        );
+        let config = load_config(&path).unwrap();
+        let pmr = config
+            .post_merge_regen
+            .expect("[post_merge_regen] must parse");
+        assert_eq!(pmr.file, "config.yml");
+    }
+
+    #[test]
     fn load_config_parses_git_push_subcommands() {
         let dir = TempDir::new().unwrap();
         let path = write_toml(
@@ -664,6 +721,7 @@ steps:
             }]),
             extra_job: None,
             record: None,
+            post_merge_regen: None,
         };
 
         save_config(&path, &original).unwrap();
