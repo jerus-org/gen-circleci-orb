@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- post-merge regen for bot PRs (#328)(pr [#392])
+
 ### Changed
 
 - chore-cut over to test_generation false (#382)(pr [#390])
@@ -1091,6 +1095,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#388]: https://github.com/jerus-org/gen-circleci-orb/pull/388
 [#389]: https://github.com/jerus-org/gen-circleci-orb/pull/389
 [#390]: https://github.com/jerus-org/gen-circleci-orb/pull/390
+[#392]: https://github.com/jerus-org/gen-circleci-orb/pull/392
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.15...HEAD
 [0.1.15]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.14...v0.1.15
 [0.1.14]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.13...v0.1.14
