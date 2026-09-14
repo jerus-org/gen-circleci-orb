@@ -5,9 +5,21 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.17] - 2026-09-14
+
+Summary: Documentation[1], Fixed[5]
+
+### Fixed
+
+ - fix: strip comments, drop flow-mapping parsing
+ - fix: correct effective-name detection edge cases
+ - fix: run relocated chain last, not customer jobs
+ - fix: guard requires-wiring against bad YAML
+ - fix: wire requires for post-merge-regen push race
+
 ## [0.1.16] - 2026-09-13
 
-Summary: Added[1]
+Summary: Added[1], Chore[1]
 
 ### Added
 
@@ -865,7 +877,8 @@ Summary: Added[2], Chore[1], Fixed[2], Testing[1]
 
 Summary: Chore[2]
 
-[Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.15...HEAD
+[Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.16...HEAD
+[0.1.16]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.15...v0.1.16
 [0.1.15]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.14...v0.1.15
 [0.1.14]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.13...v0.1.14
 [0.1.13]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.12...v0.1.13
