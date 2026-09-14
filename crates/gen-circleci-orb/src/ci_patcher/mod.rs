@@ -538,8 +538,11 @@ pub fn patch_post_merge_regen(content: &str, opts: &PatchOpts) -> (String, Patch
 
     ensure_post_merge_regen_orb_pins(content, &mut lines, opts, &mut report);
     ensure_workflow_exists(&mut lines, &opts.post_merge_workflow);
+    // Ensure the relocated chain runs after every job already in the
+    // workflow, without editing any of their blocks.
+    let pre_existing = pre_existing_job_names(&lines, &opts.post_merge_workflow);
 
-    let step_block = post_merge_regen_steps(opts);
+    let step_block = post_merge_regen_steps(opts, &pre_existing);
     let pos = find_workflow_jobs_end(&lines, &opts.post_merge_workflow)
         .expect("ensure_workflow_exists guarantees the workflow now exists");
     insert_block_at(&mut lines, pos, &step_block);
@@ -552,6 +555,73 @@ pub fn patch_post_merge_regen(content: &str, opts: &PatchOpts) -> (String, Patch
         output.push('\n');
     }
     (output, report)
+}
+
+/// Effective job names (an explicit `name:` override when present, else the
+/// job reference itself) of every job already in `workflow`, in document
+/// order. Read-only: used so the relocated chain can require these jobs,
+/// never to edit them.
+fn pre_existing_job_names(lines: &[String], workflow: &str) -> Vec<String> {
+    let Some((jobs_start, jobs_end)) = find_workflow_jobs_bounds(lines, workflow) else {
+        return Vec::new();
+    };
+    // Derived from the `jobs:` line's own indent, not a hardcoded constant —
+    // `find_workflow_jobs_bounds` accepts more than one header indent, so a
+    // fixed entry indent could silently miss every job under a form it
+    // doesn't expect.
+    let entry_indent = indent_of(&lines[jobs_start]) + 2;
+    let mut names = Vec::new();
+    let mut i = jobs_start + 1;
+    while i < jobs_end {
+        if indent_of(&lines[i]) == entry_indent && lines[i].trim_start().starts_with("- ") {
+            let mut end = i + 1;
+            while end < jobs_end && (lines[end].is_empty() || indent_of(&lines[end]) > entry_indent)
+            {
+                end += 1;
+            }
+            // Only a name: at this job's own top-level indent counts as an
+            // override — a nested one (e.g. under matrix parameters) does
+            // not. An override inside an inline flow mapping isn't parsed;
+            // the bare job reference is used instead.
+            let param_indent = entry_indent + 4;
+            let explicit_name = (i + 1..end).find_map(|j| {
+                if indent_of(&lines[j]) != param_indent {
+                    return None;
+                }
+                lines[j]
+                    .trim_start()
+                    .strip_prefix("name: ")
+                    .map(|s| strip_trailing_comment(s.trim()).to_string())
+            });
+            names.push(explicit_name.unwrap_or_else(|| job_name_from_dash_line(&lines[i])));
+            i = end;
+        } else {
+            i += 1;
+        }
+    }
+    names
+}
+
+/// The job reference/name portion of a workflow job-list dash line, e.g.
+/// `- toolkit/x:` -> `toolkit/x`, `- lint` -> `lint`. Trailing comments are
+/// stripped first.
+fn job_name_from_dash_line(dash_line: &str) -> String {
+    let rest = dash_line.trim_start().trim_start_matches("- ").trim();
+    let rest = strip_trailing_comment(rest);
+    match rest.find(':') {
+        Some(idx) => rest[..idx].trim().to_string(),
+        None => rest.to_string(),
+    }
+}
+
+/// Strip a trailing ` #...` YAML comment (a `#` preceded by whitespace) from
+/// `s`. Job references and names never legitimately contain a space, so the
+/// first ` #` is unambiguously the start of a comment.
+fn strip_trailing_comment(s: &str) -> &str {
+    match s.find(" #") {
+        Some(idx) => s[..idx].trim_end(),
+        None => s,
+    }
 }
 
 /// Insertion point for entries directly under a top-level `header:` section,
@@ -694,7 +764,7 @@ fn qualifying_branch_guard_run_step(patterns: &[String]) -> Vec<String> {
 /// `[record].enabled` is a hard prerequisite of `[post_merge_regen]`
 /// (validated at config-load time), so — unlike `push_build_and_regenerate_steps`
 /// — there is no no-record fallback here.
-fn post_merge_regen_steps(opts: &PatchOpts) -> Vec<String> {
+fn post_merge_regen_steps(opts: &PatchOpts, pre_existing: &[String]) -> Vec<String> {
     let orb_dir = &opts.orb_dir;
     let binary = &opts.binary;
     let mut steps = vec![managed_begin("      ")];
@@ -704,6 +774,11 @@ fn post_merge_regen_steps(opts: &PatchOpts) -> Vec<String> {
     steps.push(format!("          package: {binary}"));
     if !opts.build_executor.is_empty() {
         steps.push(format!("          executor: {}", opts.build_executor));
+    }
+    // Run the relocated chain last, after every job already in the
+    // workflow (see pre_existing_job_names).
+    if !pre_existing.is_empty() {
+        steps.push(format!("          requires: [{}]", pre_existing.join(", ")));
     }
     steps.extend(qualifying_branch_guard_steps(
         &opts.post_merge_branch_patterns,
@@ -857,6 +932,14 @@ fn find_section_end(lines: &[String], header: &str) -> Option<usize> {
 
 /// Find the insertion point at the end of a named workflow's `jobs:` list.
 fn find_workflow_jobs_end(lines: &[String], workflow: &str) -> Option<usize> {
+    Some(find_workflow_jobs_bounds(lines, workflow)?.1)
+}
+
+/// The `jobs:` line's own index, and the insertion point at the end of its
+/// list (one past the last job entry, or the first line that ends the
+/// workflow/section) — the same end `find_workflow_jobs_end` returns, plus
+/// the start needed to walk the list's existing entries.
+fn find_workflow_jobs_bounds(lines: &[String], workflow: &str) -> Option<(usize, usize)> {
     let wf_line = format!("  {workflow}:");
     let wf_idx = lines
         .iter()
@@ -884,10 +967,10 @@ fn find_workflow_jobs_end(lines: &[String], workflow: &str) -> Option<usize> {
         // Jobs entries are indented 6+ spaces; anything less ends the block
         let indent = l.len() - l.trim_start().len();
         if indent <= 2 {
-            return Some(i);
+            return Some((jobs_start, i));
         }
     }
-    Some(lines.len())
+    Some((jobs_start, lines.len()))
 }
 
 /// Whether build-binary/regenerate-orb should run at all: either there's a
@@ -3218,6 +3301,256 @@ workflows:
         );
         // The pre-existing job in the workflow must be preserved untouched.
         assert!(output.contains("toolkit/update_prlog:"));
+    }
+
+    #[test]
+    fn patch_post_merge_regen_runs_the_chain_last_after_pre_existing_jobs() {
+        // Code-review finding: a pre-existing job in the target workflow
+        // (UPDATE_PRLOG_FIXTURE's toolkit/update_prlog) may push to `main`
+        // in the same pipeline run as post-merge-regenerate-orb (the only
+        // job in the relocated chain that pushes). The fix runs our own
+        // chain last — post-merge-build-binary requires every job already
+        // there — never by editing a customer-owned job block ourselves.
+        let opts = opts_with_post_merge_regen();
+        let (output, _) = patch_post_merge_regen(UPDATE_PRLOG_FIXTURE, &opts);
+        assert!(
+            output.contains("name: post-merge-build-binary\n          package: mytool\n          requires: [toolkit/update_prlog]"),
+            "our first job must require the pre-existing one:\n{output}"
+        );
+        // The pre-existing job's own block must be completely untouched —
+        // editing a customer-owned job is out of scope, even inside a file
+        // we otherwise manage.
+        assert!(
+            output.contains("- toolkit/update_prlog:\n          context: [pcu-app]\n      #"),
+            "pre-existing job block must be byte-for-byte unchanged:\n{output}"
+        );
+    }
+
+    #[test]
+    fn patch_post_merge_regen_uses_explicit_name_override_when_present() {
+        let content = "\
+version: 2.1
+
+orbs:
+  toolkit: jerus-org/circleci-toolkit@7.4.0
+
+workflows:
+  update_prlog:
+    jobs:
+      - toolkit/update_prlog:
+          name: update-prlog-on-main
+          context: [pcu-app]
+";
+        let opts = opts_with_post_merge_regen();
+        let (output, _) = patch_post_merge_regen(content, &opts);
+        assert!(
+            output.contains("requires: [update-prlog-on-main]"),
+            "must require the job's overridden name, not its bare reference:\n{output}"
+        );
+    }
+
+    #[test]
+    fn patch_post_merge_regen_ignores_a_nested_name_key_inside_matrix_parameters() {
+        // Code-review finding: a matrix job's `parameters: { name: [a, b] }`
+        // is a parameter value, not the job's own name override — matching
+        // any `name: ` line anywhere in the block (regardless of nesting)
+        // mistakes it for one and requires a broken `[[a, b]]`.
+        let content = "\
+version: 2.1
+
+orbs:
+  toolkit: jerus-org/circleci-toolkit@7.4.0
+
+workflows:
+  update_prlog:
+    jobs:
+      - toolkit/some_job:
+          matrix:
+            parameters:
+              name: [a, b]
+";
+        let opts = opts_with_post_merge_regen();
+        let (output, _) = patch_post_merge_regen(content, &opts);
+        assert!(
+            output.contains("requires: [toolkit/some_job]"),
+            "must fall back to the bare job reference, not the nested matrix param:\n{output}"
+        );
+        assert!(
+            !output.contains("requires: [[a, b]]"),
+            "must never emit the matrix parameter's own list as the required name:\n{output}"
+        );
+    }
+
+    #[test]
+    fn patch_post_merge_regen_falls_back_to_bare_ref_for_inline_flow_name_override() {
+        // A name: override embedded in an inline flow-mapping entry is a
+        // deliberately accepted gap: two rounds of code review found further
+        // ways plain string matching could misparse arbitrary flow-mapping
+        // content (a nested matrix name:, a comma inside a quoted value).
+        // Falling back to the bare job reference here means a worst case of
+        // a loud, self-explanatory CircleCI "job not found" error — not
+        // silent corruption.
+        let content = "\
+version: 2.1
+
+orbs:
+  toolkit: jerus-org/circleci-toolkit@7.4.0
+
+workflows:
+  update_prlog:
+    jobs:
+      - toolkit/update_prlog: {name: my-name, context: [pcu-app]}
+";
+        let opts = opts_with_post_merge_regen();
+        let (output, _) = patch_post_merge_regen(content, &opts);
+        assert!(
+            output.contains("requires: [toolkit/update_prlog]"),
+            "must fall back to the bare job reference, not attempt to parse the \
+             inline flow-mapping's name: override:\n{output}"
+        );
+    }
+
+    #[test]
+    fn patch_post_merge_regen_strips_a_trailing_comment_from_a_job_name() {
+        // Code-review finding: a job entry with a trailing inline comment
+        // (`- lint  # nightly only`) had the comment spliced verbatim into
+        // the name — an unquoted `#` mid `requires: [...]` starts a YAML
+        // comment there, swallowing the closing bracket.
+        let content = "\
+version: 2.1
+
+orbs:
+  toolkit: jerus-org/circleci-toolkit@7.4.0
+
+workflows:
+  update_prlog:
+    jobs:
+      - lint  # nightly only
+";
+        let opts = opts_with_post_merge_regen();
+        let (output, _) = patch_post_merge_regen(content, &opts);
+        assert!(
+            output.contains("requires: [lint]"),
+            "the comment must be stripped from the required name:\n{output}"
+        );
+    }
+
+    #[test]
+    fn patch_post_merge_regen_strips_a_trailing_comment_from_an_explicit_name() {
+        let content = "\
+version: 2.1
+
+orbs:
+  toolkit: jerus-org/circleci-toolkit@7.4.0
+
+workflows:
+  update_prlog:
+    jobs:
+      - toolkit/update_prlog:
+          name: update-prlog-on-main  # primary push job
+          context: [pcu-app]
+";
+        let opts = opts_with_post_merge_regen();
+        let (output, _) = patch_post_merge_regen(content, &opts);
+        assert!(
+            output.contains("requires: [update-prlog-on-main]"),
+            "the comment must be stripped from the explicit name override:\n{output}"
+        );
+    }
+
+    #[test]
+    fn patch_post_merge_regen_requires_every_pre_existing_job_in_order() {
+        let content = "\
+version: 2.1
+
+orbs:
+  toolkit: jerus-org/circleci-toolkit@7.4.0
+
+workflows:
+  update_prlog:
+    jobs:
+      - lint
+      - toolkit/update_prlog:
+          context: [pcu-app]
+";
+        let opts = opts_with_post_merge_regen();
+        let (output, _) = patch_post_merge_regen(content, &opts);
+        assert!(
+            output.contains("requires: [lint, toolkit/update_prlog]"),
+            "must require every pre-existing job, in document order:\n{output}"
+        );
+        // Neither pre-existing entry is touched.
+        assert!(output.contains("      - lint\n"));
+        assert!(output.contains("      - toolkit/update_prlog:\n          context: [pcu-app]\n"));
+    }
+
+    #[test]
+    fn patch_post_merge_regen_names_flow_mapping_job_correctly() {
+        // `- deploy: {filters: {...}}` — an inline flow-mapping job entry —
+        // must be named `deploy`, not misparsed as anything else, and must
+        // never itself be rewritten.
+        let content = "\
+version: 2.1
+
+orbs:
+  toolkit: jerus-org/circleci-toolkit@7.4.0
+
+workflows:
+  update_prlog:
+    jobs:
+      - deploy: {filters: {branches: {only: main}}}
+";
+        let opts = opts_with_post_merge_regen();
+        let (output, _) = patch_post_merge_regen(content, &opts);
+        assert!(
+            output.contains("requires: [deploy]"),
+            "must extract 'deploy' as the job name from the flow-mapping entry:\n{output}"
+        );
+        assert!(
+            output.contains("      - deploy: {filters: {branches: {only: main}}}\n"),
+            "the flow-mapping entry itself must be byte-for-byte unchanged:\n{output}"
+        );
+    }
+
+    #[test]
+    fn patch_post_merge_regen_adds_no_requires_when_workflow_was_just_created() {
+        // A brand-new workflow has no pre-existing jobs to wait on.
+        let content = "\
+version: 2.1
+
+orbs:
+  toolkit: jerus-org/circleci-toolkit@7.4.0
+
+workflows:
+  other_workflow:
+    jobs:
+      - some-job
+";
+        let opts = opts_with_post_merge_regen();
+        let (output, _) = patch_post_merge_regen(content, &opts);
+        let build_binary = &output[output.find("name: post-merge-build-binary").unwrap()..];
+        let next_job = &build_binary[..build_binary.find("pre-steps:").unwrap()];
+        assert!(
+            !next_job.contains("requires:"),
+            "no pre-existing job in the newly created workflow means no requires: \
+             to add:\n{next_job}"
+        );
+    }
+
+    #[test]
+    fn patch_post_merge_regen_leaves_relocated_jobs_own_internal_requires_untouched() {
+        // The wiring only touches post-merge-build-binary's own requires: —
+        // never rewrites the chain's other internal requires: (e.g.
+        // post-merge-regenerate-orb requiring post-merge-build-binary).
+        let opts = opts_with_post_merge_regen();
+        let (output, _) = patch_post_merge_regen(UPDATE_PRLOG_FIXTURE, &opts);
+        assert_eq!(
+            output
+                .matches("requires: [post-merge-build-binary]")
+                .count(),
+            1,
+            "the chain's own internal requires: must be unaffected:\n{output}"
+        );
     }
 
     #[test]

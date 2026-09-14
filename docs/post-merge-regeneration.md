@@ -80,10 +80,9 @@ If you have never set this up before, do it **before** adding `[post_merge_regen
 the generated jobs are correct but nothing ever triggers them. `init` and `generate` print a
 reminder with both links above the first time they see `[post_merge_regen]` configured.
 
-Some organizations already run a post-merge workflow for other reasons (this org's own
-`update_prlog.yml`, for instance, updates `PRLOG.md`) and can simply add the relocated chain to
-that existing workflow/file. If you don't already have one, you will need to create it and wire
-up the trigger yourself first.
+Some organizations already run a post-merge workflow for other administrative purposes and can
+simply add the relocated chain to that existing workflow/file. If you don't already have one, you
+will need to create it and wire up the trigger yourself first.
 
 ## Configuration
 
@@ -105,17 +104,26 @@ file = "update_prlog.yml"            # CI file containing that workflow; default
 `[post_merge_regen]` requires `[record].enabled = true` — `update`/`init` refuse to proceed
 otherwise, since there is nothing to relocate without auto-record enabled in the first place.
 
-## A known limitation: job ordering within the target workflow
+## Job ordering within the target workflow
 
-The generator only ever adds the relocated chain's own jobs (and their `requires:` among
-themselves) to your named workflow. It never edits any job **already** in that workflow — for
-example, this org's own `update_prlog.yml` also runs `toolkit/update_prlog`, which pushes a
-`PRLOG.md` update to `main`. If both that job and the relocated chain's `post-merge-regenerate-orb`
-push to `main` in the same pipeline run, there is a possible race between the two pushes.
+A dedicated post-merge workflow commonly exists specifically to push administrative changes to
+`main`. To avoid racing one of those pushes against the relocated chain's own push, the generator
+makes the relocated chain run **last**: its first job automatically requires every job already in
+the workflow, using each job's effective name (an explicit `name:` override when it has one, else
+the job reference itself).
 
-Guessing which pre-existing job should `requires:` the relocated chain is consumer-specific, so
-the generator does not attempt it. If your target workflow has another job that pushes to `main`,
-wire the `requires:` dependency between them yourself.
+This edit is made only on the relocated chain's own job — never by rewriting a pre-existing,
+customer-owned job block. Even inside a file this feature otherwise manages, editing someone
+else's job is out of scope for a generator.
+
+An override embedded in an inline flow-mapping entry (`- job: {name: x, ...}`) is not parsed; that
+job is required by its bare reference instead, which fails loudly (a CircleCI "job not found"
+error) rather than silently, in the rare case that matters.
+
+Requiring **every** pre-existing job also means one that is itself excluded by its own `filters:`
+on a given trigger silently keeps the relocated chain from running on that trigger too. A future
+`[post_merge_regen]` option to name which pre-existing jobs to wait on would put that control in
+the consumer's hands — not implemented yet.
 
 ## Verifying it live
 
