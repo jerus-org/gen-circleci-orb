@@ -538,6 +538,14 @@ pub fn patch_post_merge_regen(content: &str, opts: &PatchOpts) -> (String, Patch
 
     ensure_post_merge_regen_orb_pins(content, &mut lines, opts, &mut report);
     ensure_workflow_exists(&mut lines, &opts.post_merge_workflow);
+    // Before inserting the relocated chain: any job ALREADY in this workflow
+    // may push to `main` in the same pipeline run as post-merge-regenerate-orb
+    // (the only relocated job that itself pushes) — a real race, not a
+    // hypothetical one, since a dedicated post-merge workflow's whole reason
+    // for existing is usually to push administrative changes to `main`. Doing
+    // this now, before insertion, means every job walked here predates the
+    // chain — no need to distinguish "ours" from "theirs" afterward.
+    require_relocated_chain_on_pre_existing_jobs(&mut lines, &opts.post_merge_workflow);
 
     let step_block = post_merge_regen_steps(opts);
     let pos = find_workflow_jobs_end(&lines, &opts.post_merge_workflow)
@@ -552,6 +560,88 @@ pub fn patch_post_merge_regen(content: &str, opts: &PatchOpts) -> (String, Patch
         output.push('\n');
     }
     (output, report)
+}
+
+/// Name of the only relocated post-merge-regen job that itself pushes to
+/// `main` — `post-merge-build-binary` only compiles, and (when
+/// `test_generation`) `post-merge-pack-orb`/`review-orb` only validate.
+/// Fixed regardless of `test_generation`, so a later config change never
+/// leaves a pre-existing job's wiring pointing at a job that no longer
+/// exists or is no longer the relevant one.
+const POST_MERGE_REGEN_PUSHING_JOB: &str = "post-merge-regenerate-orb";
+
+/// Make every job ALREADY in `workflow` (i.e. present before the relocated
+/// chain is inserted) `requires:` [`POST_MERGE_REGEN_PUSHING_JOB`] — a
+/// generic, no-guessing fix for the race between the relocated chain and any
+/// pre-existing job that also pushes to `main`, which is the entire reason a
+/// dedicated post-merge workflow exists in the first place (see
+/// gen-circleci-orb#328's `/code-review` finding). Idempotent per job: a job
+/// whose `requires:` already names it is left alone.
+fn require_relocated_chain_on_pre_existing_jobs(lines: &mut Vec<String>, workflow: &str) {
+    let Some((jobs_start, jobs_end)) = find_workflow_jobs_bounds(lines, workflow) else {
+        return;
+    };
+
+    // Collect (start, end) for every job block already in this workflow's
+    // jobs list, then apply from the last block backwards so an earlier
+    // block's insertion never invalidates a later block's indices.
+    let mut blocks = Vec::new();
+    let mut i = jobs_start + 1;
+    while i < jobs_end {
+        if indent_of(&lines[i]) == 6 && lines[i].trim_start().starts_with("- ") {
+            let mut end = i + 1;
+            while end < jobs_end && (lines[end].is_empty() || indent_of(&lines[end]) >= 7) {
+                end += 1;
+            }
+            blocks.push((i, end));
+            i = end;
+        } else {
+            i += 1;
+        }
+    }
+    for (start, end) in blocks.into_iter().rev() {
+        add_requires_to_job_block(lines, start, end, POST_MERGE_REGEN_PUSHING_JOB);
+    }
+}
+
+/// Add `terminal` to the job block spanning `[start, end)` (the `- <job>:`
+/// line at `start`, its params through `end`): appended to an existing
+/// inline `requires: [...]` list, appended as a new item under an existing
+/// block-style `requires:` list, or added as a new `requires: [terminal]`
+/// line at the end of the block when the job has none. A no-op when
+/// `terminal` is already present.
+fn add_requires_to_job_block(lines: &mut Vec<String>, start: usize, end: usize, terminal: &str) {
+    for i in start + 1..end {
+        let trimmed = lines[i].trim_start();
+        if let Some(rest) = trimmed.strip_prefix("requires: [") {
+            if let Some(close) = rest.find(']') {
+                let items = &rest[..close];
+                if items.split(',').map(str::trim).any(|it| it == terminal) {
+                    return;
+                }
+                let indent = " ".repeat(indent_of(&lines[i]));
+                let sep = if items.trim().is_empty() { "" } else { ", " };
+                lines[i] = format!("{indent}requires: [{items}{sep}{terminal}]");
+                return;
+            }
+        } else if trimmed == "requires:" {
+            let item_indent = indent_of(&lines[i]) + 2;
+            let mut j = i + 1;
+            while j < end && indent_of(&lines[j]) >= item_indent {
+                if lines[j].trim_start() == format!("- {terminal}") {
+                    return;
+                }
+                j += 1;
+            }
+            lines.insert(j, format!("{}- {terminal}", " ".repeat(item_indent)));
+            return;
+        }
+    }
+    // No requires: line at all — append one at the end of the job block, at
+    // the same param indent every other job invocation in this codebase uses
+    // (the `- <job>:` dash line's indent, plus 4).
+    let indent = " ".repeat(indent_of(&lines[start]) + 4);
+    lines.insert(end, format!("{indent}requires: [{terminal}]"));
 }
 
 /// Insertion point for entries directly under a top-level `header:` section,
@@ -857,6 +947,14 @@ fn find_section_end(lines: &[String], header: &str) -> Option<usize> {
 
 /// Find the insertion point at the end of a named workflow's `jobs:` list.
 fn find_workflow_jobs_end(lines: &[String], workflow: &str) -> Option<usize> {
+    Some(find_workflow_jobs_bounds(lines, workflow)?.1)
+}
+
+/// The `jobs:` line's own index, and the insertion point at the end of its
+/// list (one past the last job entry, or the first line that ends the
+/// workflow/section) — the same end `find_workflow_jobs_end` returns, plus
+/// the start needed to walk the list's existing entries.
+fn find_workflow_jobs_bounds(lines: &[String], workflow: &str) -> Option<(usize, usize)> {
     let wf_line = format!("  {workflow}:");
     let wf_idx = lines
         .iter()
@@ -884,10 +982,10 @@ fn find_workflow_jobs_end(lines: &[String], workflow: &str) -> Option<usize> {
         // Jobs entries are indented 6+ spaces; anything less ends the block
         let indent = l.len() - l.trim_start().len();
         if indent <= 2 {
-            return Some(i);
+            return Some((jobs_start, i));
         }
     }
-    Some(lines.len())
+    Some((jobs_start, lines.len()))
 }
 
 /// Whether build-binary/regenerate-orb should run at all: either there's a
@@ -3218,6 +3316,63 @@ workflows:
         );
         // The pre-existing job in the workflow must be preserved untouched.
         assert!(output.contains("toolkit/update_prlog:"));
+    }
+
+    #[test]
+    fn patch_post_merge_regen_wires_requires_on_pre_existing_job() {
+        // Code-review finding: a pre-existing job in the target workflow
+        // (UPDATE_PRLOG_FIXTURE's toolkit/update_prlog) may push to `main`
+        // in the same pipeline run as post-merge-regenerate-orb (the only
+        // job in the relocated chain that pushes). Racing two pushes to
+        // `main` is a real bug the generator must avoid, not leave to the
+        // consumer to notice and hand-wire.
+        let opts = opts_with_post_merge_regen();
+        let (output, _) = patch_post_merge_regen(UPDATE_PRLOG_FIXTURE, &opts);
+        let job_block = &output[output.find("toolkit/update_prlog:").unwrap()
+            ..output.find("post-merge-build-binary").unwrap()];
+        assert!(
+            job_block.contains("requires: [post-merge-regenerate-orb]"),
+            "pre-existing job must be wired to wait on the relocated chain's \
+             push-capable job:\n{job_block}"
+        );
+    }
+
+    #[test]
+    fn patch_post_merge_regen_appends_to_an_existing_inline_requires() {
+        let content = "\
+version: 2.1
+
+orbs:
+  toolkit: jerus-org/circleci-toolkit@7.4.0
+
+workflows:
+  update_prlog:
+    jobs:
+      - toolkit/update_prlog:
+          requires: [some-other-job]
+";
+        let opts = opts_with_post_merge_regen();
+        let (output, _) = patch_post_merge_regen(content, &opts);
+        assert!(
+            output.contains("requires: [some-other-job, post-merge-regenerate-orb]"),
+            "must append to the existing list, not replace it:\n{output}"
+        );
+    }
+
+    #[test]
+    fn patch_post_merge_regen_leaves_relocated_jobs_own_requires_untouched() {
+        // The wiring pass must only touch jobs that predate the relocated
+        // chain — never rewrite the chain's own internal requires:
+        // (post-merge-regenerate-orb requiring post-merge-build-binary).
+        let opts = opts_with_post_merge_regen();
+        let (output, _) = patch_post_merge_regen(UPDATE_PRLOG_FIXTURE, &opts);
+        assert_eq!(
+            output
+                .matches("requires: [post-merge-build-binary]")
+                .count(),
+            1,
+            "the chain's own internal requires: must be unaffected:\n{output}"
+        );
     }
 
     #[test]

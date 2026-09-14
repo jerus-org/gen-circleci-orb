@@ -105,17 +105,16 @@ file = "update_prlog.yml"            # CI file containing that workflow; default
 `[post_merge_regen]` requires `[record].enabled = true` — `update`/`init` refuse to proceed
 otherwise, since there is nothing to relocate without auto-record enabled in the first place.
 
-## A known limitation: job ordering within the target workflow
+## Job ordering within the target workflow
 
-The generator only ever adds the relocated chain's own jobs (and their `requires:` among
-themselves) to your named workflow. It never edits any job **already** in that workflow — for
-example, this org's own `update_prlog.yml` also runs `toolkit/update_prlog`, which pushes a
-`PRLOG.md` update to `main`. If both that job and the relocated chain's `post-merge-regenerate-orb`
-push to `main` in the same pipeline run, there is a possible race between the two pushes.
-
-Guessing which pre-existing job should `requires:` the relocated chain is consumer-specific, so
-the generator does not attempt it. If your target workflow has another job that pushes to `main`,
-wire the `requires:` dependency between them yourself.
+A dedicated post-merge workflow commonly exists specifically to push administrative changes to
+`main` — this org's own `update_prlog.yml`, for example, also runs `toolkit/update_prlog`, which
+pushes a `PRLOG.md` update. To avoid racing that against `post-merge-regenerate-orb` (the only
+job in the relocated chain that itself pushes), the generator automatically adds
+`requires: [post-merge-regenerate-orb]` to every job **already** in your named workflow, the
+first time the relocated chain is inserted — appended to an existing `requires:` list rather than
+replacing it, or added fresh if the job has none. This wiring is one-time: if you remove it by
+hand afterward, a later `update` will not re-add it.
 
 ## Verifying it live
 
