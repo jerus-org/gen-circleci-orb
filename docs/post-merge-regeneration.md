@@ -110,15 +110,14 @@ otherwise, since there is nothing to relocate without auto-record enabled in the
 A dedicated post-merge workflow commonly exists specifically to push administrative changes to
 `main` — this org's own `update_prlog.yml`, for example, also runs `toolkit/update_prlog`, which
 pushes a `PRLOG.md` update. To avoid racing that against `post-merge-regenerate-orb` (the only
-job in the relocated chain that itself pushes), the generator automatically adds
-`requires: [post-merge-regenerate-orb]` to every job **already** in your named workflow, the
-first time the relocated chain is inserted — appended to an existing `requires:` list rather than
-replacing it, or added fresh if the job has none (a bare scalar entry like `- lint` is converted
-to mapping form first, since a nested key can't follow a plain list item). This wiring is
-one-time: if you remove it by hand afterward, a later `update` will not re-add it. A pre-existing
-job whose own `requires:` is written in a shape the generator can't safely rewrite by plain text
-matching (for example a split flow list, `requires:` on one line and `[a, b]` on the next) is left
-untouched with a warning — wire that one manually.
+job in the relocated chain that itself pushes), the generator makes the relocated chain run
+**last**: `post-merge-build-binary` (the chain's first job) automatically gets
+`requires: [<every job already in the workflow>]`, using each job's effective name (an explicit
+`name:` override when it has one, else the job reference itself, e.g. `toolkit/update_prlog`).
+
+This edit is made only on our own side — the relocated chain's own job — never by rewriting a
+pre-existing, customer-owned job block. Even inside a file this feature otherwise manages, editing
+someone else's job is out of scope for a generator.
 
 ## Verifying it live
 

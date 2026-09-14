@@ -538,20 +538,17 @@ pub fn patch_post_merge_regen(content: &str, opts: &PatchOpts) -> (String, Patch
 
     ensure_post_merge_regen_orb_pins(content, &mut lines, opts, &mut report);
     ensure_workflow_exists(&mut lines, &opts.post_merge_workflow);
-    // Before inserting the relocated chain: any job ALREADY in this workflow
-    // may push to `main` in the same pipeline run as post-merge-regenerate-orb
-    // (the only relocated job that itself pushes) — a real race, not a
-    // hypothetical one, since a dedicated post-merge workflow's whole reason
-    // for existing is usually to push administrative changes to `main`. Doing
-    // this now, before insertion, means every job walked here predates the
-    // chain — no need to distinguish "ours" from "theirs" afterward.
-    require_relocated_chain_on_pre_existing_jobs(
-        &mut lines,
-        &opts.post_merge_workflow,
-        &mut report,
-    );
+    // A job ALREADY in this workflow may push to `main` in the same pipeline
+    // run as post-merge-regenerate-orb (the only relocated job that itself
+    // pushes) — a real race, not a hypothetical one, since a dedicated
+    // post-merge workflow's whole reason for existing is usually to push
+    // administrative changes to `main`. Fixed by making OUR chain run last
+    // (post-merge-build-binary requires every pre-existing job), never by
+    // editing a customer-owned job block ourselves — that's outside a
+    // generator's remit, even inside a file we otherwise manage.
+    let pre_existing = pre_existing_job_names(&lines, &opts.post_merge_workflow);
 
-    let step_block = post_merge_regen_steps(opts);
+    let step_block = post_merge_regen_steps(opts, &pre_existing);
     let pos = find_workflow_jobs_end(&lines, &opts.post_merge_workflow)
         .expect("ensure_workflow_exists guarantees the workflow now exists");
     insert_block_at(&mut lines, pos, &step_block);
@@ -566,34 +563,27 @@ pub fn patch_post_merge_regen(content: &str, opts: &PatchOpts) -> (String, Patch
     (output, report)
 }
 
-/// Name of the only relocated post-merge-regen job that itself pushes to
-/// `main` — `post-merge-build-binary` only compiles, and (when
-/// `test_generation`) `post-merge-pack-orb`/`review-orb` only validate.
-/// Fixed regardless of `test_generation`, so a later config change never
-/// leaves a pre-existing job's wiring pointing at a job that no longer
-/// exists or is no longer the relevant one.
-const POST_MERGE_REGEN_PUSHING_JOB: &str = "post-merge-regenerate-orb";
-
-/// Make every job ALREADY in `workflow` (i.e. present before the relocated
-/// chain is inserted) `requires:` [`POST_MERGE_REGEN_PUSHING_JOB`] — a
-/// generic, no-guessing fix for the race between the relocated chain and any
-/// pre-existing job that also pushes to `main`, which is the entire reason a
-/// dedicated post-merge workflow exists in the first place (see
-/// gen-circleci-orb#328's `/code-review` finding). Idempotent per job: a job
-/// whose `requires:` already names it is left alone.
-fn require_relocated_chain_on_pre_existing_jobs(
-    lines: &mut Vec<String>,
-    workflow: &str,
-    report: &mut PatchReport,
-) {
+/// Effective job names (an explicit `name:` override when the block has one,
+/// else the job reference itself, e.g. `toolkit/update_prlog`) of every job
+/// ALREADY in `workflow`, in document order — used so the relocated chain's
+/// own first job can `requires:` them (see `post_merge_regen_steps`),
+/// running our chain last. This only ever *reads* pre-existing content: a
+/// generator patching a file it otherwise manages still has no business
+/// editing a customer-owned job block, even inside that same file — so the
+/// wiring goes on our side, never theirs (gen-circleci-orb#328's
+/// `/code-review` finding).
+///
+/// Name extraction takes everything before the dash line's first `:`, which
+/// correctly handles a bare scalar entry (`- lint`, no colon at all — the
+/// whole trimmed text is the name), a block-style entry (`- toolkit/x:` —
+/// take everything before the trailing colon), and an inline flow-mapping
+/// entry (`- deploy: {...}` — take everything before the first colon, not
+/// the last) without needing to understand or rewrite any of those shapes.
+fn pre_existing_job_names(lines: &[String], workflow: &str) -> Vec<String> {
     let Some((jobs_start, jobs_end)) = find_workflow_jobs_bounds(lines, workflow) else {
-        return;
+        return Vec::new();
     };
-
-    // Collect (start, end) for every job block already in this workflow's
-    // jobs list, then apply from the last block backwards so an earlier
-    // block's insertion never invalidates a later block's indices.
-    let mut blocks = Vec::new();
+    let mut names = Vec::new();
     let mut i = jobs_start + 1;
     while i < jobs_end {
         if indent_of(&lines[i]) == 6 && lines[i].trim_start().starts_with("- ") {
@@ -601,97 +591,30 @@ fn require_relocated_chain_on_pre_existing_jobs(
             while end < jobs_end && (lines[end].is_empty() || indent_of(&lines[end]) >= 7) {
                 end += 1;
             }
-            blocks.push((i, end));
+            let explicit_name = (i + 1..end).find_map(|j| {
+                lines[j]
+                    .trim_start()
+                    .strip_prefix("name: ")
+                    .map(|s| s.trim().to_string())
+            });
+            names.push(explicit_name.unwrap_or_else(|| job_name_from_dash_line(&lines[i])));
             i = end;
         } else {
             i += 1;
         }
     }
-    for (start, end) in blocks.into_iter().rev() {
-        add_requires_to_job_block(lines, start, end, POST_MERGE_REGEN_PUSHING_JOB, report);
-    }
+    names
 }
 
-/// Add `terminal` to the job block spanning `[start, end)` (the `- <job>:`
-/// line at `start`, its params through `end`): appended to an existing
-/// inline `requires: [...]` list, appended as a new item under an existing
-/// block-style `requires:` list, or added as a new `requires: [terminal]`
-/// line at the end of the block when the job has none. A no-op when
-/// `terminal` is already present.
-///
-/// Two shapes are deliberately NOT rewritten in place, because plain string
-/// matching cannot safely edit them without risking invalid YAML: a bare
-/// scalar job entry (`- lint`, no params — converted to mapping form first,
-/// since appending a line straight after a scalar list item breaks it), and
-/// a `requires:` whose value is an unrecognised shape (e.g. a split flow
-/// list, `requires:` then `[a, b]` on the next line) — that one is left
-/// exactly as-is, with a warning, rather than guessed at.
-fn add_requires_to_job_block(
-    lines: &mut Vec<String>,
-    start: usize,
-    end: usize,
-    terminal: &str,
-    report: &mut PatchReport,
-) {
-    let dash_line = lines[start].clone();
-    if !dash_line.trim_end().ends_with(':') {
-        let indent = " ".repeat(indent_of(&dash_line));
-        let job_ref = dash_line
-            .trim_start()
-            .trim_start_matches("- ")
-            .trim()
-            .to_string();
-        lines[start] = format!("{indent}- {job_ref}:");
-        let param_indent = " ".repeat(indent_of(&dash_line) + 4);
-        lines.insert(start + 1, format!("{param_indent}requires: [{terminal}]"));
-        return;
+/// The job reference/name portion of a workflow job-list dash line, e.g.
+/// `- toolkit/update_prlog:` -> `toolkit/update_prlog`, `- lint` -> `lint`,
+/// `- deploy: {filters: {...}}` -> `deploy`.
+fn job_name_from_dash_line(dash_line: &str) -> String {
+    let rest = dash_line.trim_start().trim_start_matches("- ").trim();
+    match rest.find(':') {
+        Some(idx) => rest[..idx].trim().to_string(),
+        None => rest.to_string(),
     }
-
-    for i in start + 1..end {
-        let trimmed = lines[i].trim_start();
-        if let Some(rest) = trimmed.strip_prefix("requires: [") {
-            if let Some(close) = rest.find(']') {
-                let items = &rest[..close];
-                if items.split(',').map(str::trim).any(|it| it == terminal) {
-                    return;
-                }
-                let indent = " ".repeat(indent_of(&lines[i]));
-                let sep = if items.trim().is_empty() { "" } else { ", " };
-                lines[i] = format!("{indent}requires: [{items}{sep}{terminal}]");
-                return;
-            }
-        } else if trimmed == "requires:" {
-            let item_indent = indent_of(&lines[i]) + 2;
-            let next_nonblank = (i + 1..end).find(|&j| !lines[j].trim().is_empty());
-            match next_nonblank {
-                Some(j) if lines[j].trim_start().starts_with("- ") => {
-                    let mut k = i + 1;
-                    while k < end && indent_of(&lines[k]) >= item_indent {
-                        if lines[k].trim_start() == format!("- {terminal}") {
-                            return;
-                        }
-                        k += 1;
-                    }
-                    lines.insert(k, format!("{}- {terminal}", " ".repeat(item_indent)));
-                    return;
-                }
-                _ => {
-                    report.warnings.push(format!(
-                        "could not safely add `requires: [{terminal}]` to the job at \
-                         .circleci line {} — its existing `requires:` is not a plain \
-                         inline `[...]` or `- item` block list; wire it manually",
-                        start + 1
-                    ));
-                    return;
-                }
-            }
-        }
-    }
-    // No requires: line at all — append one at the end of the job block, at
-    // the same param indent every other job invocation in this codebase uses
-    // (the `- <job>:` dash line's indent, plus 4).
-    let indent = " ".repeat(indent_of(&lines[start]) + 4);
-    lines.insert(end, format!("{indent}requires: [{terminal}]"));
 }
 
 /// Insertion point for entries directly under a top-level `header:` section,
@@ -834,7 +757,7 @@ fn qualifying_branch_guard_run_step(patterns: &[String]) -> Vec<String> {
 /// `[record].enabled` is a hard prerequisite of `[post_merge_regen]`
 /// (validated at config-load time), so — unlike `push_build_and_regenerate_steps`
 /// — there is no no-record fallback here.
-fn post_merge_regen_steps(opts: &PatchOpts) -> Vec<String> {
+fn post_merge_regen_steps(opts: &PatchOpts, pre_existing: &[String]) -> Vec<String> {
     let orb_dir = &opts.orb_dir;
     let binary = &opts.binary;
     let mut steps = vec![managed_begin("      ")];
@@ -844,6 +767,15 @@ fn post_merge_regen_steps(opts: &PatchOpts) -> Vec<String> {
     steps.push(format!("          package: {binary}"));
     if !opts.build_executor.is_empty() {
         steps.push(format!("          executor: {}", opts.build_executor));
+    }
+    // Run the whole relocated chain last: any job already in this workflow
+    // may itself push to `main` (a dedicated post-merge workflow's whole
+    // reason for existing is usually exactly that), so the chain waits on
+    // all of them rather than risk racing a push against
+    // post-merge-regenerate-orb's own push. Never achieved by editing a
+    // customer-owned job block — see pre_existing_job_names.
+    if !pre_existing.is_empty() {
+        steps.push(format!("          requires: [{}]", pre_existing.join(", ")));
     }
     steps.extend(qualifying_branch_guard_steps(
         &opts.post_merge_branch_patterns,
@@ -3369,26 +3301,30 @@ workflows:
     }
 
     #[test]
-    fn patch_post_merge_regen_wires_requires_on_pre_existing_job() {
+    fn patch_post_merge_regen_runs_the_chain_last_after_pre_existing_jobs() {
         // Code-review finding: a pre-existing job in the target workflow
         // (UPDATE_PRLOG_FIXTURE's toolkit/update_prlog) may push to `main`
         // in the same pipeline run as post-merge-regenerate-orb (the only
-        // job in the relocated chain that pushes). Racing two pushes to
-        // `main` is a real bug the generator must avoid, not leave to the
-        // consumer to notice and hand-wire.
+        // job in the relocated chain that pushes). The fix runs our own
+        // chain last — post-merge-build-binary requires every job already
+        // there — never by editing a customer-owned job block ourselves.
         let opts = opts_with_post_merge_regen();
         let (output, _) = patch_post_merge_regen(UPDATE_PRLOG_FIXTURE, &opts);
-        let job_block = &output[output.find("toolkit/update_prlog:").unwrap()
-            ..output.find("post-merge-build-binary").unwrap()];
         assert!(
-            job_block.contains("requires: [post-merge-regenerate-orb]"),
-            "pre-existing job must be wired to wait on the relocated chain's \
-             push-capable job:\n{job_block}"
+            output.contains("name: post-merge-build-binary\n          package: mytool\n          requires: [toolkit/update_prlog]"),
+            "our first job must require the pre-existing one:\n{output}"
+        );
+        // The pre-existing job's own block must be completely untouched —
+        // editing a customer-owned job is out of scope, even inside a file
+        // we otherwise manage.
+        assert!(
+            output.contains("- toolkit/update_prlog:\n          context: [pcu-app]\n      #"),
+            "pre-existing job block must be byte-for-byte unchanged:\n{output}"
         );
     }
 
     #[test]
-    fn patch_post_merge_regen_appends_to_an_existing_inline_requires() {
+    fn patch_post_merge_regen_uses_explicit_name_override_when_present() {
         let content = "\
 version: 2.1
 
@@ -3399,22 +3335,19 @@ workflows:
   update_prlog:
     jobs:
       - toolkit/update_prlog:
-          requires: [some-other-job]
+          name: update-prlog-on-main
+          context: [pcu-app]
 ";
         let opts = opts_with_post_merge_regen();
         let (output, _) = patch_post_merge_regen(content, &opts);
         assert!(
-            output.contains("requires: [some-other-job, post-merge-regenerate-orb]"),
-            "must append to the existing list, not replace it:\n{output}"
+            output.contains("requires: [update-prlog-on-main]"),
+            "must require the job's overridden name, not its bare reference:\n{output}"
         );
     }
 
     #[test]
-    fn patch_post_merge_regen_wires_requires_on_a_bare_scalar_job_entry() {
-        // Code-review finding: `- lint` (no params) is a valid, common job
-        // entry. Appending a `requires:` line straight after it (as if it
-        // were a mapping) breaks the YAML — a scalar list item can't carry a
-        // nested key. Must convert to mapping form first.
+    fn patch_post_merge_regen_requires_every_pre_existing_job_in_order() {
         let content = "\
 version: 2.1
 
@@ -3431,19 +3364,19 @@ workflows:
         let opts = opts_with_post_merge_regen();
         let (output, _) = patch_post_merge_regen(content, &opts);
         assert!(
-            output.contains("- lint:\n          requires: [post-merge-regenerate-orb]"),
-            "bare scalar entry must become a mapping with requires nested under it:\n{output}"
+            output.contains("requires: [lint, toolkit/update_prlog]"),
+            "must require every pre-existing job, in document order:\n{output}"
         );
-        // The other pre-existing job must still be wired too.
-        assert!(output.contains("toolkit/update_prlog:\n          context: [pcu-app]\n          requires: [post-merge-regenerate-orb]"));
+        // Neither pre-existing entry is touched.
+        assert!(output.contains("      - lint\n"));
+        assert!(output.contains("      - toolkit/update_prlog:\n          context: [pcu-app]\n"));
     }
 
     #[test]
-    fn patch_post_merge_regen_warns_instead_of_corrupting_an_unrecognised_requires_shape() {
-        // Code-review finding: a split flow-style `requires:` / `[a, b]`
-        // (key on one line, the flow list on the next) is a shape plain
-        // string matching can't safely rewrite. Must warn and leave the job
-        // untouched rather than emit invalid YAML.
+    fn patch_post_merge_regen_names_flow_mapping_job_correctly() {
+        // `- deploy: {filters: {...}}` — an inline flow-mapping job entry —
+        // must be named `deploy`, not misparsed as anything else, and must
+        // never itself be rewritten.
         let content = "\
 version: 2.1
 
@@ -3453,31 +3386,50 @@ orbs:
 workflows:
   update_prlog:
     jobs:
-      - toolkit/update_prlog:
-          requires:
-            [job-a, job-b]
+      - deploy: {filters: {branches: {only: main}}}
 ";
         let opts = opts_with_post_merge_regen();
-        let (output, report) = patch_post_merge_regen(content, &opts);
+        let (output, _) = patch_post_merge_regen(content, &opts);
         assert!(
-            output.contains("requires:\n            [job-a, job-b]\n"),
-            "the unrecognised shape must be left exactly as-is:\n{output}"
+            output.contains("requires: [deploy]"),
+            "must extract 'deploy' as the job name from the flow-mapping entry:\n{output}"
         );
         assert!(
-            report
-                .warnings
-                .iter()
-                .any(|w| w.contains("requires") && w.contains("manually")),
-            "must warn instead of silently doing nothing or corrupting: {:?}",
-            report.warnings
+            output.contains("      - deploy: {filters: {branches: {only: main}}}\n"),
+            "the flow-mapping entry itself must be byte-for-byte unchanged:\n{output}"
         );
     }
 
     #[test]
-    fn patch_post_merge_regen_leaves_relocated_jobs_own_requires_untouched() {
-        // The wiring pass must only touch jobs that predate the relocated
-        // chain — never rewrite the chain's own internal requires:
-        // (post-merge-regenerate-orb requiring post-merge-build-binary).
+    fn patch_post_merge_regen_adds_no_requires_when_workflow_was_just_created() {
+        // A brand-new workflow has no pre-existing jobs to wait on.
+        let content = "\
+version: 2.1
+
+orbs:
+  toolkit: jerus-org/circleci-toolkit@7.4.0
+
+workflows:
+  other_workflow:
+    jobs:
+      - some-job
+";
+        let opts = opts_with_post_merge_regen();
+        let (output, _) = patch_post_merge_regen(content, &opts);
+        let build_binary = &output[output.find("name: post-merge-build-binary").unwrap()..];
+        let next_job = &build_binary[..build_binary.find("pre-steps:").unwrap()];
+        assert!(
+            !next_job.contains("requires:"),
+            "no pre-existing job in the newly created workflow means no requires: \
+             to add:\n{next_job}"
+        );
+    }
+
+    #[test]
+    fn patch_post_merge_regen_leaves_relocated_jobs_own_internal_requires_untouched() {
+        // The wiring only touches post-merge-build-binary's own requires: —
+        // never rewrites the chain's other internal requires: (e.g.
+        // post-merge-regenerate-orb requiring post-merge-build-binary).
         let opts = opts_with_post_merge_regen();
         let (output, _) = patch_post_merge_regen(UPDATE_PRLOG_FIXTURE, &opts);
         assert_eq!(
