@@ -538,14 +538,8 @@ pub fn patch_post_merge_regen(content: &str, opts: &PatchOpts) -> (String, Patch
 
     ensure_post_merge_regen_orb_pins(content, &mut lines, opts, &mut report);
     ensure_workflow_exists(&mut lines, &opts.post_merge_workflow);
-    // A job ALREADY in this workflow may push to `main` in the same pipeline
-    // run as post-merge-regenerate-orb (the only relocated job that itself
-    // pushes) — a real race, not a hypothetical one, since a dedicated
-    // post-merge workflow's whole reason for existing is usually to push
-    // administrative changes to `main`. Fixed by making OUR chain run last
-    // (post-merge-build-binary requires every pre-existing job), never by
-    // editing a customer-owned job block ourselves — that's outside a
-    // generator's remit, even inside a file we otherwise manage.
+    // Ensure the relocated chain runs after every job already in the
+    // workflow, without editing any of their blocks.
     let pre_existing = pre_existing_job_names(&lines, &opts.post_merge_workflow);
 
     let step_block = post_merge_regen_steps(opts, &pre_existing);
@@ -563,22 +557,10 @@ pub fn patch_post_merge_regen(content: &str, opts: &PatchOpts) -> (String, Patch
     (output, report)
 }
 
-/// Effective job names (an explicit `name:` override when the block has one,
-/// else the job reference itself, e.g. `toolkit/update_prlog`) of every job
-/// ALREADY in `workflow`, in document order — used so the relocated chain's
-/// own first job can `requires:` them (see `post_merge_regen_steps`),
-/// running our chain last. This only ever *reads* pre-existing content: a
-/// generator patching a file it otherwise manages still has no business
-/// editing a customer-owned job block, even inside that same file — so the
-/// wiring goes on our side, never theirs (gen-circleci-orb#328's
-/// `/code-review` finding).
-///
-/// Name extraction takes everything before the dash line's first `:`, which
-/// correctly handles a bare scalar entry (`- lint`, no colon at all — the
-/// whole trimmed text is the name), a block-style entry (`- toolkit/x:` —
-/// take everything before the trailing colon), and an inline flow-mapping
-/// entry (`- deploy: {...}` — take everything before the first colon, not
-/// the last) without needing to understand or rewrite any of those shapes.
+/// Effective job names (an explicit `name:` override when present, else the
+/// job reference itself) of every job already in `workflow`, in document
+/// order. Read-only: used so the relocated chain can require these jobs,
+/// never to edit them.
 fn pre_existing_job_names(lines: &[String], workflow: &str) -> Vec<String> {
     let Some((jobs_start, jobs_end)) = find_workflow_jobs_bounds(lines, workflow) else {
         return Vec::new();
@@ -597,17 +579,10 @@ fn pre_existing_job_names(lines: &[String], workflow: &str) -> Vec<String> {
             {
                 end += 1;
             }
-            // Only a `name:` at this job's own top-level param indent counts
-            // — a deeper one (e.g. a matrix job's `parameters: { name: [...] }`)
-            // is a parameter value, not the job's own name override. An
-            // override embedded in an inline flow-mapping entry (e.g.
-            // `- job: {name: x, ...}`) is deliberately NOT extracted here:
-            // reliably parsing arbitrary flow-mapping content without a real
-            // YAML parser proved impossible to get right by plain string
-            // matching (two more corruption bugs surfaced on review of an
-            // earlier attempt) — falling back to the bare job reference in
-            // that rare case is a loud, self-explanatory CircleCI "job not
-            // found" error at worst, not silent corruption.
+            // Only a name: at this job's own top-level indent counts as an
+            // override — a nested one (e.g. under matrix parameters) does
+            // not. An override inside an inline flow mapping isn't parsed;
+            // the bare job reference is used instead.
             let param_indent = entry_indent + 4;
             let explicit_name = (i + 1..end).find_map(|j| {
                 if indent_of(&lines[j]) != param_indent {
@@ -628,11 +603,8 @@ fn pre_existing_job_names(lines: &[String], workflow: &str) -> Vec<String> {
 }
 
 /// The job reference/name portion of a workflow job-list dash line, e.g.
-/// `- toolkit/update_prlog:` -> `toolkit/update_prlog`, `- lint` -> `lint`,
-/// `- deploy: {filters: {...}}` -> `deploy`. A trailing YAML comment (e.g.
-/// `- lint  # nightly only`) is stripped first — left in, it would get
-/// spliced verbatim into the generated `requires: [...]` list, and an
-/// unquoted `#` there starts a comment mid-flow-sequence, breaking the YAML.
+/// `- toolkit/x:` -> `toolkit/x`, `- lint` -> `lint`. Trailing comments are
+/// stripped first.
 fn job_name_from_dash_line(dash_line: &str) -> String {
     let rest = dash_line.trim_start().trim_start_matches("- ").trim();
     let rest = strip_trailing_comment(rest);
@@ -803,12 +775,8 @@ fn post_merge_regen_steps(opts: &PatchOpts, pre_existing: &[String]) -> Vec<Stri
     if !opts.build_executor.is_empty() {
         steps.push(format!("          executor: {}", opts.build_executor));
     }
-    // Run the whole relocated chain last: any job already in this workflow
-    // may itself push to `main` (a dedicated post-merge workflow's whole
-    // reason for existing is usually exactly that), so the chain waits on
-    // all of them rather than risk racing a push against
-    // post-merge-regenerate-orb's own push. Never achieved by editing a
-    // customer-owned job block — see pre_existing_job_names.
+    // Run the relocated chain last, after every job already in the
+    // workflow (see pre_existing_job_names).
     if !pre_existing.is_empty() {
         steps.push(format!("          requires: [{}]", pre_existing.join(", ")));
     }

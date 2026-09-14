@@ -80,10 +80,9 @@ If you have never set this up before, do it **before** adding `[post_merge_regen
 the generated jobs are correct but nothing ever triggers them. `init` and `generate` print a
 reminder with both links above the first time they see `[post_merge_regen]` configured.
 
-Some organizations already run a post-merge workflow for other reasons (this org's own
-`update_prlog.yml`, for instance, updates `PRLOG.md`) and can simply add the relocated chain to
-that existing workflow/file. If you don't already have one, you will need to create it and wire
-up the trigger yourself first.
+Some organizations already run a post-merge workflow for other administrative purposes and can
+simply add the relocated chain to that existing workflow/file. If you don't already have one, you
+will need to create it and wire up the trigger yourself first.
 
 ## Configuration
 
@@ -108,29 +107,23 @@ otherwise, since there is nothing to relocate without auto-record enabled in the
 ## Job ordering within the target workflow
 
 A dedicated post-merge workflow commonly exists specifically to push administrative changes to
-`main` — this org's own `update_prlog.yml`, for example, also runs `toolkit/update_prlog`, which
-pushes a `PRLOG.md` update. To avoid racing that against `post-merge-regenerate-orb` (the only
-job in the relocated chain that itself pushes), the generator makes the relocated chain run
-**last**: `post-merge-build-binary` (the chain's first job) automatically gets
-`requires: [<every job already in the workflow>]`, using each job's effective name (an explicit
-`name:` override when it has one, else the job reference itself, e.g. `toolkit/update_prlog`).
+`main`. To avoid racing one of those pushes against the relocated chain's own push, the generator
+makes the relocated chain run **last**: its first job automatically requires every job already in
+the workflow, using each job's effective name (an explicit `name:` override when it has one, else
+the job reference itself).
 
-This edit is made only on our own side — the relocated chain's own job — never by rewriting a
-pre-existing, customer-owned job block. Even inside a file this feature otherwise manages, editing
-someone else's job is out of scope for a generator.
+This edit is made only on the relocated chain's own job — never by rewriting a pre-existing,
+customer-owned job block. Even inside a file this feature otherwise manages, editing someone
+else's job is out of scope for a generator.
 
-Effective-name detection reads a `name:` override written as a normal block-style job param;
-an override embedded in an inline flow-mapping entry (`- job: {name: x, ...}`) is not parsed —
-that job is required by its bare reference instead. Reliably parsing arbitrary flow-mapping
-content without a real YAML parser proved impossible to get right with plain string matching, and
-inline flow-mapping job entries are rare in practice. Getting it wrong there is a loud, immediate
-CircleCI "job not found" config error, not silent corruption.
+An override embedded in an inline flow-mapping entry (`- job: {name: x, ...}`) is not parsed; that
+job is required by its bare reference instead, which fails loudly (a CircleCI "job not found"
+error) rather than silently, in the rare case that matters.
 
-Requiring **every** pre-existing job also means one that is itself excluded by its own
-`filters:` on a given trigger silently keeps the relocated chain from running on that trigger too
-(CircleCI drops a job whose requirement is excluded from the graph, rather than erroring). A future
-`[post_merge_regen]` option to name which pre-existing jobs to wait on (instead of all of them)
-would put that control in the consumer's hands — not implemented yet.
+Requiring **every** pre-existing job also means one that is itself excluded by its own `filters:`
+on a given trigger silently keeps the relocated chain from running on that trigger too. A future
+`[post_merge_regen]` option to name which pre-existing jobs to wait on would put that control in
+the consumer's hands — not implemented yet.
 
 ## Verifying it live
 
