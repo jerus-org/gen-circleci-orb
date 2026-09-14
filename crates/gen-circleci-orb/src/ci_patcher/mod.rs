@@ -583,19 +583,37 @@ fn pre_existing_job_names(lines: &[String], workflow: &str) -> Vec<String> {
     let Some((jobs_start, jobs_end)) = find_workflow_jobs_bounds(lines, workflow) else {
         return Vec::new();
     };
+    // Derived from the `jobs:` line's own indent, not a hardcoded constant —
+    // `find_workflow_jobs_bounds` accepts more than one header indent, so a
+    // fixed entry indent could silently miss every job under a form it
+    // doesn't expect.
+    let entry_indent = indent_of(&lines[jobs_start]) + 2;
     let mut names = Vec::new();
     let mut i = jobs_start + 1;
     while i < jobs_end {
-        if indent_of(&lines[i]) == 6 && lines[i].trim_start().starts_with("- ") {
+        if indent_of(&lines[i]) == entry_indent && lines[i].trim_start().starts_with("- ") {
             let mut end = i + 1;
-            while end < jobs_end && (lines[end].is_empty() || indent_of(&lines[end]) >= 7) {
+            while end < jobs_end && (lines[end].is_empty() || indent_of(&lines[end]) > entry_indent)
+            {
                 end += 1;
             }
-            let explicit_name = (i + 1..end).find_map(|j| {
-                lines[j]
-                    .trim_start()
-                    .strip_prefix("name: ")
-                    .map(|s| s.trim().to_string())
+            // An override on the dash line itself (an inline flow-mapping
+            // entry, e.g. `- job: {name: x, ...}`) takes priority, since a
+            // block-line scan below would never see it there. Otherwise,
+            // only a `name:` at this job's own top-level param indent counts
+            // — a deeper one (e.g. a matrix job's `parameters: { name: [...] }`)
+            // is a parameter value, not the job's own name override.
+            let param_indent = entry_indent + 4;
+            let explicit_name = explicit_name_from_dash_line(&lines[i]).or_else(|| {
+                (i + 1..end).find_map(|j| {
+                    if indent_of(&lines[j]) != param_indent {
+                        return None;
+                    }
+                    lines[j]
+                        .trim_start()
+                        .strip_prefix("name: ")
+                        .map(|s| s.trim().to_string())
+                })
             });
             names.push(explicit_name.unwrap_or_else(|| job_name_from_dash_line(&lines[i])));
             i = end;
@@ -604,6 +622,24 @@ fn pre_existing_job_names(lines: &[String], workflow: &str) -> Vec<String> {
         }
     }
     names
+}
+
+/// A `name:` override embedded in an inline flow-mapping job entry, e.g.
+/// `- toolkit/update_prlog: {name: my-name, context: [pcu-app]}` -> `Some("my-name")`.
+/// Not nested-brace aware — this codebase's own flow-mapping usage is always
+/// shallow (a single `{...}` of scalar/list values), and a job entry
+/// combining both an inline flow mapping AND a `name:` override is already a
+/// narrow, unusual case.
+fn explicit_name_from_dash_line(dash_line: &str) -> Option<String> {
+    let brace = dash_line.find('{')?;
+    let inner = &dash_line[brace + 1..];
+    let after_key = inner.split("name:").nth(1)?;
+    let value = after_key.split([',', '}']).next()?.trim();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.trim_matches(['"', '\'']).to_string())
+    }
 }
 
 /// The job reference/name portion of a workflow job-list dash line, e.g.
@@ -3343,6 +3379,64 @@ workflows:
         assert!(
             output.contains("requires: [update-prlog-on-main]"),
             "must require the job's overridden name, not its bare reference:\n{output}"
+        );
+    }
+
+    #[test]
+    fn patch_post_merge_regen_ignores_a_nested_name_key_inside_matrix_parameters() {
+        // Code-review finding: a matrix job's `parameters: { name: [a, b] }`
+        // is a parameter value, not the job's own name override — matching
+        // any `name: ` line anywhere in the block (regardless of nesting)
+        // mistakes it for one and requires a broken `[[a, b]]`.
+        let content = "\
+version: 2.1
+
+orbs:
+  toolkit: jerus-org/circleci-toolkit@7.4.0
+
+workflows:
+  update_prlog:
+    jobs:
+      - toolkit/some_job:
+          matrix:
+            parameters:
+              name: [a, b]
+";
+        let opts = opts_with_post_merge_regen();
+        let (output, _) = patch_post_merge_regen(content, &opts);
+        assert!(
+            output.contains("requires: [toolkit/some_job]"),
+            "must fall back to the bare job reference, not the nested matrix param:\n{output}"
+        );
+        assert!(
+            !output.contains("requires: [[a, b]]"),
+            "must never emit the matrix parameter's own list as the required name:\n{output}"
+        );
+    }
+
+    #[test]
+    fn patch_post_merge_regen_uses_explicit_name_from_inline_flow_mapping() {
+        // Code-review finding: an inline flow-mapping job entry's name:
+        // override lives on the dash line itself, not on a later block
+        // line — the explicit-name scan (which only looks at subsequent
+        // lines) never finds it, so it falls back to the wrong (bare
+        // reference) name.
+        let content = "\
+version: 2.1
+
+orbs:
+  toolkit: jerus-org/circleci-toolkit@7.4.0
+
+workflows:
+  update_prlog:
+    jobs:
+      - toolkit/update_prlog: {name: my-name, context: [pcu-app]}
+";
+        let opts = opts_with_post_merge_regen();
+        let (output, _) = patch_post_merge_regen(content, &opts);
+        assert!(
+            output.contains("requires: [my-name]"),
+            "must require the inline-flow name override, not the bare job reference:\n{output}"
         );
     }
 
