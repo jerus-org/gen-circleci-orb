@@ -119,6 +119,19 @@ This edit is made only on our own side — the relocated chain's own job — nev
 pre-existing, customer-owned job block. Even inside a file this feature otherwise manages, editing
 someone else's job is out of scope for a generator.
 
+Effective-name detection reads a `name:` override written as a normal block-style job param;
+an override embedded in an inline flow-mapping entry (`- job: {name: x, ...}`) is not parsed —
+that job is required by its bare reference instead. Reliably parsing arbitrary flow-mapping
+content without a real YAML parser proved impossible to get right with plain string matching, and
+inline flow-mapping job entries are rare in practice. Getting it wrong there is a loud, immediate
+CircleCI "job not found" config error, not silent corruption.
+
+Requiring **every** pre-existing job also means one that is itself excluded by its own
+`filters:` on a given trigger silently keeps the relocated chain from running on that trigger too
+(CircleCI drops a job whose requirement is excluded from the graph, rather than erroring). A future
+`[post_merge_regen]` option to name which pre-existing jobs to wait on (instead of all of them)
+would put that control in the consumer's hands — not implemented yet.
+
 ## Verifying it live
 
 Because this changes where a real GPG-signed push lands, verify it against a real (or

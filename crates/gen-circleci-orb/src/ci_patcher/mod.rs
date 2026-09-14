@@ -597,23 +597,26 @@ fn pre_existing_job_names(lines: &[String], workflow: &str) -> Vec<String> {
             {
                 end += 1;
             }
-            // An override on the dash line itself (an inline flow-mapping
-            // entry, e.g. `- job: {name: x, ...}`) takes priority, since a
-            // block-line scan below would never see it there. Otherwise,
-            // only a `name:` at this job's own top-level param indent counts
+            // Only a `name:` at this job's own top-level param indent counts
             // — a deeper one (e.g. a matrix job's `parameters: { name: [...] }`)
-            // is a parameter value, not the job's own name override.
+            // is a parameter value, not the job's own name override. An
+            // override embedded in an inline flow-mapping entry (e.g.
+            // `- job: {name: x, ...}`) is deliberately NOT extracted here:
+            // reliably parsing arbitrary flow-mapping content without a real
+            // YAML parser proved impossible to get right by plain string
+            // matching (two more corruption bugs surfaced on review of an
+            // earlier attempt) — falling back to the bare job reference in
+            // that rare case is a loud, self-explanatory CircleCI "job not
+            // found" error at worst, not silent corruption.
             let param_indent = entry_indent + 4;
-            let explicit_name = explicit_name_from_dash_line(&lines[i]).or_else(|| {
-                (i + 1..end).find_map(|j| {
-                    if indent_of(&lines[j]) != param_indent {
-                        return None;
-                    }
-                    lines[j]
-                        .trim_start()
-                        .strip_prefix("name: ")
-                        .map(|s| s.trim().to_string())
-                })
+            let explicit_name = (i + 1..end).find_map(|j| {
+                if indent_of(&lines[j]) != param_indent {
+                    return None;
+                }
+                lines[j]
+                    .trim_start()
+                    .strip_prefix("name: ")
+                    .map(|s| strip_trailing_comment(s.trim()).to_string())
             });
             names.push(explicit_name.unwrap_or_else(|| job_name_from_dash_line(&lines[i])));
             i = end;
@@ -624,32 +627,28 @@ fn pre_existing_job_names(lines: &[String], workflow: &str) -> Vec<String> {
     names
 }
 
-/// A `name:` override embedded in an inline flow-mapping job entry, e.g.
-/// `- toolkit/update_prlog: {name: my-name, context: [pcu-app]}` -> `Some("my-name")`.
-/// Not nested-brace aware — this codebase's own flow-mapping usage is always
-/// shallow (a single `{...}` of scalar/list values), and a job entry
-/// combining both an inline flow mapping AND a `name:` override is already a
-/// narrow, unusual case.
-fn explicit_name_from_dash_line(dash_line: &str) -> Option<String> {
-    let brace = dash_line.find('{')?;
-    let inner = &dash_line[brace + 1..];
-    let after_key = inner.split("name:").nth(1)?;
-    let value = after_key.split([',', '}']).next()?.trim();
-    if value.is_empty() {
-        None
-    } else {
-        Some(value.trim_matches(['"', '\'']).to_string())
-    }
-}
-
 /// The job reference/name portion of a workflow job-list dash line, e.g.
 /// `- toolkit/update_prlog:` -> `toolkit/update_prlog`, `- lint` -> `lint`,
-/// `- deploy: {filters: {...}}` -> `deploy`.
+/// `- deploy: {filters: {...}}` -> `deploy`. A trailing YAML comment (e.g.
+/// `- lint  # nightly only`) is stripped first — left in, it would get
+/// spliced verbatim into the generated `requires: [...]` list, and an
+/// unquoted `#` there starts a comment mid-flow-sequence, breaking the YAML.
 fn job_name_from_dash_line(dash_line: &str) -> String {
     let rest = dash_line.trim_start().trim_start_matches("- ").trim();
+    let rest = strip_trailing_comment(rest);
     match rest.find(':') {
         Some(idx) => rest[..idx].trim().to_string(),
         None => rest.to_string(),
+    }
+}
+
+/// Strip a trailing ` #...` YAML comment (a `#` preceded by whitespace) from
+/// `s`. Job references and names never legitimately contain a space, so the
+/// first ` #` is unambiguously the start of a comment.
+fn strip_trailing_comment(s: &str) -> &str {
+    match s.find(" #") {
+        Some(idx) => s[..idx].trim_end(),
+        None => s,
     }
 }
 
@@ -3415,12 +3414,14 @@ workflows:
     }
 
     #[test]
-    fn patch_post_merge_regen_uses_explicit_name_from_inline_flow_mapping() {
-        // Code-review finding: an inline flow-mapping job entry's name:
-        // override lives on the dash line itself, not on a later block
-        // line — the explicit-name scan (which only looks at subsequent
-        // lines) never finds it, so it falls back to the wrong (bare
-        // reference) name.
+    fn patch_post_merge_regen_falls_back_to_bare_ref_for_inline_flow_name_override() {
+        // A name: override embedded in an inline flow-mapping entry is a
+        // deliberately accepted gap: two rounds of code review found further
+        // ways plain string matching could misparse arbitrary flow-mapping
+        // content (a nested matrix name:, a comma inside a quoted value).
+        // Falling back to the bare job reference here means a worst case of
+        // a loud, self-explanatory CircleCI "job not found" error — not
+        // silent corruption.
         let content = "\
 version: 2.1
 
@@ -3435,8 +3436,57 @@ workflows:
         let opts = opts_with_post_merge_regen();
         let (output, _) = patch_post_merge_regen(content, &opts);
         assert!(
-            output.contains("requires: [my-name]"),
-            "must require the inline-flow name override, not the bare job reference:\n{output}"
+            output.contains("requires: [toolkit/update_prlog]"),
+            "must fall back to the bare job reference, not attempt to parse the \
+             inline flow-mapping's name: override:\n{output}"
+        );
+    }
+
+    #[test]
+    fn patch_post_merge_regen_strips_a_trailing_comment_from_a_job_name() {
+        // Code-review finding: a job entry with a trailing inline comment
+        // (`- lint  # nightly only`) had the comment spliced verbatim into
+        // the name — an unquoted `#` mid `requires: [...]` starts a YAML
+        // comment there, swallowing the closing bracket.
+        let content = "\
+version: 2.1
+
+orbs:
+  toolkit: jerus-org/circleci-toolkit@7.4.0
+
+workflows:
+  update_prlog:
+    jobs:
+      - lint  # nightly only
+";
+        let opts = opts_with_post_merge_regen();
+        let (output, _) = patch_post_merge_regen(content, &opts);
+        assert!(
+            output.contains("requires: [lint]"),
+            "the comment must be stripped from the required name:\n{output}"
+        );
+    }
+
+    #[test]
+    fn patch_post_merge_regen_strips_a_trailing_comment_from_an_explicit_name() {
+        let content = "\
+version: 2.1
+
+orbs:
+  toolkit: jerus-org/circleci-toolkit@7.4.0
+
+workflows:
+  update_prlog:
+    jobs:
+      - toolkit/update_prlog:
+          name: update-prlog-on-main  # primary push job
+          context: [pcu-app]
+";
+        let opts = opts_with_post_merge_regen();
+        let (output, _) = patch_post_merge_regen(content, &opts);
+        assert!(
+            output.contains("requires: [update-prlog-on-main]"),
+            "the comment must be stripped from the explicit name override:\n{output}"
         );
     }
 
