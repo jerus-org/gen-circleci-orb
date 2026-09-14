@@ -1138,6 +1138,26 @@ fn push_check_ci_wiring_step(steps: &mut Vec<String>) {
     push_branch_ignore(steps, &["main"]);
 }
 
+/// `pre-steps:` for a validation-workflow job that attaches the workspace
+/// (`pack-orb`/`review-orb`): plain `attach_workspace` when
+/// `[post_merge_regen]` is off, or that folded in with the exclusion guard
+/// (see `post_merge_regen_excluded_branch_guard_steps`'s doc comment) when
+/// it's on — shared so `pack-orb` and `review-orb` don't each hand-roll the
+/// same two-way branch.
+fn pack_review_pre_steps(opts: &PatchOpts) -> Vec<String> {
+    if opts.post_merge_branch_patterns.is_empty() {
+        vec![
+            "          pre-steps:".to_string(),
+            "            - attach_workspace:".to_string(),
+            "                at: .".to_string(),
+        ]
+    } else {
+        post_merge_regen_excluded_branch_guard_pre_steps_with_attach_workspace(
+            &opts.post_merge_branch_patterns,
+        )
+    }
+}
+
 /// pack-orb/review-orb reading the freshly-generated workspace artifact.
 /// Only emitted when `opts.test_generation` is true.
 fn push_live_pack_and_review_steps(steps: &mut Vec<String>, opts: &PatchOpts) {
@@ -1150,17 +1170,7 @@ fn push_live_pack_and_review_steps(steps: &mut Vec<String>, opts: &PatchOpts) {
     steps.push("          name: pack-orb".to_string());
     steps.push("          checkout: false".to_string());
     steps.push(format!("          source_dir: {orb_dir}/src"));
-    if opts.post_merge_branch_patterns.is_empty() {
-        steps.push("          pre-steps:".to_string());
-        steps.push("            - attach_workspace:".to_string());
-        steps.push("                at: .".to_string());
-    } else {
-        steps.extend(
-            post_merge_regen_excluded_branch_guard_pre_steps_with_attach_workspace(
-                &opts.post_merge_branch_patterns,
-            ),
-        );
-    }
+    steps.extend(pack_review_pre_steps(opts));
     steps.push("          requires: [regenerate-orb]".to_string());
     push_branch_ignore(steps, &["main"]);
 
@@ -1169,17 +1179,7 @@ fn push_live_pack_and_review_steps(steps: &mut Vec<String>, opts: &PatchOpts) {
     steps.push("          name: review-orb".to_string());
     steps.push("          checkout: false".to_string());
     steps.push(format!("          source_dir: {orb_dir}/src"));
-    if opts.post_merge_branch_patterns.is_empty() {
-        steps.push("          pre-steps:".to_string());
-        steps.push("            - attach_workspace:".to_string());
-        steps.push("                at: .".to_string());
-    } else {
-        steps.extend(
-            post_merge_regen_excluded_branch_guard_pre_steps_with_attach_workspace(
-                &opts.post_merge_branch_patterns,
-            ),
-        );
-    }
+    steps.extend(pack_review_pre_steps(opts));
     steps.push("          requires: [pack-orb]".to_string());
     push_branch_ignore(steps, &["main"]);
 }
