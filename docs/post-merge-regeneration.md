@@ -113,8 +113,12 @@ pushes a `PRLOG.md` update. To avoid racing that against `post-merge-regenerate-
 job in the relocated chain that itself pushes), the generator automatically adds
 `requires: [post-merge-regenerate-orb]` to every job **already** in your named workflow, the
 first time the relocated chain is inserted — appended to an existing `requires:` list rather than
-replacing it, or added fresh if the job has none. This wiring is one-time: if you remove it by
-hand afterward, a later `update` will not re-add it.
+replacing it, or added fresh if the job has none (a bare scalar entry like `- lint` is converted
+to mapping form first, since a nested key can't follow a plain list item). This wiring is
+one-time: if you remove it by hand afterward, a later `update` will not re-add it. A pre-existing
+job whose own `requires:` is written in a shape the generator can't safely rewrite by plain text
+matching (for example a split flow list, `requires:` on one line and `[a, b]` on the next) is left
+untouched with a warning — wire that one manually.
 
 ## Verifying it live
 

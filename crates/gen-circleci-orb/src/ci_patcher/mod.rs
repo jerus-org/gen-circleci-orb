@@ -545,7 +545,11 @@ pub fn patch_post_merge_regen(content: &str, opts: &PatchOpts) -> (String, Patch
     // for existing is usually to push administrative changes to `main`. Doing
     // this now, before insertion, means every job walked here predates the
     // chain — no need to distinguish "ours" from "theirs" afterward.
-    require_relocated_chain_on_pre_existing_jobs(&mut lines, &opts.post_merge_workflow);
+    require_relocated_chain_on_pre_existing_jobs(
+        &mut lines,
+        &opts.post_merge_workflow,
+        &mut report,
+    );
 
     let step_block = post_merge_regen_steps(opts);
     let pos = find_workflow_jobs_end(&lines, &opts.post_merge_workflow)
@@ -577,7 +581,11 @@ const POST_MERGE_REGEN_PUSHING_JOB: &str = "post-merge-regenerate-orb";
 /// dedicated post-merge workflow exists in the first place (see
 /// gen-circleci-orb#328's `/code-review` finding). Idempotent per job: a job
 /// whose `requires:` already names it is left alone.
-fn require_relocated_chain_on_pre_existing_jobs(lines: &mut Vec<String>, workflow: &str) {
+fn require_relocated_chain_on_pre_existing_jobs(
+    lines: &mut Vec<String>,
+    workflow: &str,
+    report: &mut PatchReport,
+) {
     let Some((jobs_start, jobs_end)) = find_workflow_jobs_bounds(lines, workflow) else {
         return;
     };
@@ -600,7 +608,7 @@ fn require_relocated_chain_on_pre_existing_jobs(lines: &mut Vec<String>, workflo
         }
     }
     for (start, end) in blocks.into_iter().rev() {
-        add_requires_to_job_block(lines, start, end, POST_MERGE_REGEN_PUSHING_JOB);
+        add_requires_to_job_block(lines, start, end, POST_MERGE_REGEN_PUSHING_JOB, report);
     }
 }
 
@@ -610,7 +618,35 @@ fn require_relocated_chain_on_pre_existing_jobs(lines: &mut Vec<String>, workflo
 /// block-style `requires:` list, or added as a new `requires: [terminal]`
 /// line at the end of the block when the job has none. A no-op when
 /// `terminal` is already present.
-fn add_requires_to_job_block(lines: &mut Vec<String>, start: usize, end: usize, terminal: &str) {
+///
+/// Two shapes are deliberately NOT rewritten in place, because plain string
+/// matching cannot safely edit them without risking invalid YAML: a bare
+/// scalar job entry (`- lint`, no params — converted to mapping form first,
+/// since appending a line straight after a scalar list item breaks it), and
+/// a `requires:` whose value is an unrecognised shape (e.g. a split flow
+/// list, `requires:` then `[a, b]` on the next line) — that one is left
+/// exactly as-is, with a warning, rather than guessed at.
+fn add_requires_to_job_block(
+    lines: &mut Vec<String>,
+    start: usize,
+    end: usize,
+    terminal: &str,
+    report: &mut PatchReport,
+) {
+    let dash_line = lines[start].clone();
+    if !dash_line.trim_end().ends_with(':') {
+        let indent = " ".repeat(indent_of(&dash_line));
+        let job_ref = dash_line
+            .trim_start()
+            .trim_start_matches("- ")
+            .trim()
+            .to_string();
+        lines[start] = format!("{indent}- {job_ref}:");
+        let param_indent = " ".repeat(indent_of(&dash_line) + 4);
+        lines.insert(start + 1, format!("{param_indent}requires: [{terminal}]"));
+        return;
+    }
+
     for i in start + 1..end {
         let trimmed = lines[i].trim_start();
         if let Some(rest) = trimmed.strip_prefix("requires: [") {
@@ -626,15 +662,29 @@ fn add_requires_to_job_block(lines: &mut Vec<String>, start: usize, end: usize, 
             }
         } else if trimmed == "requires:" {
             let item_indent = indent_of(&lines[i]) + 2;
-            let mut j = i + 1;
-            while j < end && indent_of(&lines[j]) >= item_indent {
-                if lines[j].trim_start() == format!("- {terminal}") {
+            let next_nonblank = (i + 1..end).find(|&j| !lines[j].trim().is_empty());
+            match next_nonblank {
+                Some(j) if lines[j].trim_start().starts_with("- ") => {
+                    let mut k = i + 1;
+                    while k < end && indent_of(&lines[k]) >= item_indent {
+                        if lines[k].trim_start() == format!("- {terminal}") {
+                            return;
+                        }
+                        k += 1;
+                    }
+                    lines.insert(k, format!("{}- {terminal}", " ".repeat(item_indent)));
                     return;
                 }
-                j += 1;
+                _ => {
+                    report.warnings.push(format!(
+                        "could not safely add `requires: [{terminal}]` to the job at \
+                         .circleci line {} — its existing `requires:` is not a plain \
+                         inline `[...]` or `- item` block list; wire it manually",
+                        start + 1
+                    ));
+                    return;
+                }
             }
-            lines.insert(j, format!("{}- {terminal}", " ".repeat(item_indent)));
-            return;
         }
     }
     // No requires: line at all — append one at the end of the job block, at
@@ -3356,6 +3406,70 @@ workflows:
         assert!(
             output.contains("requires: [some-other-job, post-merge-regenerate-orb]"),
             "must append to the existing list, not replace it:\n{output}"
+        );
+    }
+
+    #[test]
+    fn patch_post_merge_regen_wires_requires_on_a_bare_scalar_job_entry() {
+        // Code-review finding: `- lint` (no params) is a valid, common job
+        // entry. Appending a `requires:` line straight after it (as if it
+        // were a mapping) breaks the YAML — a scalar list item can't carry a
+        // nested key. Must convert to mapping form first.
+        let content = "\
+version: 2.1
+
+orbs:
+  toolkit: jerus-org/circleci-toolkit@7.4.0
+
+workflows:
+  update_prlog:
+    jobs:
+      - lint
+      - toolkit/update_prlog:
+          context: [pcu-app]
+";
+        let opts = opts_with_post_merge_regen();
+        let (output, _) = patch_post_merge_regen(content, &opts);
+        assert!(
+            output.contains("- lint:\n          requires: [post-merge-regenerate-orb]"),
+            "bare scalar entry must become a mapping with requires nested under it:\n{output}"
+        );
+        // The other pre-existing job must still be wired too.
+        assert!(output.contains("toolkit/update_prlog:\n          context: [pcu-app]\n          requires: [post-merge-regenerate-orb]"));
+    }
+
+    #[test]
+    fn patch_post_merge_regen_warns_instead_of_corrupting_an_unrecognised_requires_shape() {
+        // Code-review finding: a split flow-style `requires:` / `[a, b]`
+        // (key on one line, the flow list on the next) is a shape plain
+        // string matching can't safely rewrite. Must warn and leave the job
+        // untouched rather than emit invalid YAML.
+        let content = "\
+version: 2.1
+
+orbs:
+  toolkit: jerus-org/circleci-toolkit@7.4.0
+
+workflows:
+  update_prlog:
+    jobs:
+      - toolkit/update_prlog:
+          requires:
+            [job-a, job-b]
+";
+        let opts = opts_with_post_merge_regen();
+        let (output, report) = patch_post_merge_regen(content, &opts);
+        assert!(
+            output.contains("requires:\n            [job-a, job-b]\n"),
+            "the unrecognised shape must be left exactly as-is:\n{output}"
+        );
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|w| w.contains("requires") && w.contains("manually")),
+            "must warn instead of silently doing nothing or corrupting: {:?}",
+            report.warnings
         );
     }
 
