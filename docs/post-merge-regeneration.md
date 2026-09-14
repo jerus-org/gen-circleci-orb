@@ -63,6 +63,18 @@ never touch a live bot branch: a workflow that runs on `main`, after the PR has 
    the interface `generate` introspects, even though the repository's own source is untouched by
    a dependency-only PR. Only a fresh build reliably captures that.
 
+5. **The original chain steps aside on a qualifying branch.** `[post_merge_regen]` relocates the
+   chain — it does not merely duplicate it. `build-binary`/`regenerate-orb` (and, per
+   `[ci].test_generation`, `pack-orb`/`review-orb`) in the ordinary `[ci].build_workflow` (the
+   workflow that runs on every push, including a Renovate branch) each carry their own
+   `pre-steps` guard: the inverse of the relocated chain's own guard, it halts when
+   `CIRCLE_BRANCH` *does* match `branch_patterns`, since that branch is now handled entirely by
+   the relocated chain instead. Without this, the original chain would still run — and still push
+   a regen commit — on the very branches `[post_merge_regen]` exists to protect, silently
+   defeating the whole feature by running both copies. A downstream job (`pack-orb`/`review-orb`)
+   needs its own copy of the guard too: a halted job still reports success, so a job that
+   `requires:` it would otherwise run anyway — with no workspace ever persisted upstream.
+
 ## Prerequisite: you must configure the CircleCI trigger yourself
 
 `[post_merge_regen]` only controls **what jobs run and where** — it does not, and cannot, make
