@@ -756,6 +756,54 @@ fn qualifying_branch_guard_run_step(patterns: &[String]) -> Vec<String> {
     ]
 }
 
+/// Bash `case` guard for the VALIDATION workflow's own build-binary/
+/// regenerate-orb/pack-orb/review-orb: the inverse of
+/// `qualifying_branch_guard_run_step`. When `[post_merge_regen]` is
+/// configured, a branch matching `patterns` is handled entirely by the
+/// relocated post-merge chain instead — so the original chain must halt on
+/// exactly those branches (rather than run and push a regen commit there,
+/// which is the Renovate-freeze bug #328 exists to fix). Every branch NOT
+/// matching `patterns` is unaffected, including `main` (`push_branch_ignore`
+/// already excludes that separately).
+fn post_merge_regen_excluded_branch_guard_steps(patterns: &[String]) -> Vec<String> {
+    let mut steps = vec!["          pre-steps:".to_string()];
+    steps.extend(post_merge_regen_excluded_branch_guard_run_step(patterns));
+    steps
+}
+
+/// As `post_merge_regen_excluded_branch_guard_steps`, but folded into a
+/// single `pre-steps:` list alongside `attach_workspace` — `pack-orb`/
+/// `review-orb` already carry their own `pre-steps:`, and YAML forbids a
+/// duplicate `pre-steps:` key on the same job invocation. Without this guard
+/// too, a halted (still "successful") build-binary/regenerate-orb would
+/// leave pack-orb/review-orb still running with no workspace ever persisted
+/// — failing outright rather than cleanly no-opping.
+fn post_merge_regen_excluded_branch_guard_pre_steps_with_attach_workspace(
+    patterns: &[String],
+) -> Vec<String> {
+    let mut steps = vec!["          pre-steps:".to_string()];
+    steps.extend(post_merge_regen_excluded_branch_guard_run_step(patterns));
+    steps.push("            - attach_workspace:".to_string());
+    steps.push("                at: .".to_string());
+    steps
+}
+
+/// The `run:` step itself, shared by both wrapping functions above.
+fn post_merge_regen_excluded_branch_guard_run_step(patterns: &[String]) -> Vec<String> {
+    let pattern_arm = patterns.join("|");
+    vec![
+        "            - run:".to_string(),
+        "                name: Check post-merge-regen branch".to_string(),
+        "                command: |".to_string(),
+        "                  case \"$CIRCLE_BRANCH\" in".to_string(),
+        format!(
+            "                    {pattern_arm}) echo \"Relocated to post-merge regen ($CIRCLE_BRANCH) - nothing to do here.\"; circleci-agent step halt ;;"
+        ),
+        "                    *) ;;".to_string(),
+        "                  esac".to_string(),
+    ]
+}
+
 /// The relocated post-merge-regen job chain: `post-merge-build-binary` ->
 /// `post-merge-regenerate-orb` (switching onto `main` and allowed to record
 /// there) -> (if `test_generation`) `post-merge-pack-orb` ->
@@ -1015,6 +1063,11 @@ fn push_build_and_regenerate_steps(steps: &mut Vec<String>, opts: &PatchOpts) {
     if !opts.build_executor.is_empty() {
         steps.push(format!("          executor: {}", opts.build_executor));
     }
+    if !opts.post_merge_branch_patterns.is_empty() {
+        steps.extend(post_merge_regen_excluded_branch_guard_steps(
+            &opts.post_merge_branch_patterns,
+        ));
+    }
 
     // regenerate-orb — regenerate the orb from the freshly-built binary.
     //
@@ -1065,6 +1118,11 @@ fn push_build_and_regenerate_steps(steps: &mut Vec<String>, opts: &PatchOpts) {
     // covers publish-time drift). Run on PR branches only; the regen still
     // validates on forked PRs (the binary's branch guard skips the push there).
     push_branch_ignore(steps, &["main"]);
+    if !opts.post_merge_branch_patterns.is_empty() {
+        steps.extend(post_merge_regen_excluded_branch_guard_steps(
+            &opts.post_merge_branch_patterns,
+        ));
+    }
 }
 
 /// check-ci-wiring — the self-pin wiring check, isolated in its own job so it
@@ -1092,9 +1150,17 @@ fn push_live_pack_and_review_steps(steps: &mut Vec<String>, opts: &PatchOpts) {
     steps.push("          name: pack-orb".to_string());
     steps.push("          checkout: false".to_string());
     steps.push(format!("          source_dir: {orb_dir}/src"));
-    steps.push("          pre-steps:".to_string());
-    steps.push("            - attach_workspace:".to_string());
-    steps.push("                at: .".to_string());
+    if opts.post_merge_branch_patterns.is_empty() {
+        steps.push("          pre-steps:".to_string());
+        steps.push("            - attach_workspace:".to_string());
+        steps.push("                at: .".to_string());
+    } else {
+        steps.extend(
+            post_merge_regen_excluded_branch_guard_pre_steps_with_attach_workspace(
+                &opts.post_merge_branch_patterns,
+            ),
+        );
+    }
     steps.push("          requires: [regenerate-orb]".to_string());
     push_branch_ignore(steps, &["main"]);
 
@@ -1103,9 +1169,17 @@ fn push_live_pack_and_review_steps(steps: &mut Vec<String>, opts: &PatchOpts) {
     steps.push("          name: review-orb".to_string());
     steps.push("          checkout: false".to_string());
     steps.push(format!("          source_dir: {orb_dir}/src"));
-    steps.push("          pre-steps:".to_string());
-    steps.push("            - attach_workspace:".to_string());
-    steps.push("                at: .".to_string());
+    if opts.post_merge_branch_patterns.is_empty() {
+        steps.push("          pre-steps:".to_string());
+        steps.push("            - attach_workspace:".to_string());
+        steps.push("                at: .".to_string());
+    } else {
+        steps.extend(
+            post_merge_regen_excluded_branch_guard_pre_steps_with_attach_workspace(
+                &opts.post_merge_branch_patterns,
+            ),
+        );
+    }
     steps.push("          requires: [pack-orb]".to_string());
     push_branch_ignore(steps, &["main"]);
 }
@@ -2767,6 +2841,86 @@ workflows:
             "report must not mention build-binary/regenerate-orb at all \
              when test_generation is false: {:?}",
             report.skipped
+        );
+    }
+
+    // ── patch_build excludes post_merge_regen branches from validation ─────────
+
+    #[test]
+    fn patch_build_guards_validation_regen_against_post_merge_regen_branches() {
+        // gen-circleci-orb#328 follow-up: patch_post_merge_regen relocates the
+        // regen+record chain into the post-merge workflow, but until now
+        // push_build_and_regenerate_steps (the VALIDATION workflow's own
+        // build-binary/regenerate-orb) had no awareness of
+        // post_merge_branch_patterns at all — it only excluded `main`. That
+        // left the original chain still running (and still pushing) on a
+        // qualifying branch (e.g. renovate/*), so the Renovate-freeze bug
+        // this feature exists to fix was never actually fixed, only
+        // duplicated by a redundant post-merge run.
+        let opts = PatchOpts {
+            post_merge_branch_patterns: vec!["renovate/*".to_string()],
+            post_merge_workflow: "update_prlog".to_string(),
+            post_merge_ci_file: "update_prlog.yml".to_string(),
+            // needs_generation_regen must stay true (via record_contexts)
+            // with test_generation off, so this test isolates
+            // build-binary/regenerate-orb from pack-orb/review-orb (covered
+            // separately below).
+            record_contexts: vec!["release".to_string()],
+            test_generation: false,
+            ..make_opts()
+        };
+        let (output, _report) = patch_build(BUILD_FIXTURE_NO_JOBS, &opts);
+        let halt_count = output.matches("circleci-agent step halt").count();
+        assert_eq!(
+            halt_count, 2,
+            "expected a qualifying-branch halt guard on both build-binary \
+             and regenerate-orb (the validation chain's own copy, mirroring \
+             the relocated post-merge chain's per-job guards), got \
+             {halt_count} in:\n{output}"
+        );
+        let pattern_count = output.matches("renovate/*").count();
+        assert_eq!(
+            pattern_count, 2,
+            "expected the configured post_merge_branch_patterns to appear \
+             in both jobs' guards, got {pattern_count} in:\n{output}"
+        );
+    }
+
+    #[test]
+    fn patch_build_guards_pack_and_review_against_post_merge_regen_branches() {
+        // Code-review finding on this fix (2026-09-14): pack-orb/review-orb
+        // (push_live_pack_and_review_steps, only emitted when
+        // opts.test_generation is true) were left unguarded. Since they
+        // `requires: [regenerate-orb]`/`requires: [pack-orb]` and a halted
+        // job reports success, they would still run on a qualifying branch
+        // after their upstream halted — with no workspace persisted and no
+        // checkout, failing outright rather than cleanly no-opping.
+        let opts = PatchOpts {
+            post_merge_branch_patterns: vec!["renovate/*".to_string()],
+            post_merge_workflow: "update_prlog".to_string(),
+            post_merge_ci_file: "update_prlog.yml".to_string(),
+            test_generation: true,
+            ..make_opts()
+        };
+        let (output, _report) = patch_build(BUILD_FIXTURE_NO_JOBS, &opts);
+        let halt_count = output.matches("circleci-agent step halt").count();
+        assert_eq!(
+            halt_count, 4,
+            "expected a halt guard on all four validation-chain jobs \
+             (build-binary, regenerate-orb, pack-orb, review-orb) when \
+             test_generation is true, got {halt_count} in:\n{output}"
+        );
+    }
+
+    #[test]
+    fn patch_build_leaves_validation_regen_unguarded_when_post_merge_regen_disabled() {
+        // Default (feature off, empty post_merge_branch_patterns): zero
+        // behavior change from before this fix — no halt guard added.
+        let (output, _report) = patch_build(BUILD_FIXTURE_NO_JOBS, &make_opts());
+        assert!(
+            !output.contains("circleci-agent step halt"),
+            "no halt guard should be added to the validation chain when \
+             [post_merge_regen] is not configured:\n{output}"
         );
     }
 
