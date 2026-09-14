@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - deps: update dependency gen-circleci-orb to v0.1.16(pr [#393])
+- post-merge-regen push race(pr [#394])
 
 ## [0.1.16] - 2026-09-13
 
@@ -1103,6 +1104,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#390]: https://github.com/jerus-org/gen-circleci-orb/pull/390
 [#392]: https://github.com/jerus-org/gen-circleci-orb/pull/392
 [#393]: https://github.com/jerus-org/gen-circleci-orb/pull/393
+[#394]: https://github.com/jerus-org/gen-circleci-orb/pull/394
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.16...HEAD
 [0.1.16]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.15...v0.1.16
 [0.1.15]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.14...v0.1.15
