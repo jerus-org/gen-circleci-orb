@@ -10,6 +10,9 @@ parameters:
 orbs:
   toolkit: jerus-org/circleci-toolkit@7.4.0
 
+  # >>> gen-circleci-orb (managed — edits overwritten by 'gen-circleci-orb update')
+  gen-circleci-orb: jerus-org/gen-circleci-orb@0.1.18
+  # <<< gen-circleci-orb
 workflows:
   update_prlog:
     jobs:
@@ -20,3 +23,38 @@ workflows:
           pcu_from_merge: --from-merge
           update_pcu: << pipeline.parameters.update_pcu >>
           pcu_verbosity: "-vvv"
+      # >>> gen-circleci-orb (managed — edits overwritten by 'gen-circleci-orb update')
+      - gen-circleci-orb/build_rust_binary:
+          name: post-merge-build-binary
+          package: gen-circleci-orb
+          executor: toolkit/rust_env_rolling
+          requires: [update-prlog-on-main]
+          pre-steps:
+            - run:
+                name: Check qualifying branch
+                command: |
+                  case "$CIRCLE_BRANCH" in
+                    renovate/*) ;;
+                    *) echo "Not a qualifying branch ($CIRCLE_BRANCH) - nothing to do."; circleci-agent step halt ;;
+                  esac
+      - gen-circleci-orb/generate:
+          name: post-merge-regenerate-orb
+          binary: gen-circleci-orb
+          orb_namespace: jerus-org
+          orb_dir: orb
+          attach_workspace: true
+          target_branch: main
+          allow_main_record: true
+          ssh_fingerprint: "SHA256:OkxsH8Z6Iim6WDJBaII9eTT9aaO1f3eDc6IpsgYYPVg"
+          persist_orb_workspace: true
+          context: [release]
+          requires: [post-merge-build-binary]
+          pre-steps:
+            - run:
+                name: Check qualifying branch
+                command: |
+                  case "$CIRCLE_BRANCH" in
+                    renovate/*) ;;
+                    *) echo "Not a qualifying branch ($CIRCLE_BRANCH) - nothing to do."; circleci-agent step halt ;;
+                  esac
+      # <<< gen-circleci-orb
