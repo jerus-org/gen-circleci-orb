@@ -1240,6 +1240,7 @@ mod tests {
     use super::*;
     use crate::orb_config::SubcommandConfig;
     use indexmap::IndexMap;
+    use pretty_assertions::assert_eq;
 
     #[test]
     fn default_docker_orb_version_matches_registry() {

@@ -160,6 +160,7 @@ pub(crate) fn set_param_default(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
 
     fn empty_config() -> OrbConfig {
         OrbConfig::default()

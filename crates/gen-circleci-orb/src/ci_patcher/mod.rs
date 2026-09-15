@@ -1353,6 +1353,7 @@ fn push_mcp_workflow_steps(
 mod tests {
     use super::*;
     use crate::output_writer::WriteMode;
+    use pretty_assertions::{assert_eq, assert_ne};
     use tempfile::TempDir;
 
     fn make_opts() -> PatchOpts {

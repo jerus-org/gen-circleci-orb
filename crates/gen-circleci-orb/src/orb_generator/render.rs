@@ -1847,6 +1847,7 @@ fn render_job_group(
 mod tests {
     use super::*;
     use crate::help_parser::types::{ParamType, Parameter, SubCommand};
+    use pretty_assertions::assert_eq;
 
     #[test]
     fn command_param_name_snake_cases_multiword_subcommand() {
