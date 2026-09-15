@@ -154,22 +154,19 @@ workflows:
           name: update-prlog-on-main
           run_label: false   # disable the built-in (premature) label step
           # ... other params unchanged
-      - toolkit/label:
-          name: label-oldest-renovate-pr
-          requires: [post-merge-regenerate-orb]   # the chain's own last job
       # >>> gen-circleci-orb (managed — edits overwritten by 'gen-circleci-orb update')
       # ... the relocated chain, requires: [update-prlog-on-main] via [post_merge_regen].requires
       # <<< gen-circleci-orb
+      - toolkit/label:
+          name: label-oldest-renovate-pr
+          requires: [post-merge-regenerate-orb]   # the chain's own last job
 ```
 
-`update` always inserts the managed block at the absolute end of the workflow's `jobs:` list — never
-somewhere derived from what `requires` names. So a hand-added trailing job like `toolkit/label` above
-ends up positioned *before* the block in the file, not after, no matter where `requires` points. This is
-harmless: CircleCI resolves `requires:` by job name across the whole workflow, independent of array
-order, so `label-oldest-renovate-pr`'s dependency on the chain's last job is honored regardless of which
-one appears first in the file. `update --check` enforces this exact position — hand-reordering the file
-to put `toolkit/label` after the block, as the snippet above might suggest, is reverted on the next
-`update` run.
+`update` inserts the managed block immediately after the last job named in `[post_merge_regen].requires`
+— not necessarily the absolute end of the workflow's `jobs:` list. With `requires` set as above, the
+block lands right after `update-prlog-on-main`, so a hand-added trailing job like `toolkit/label` stays
+positioned after the block, exactly as written. `update --check` enforces this exact position — an
+unrelated job placed even later in the file (not named in `requires`) is left untouched wherever it is.
 
 With `[post_merge_regen].requires = ["update-prlog-on-main"]` set, the relocated chain's first job
 waits only on `update-prlog-on-main` — never on `label-oldest-renovate-pr`, even though it's also

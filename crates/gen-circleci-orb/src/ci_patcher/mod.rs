@@ -555,8 +555,7 @@ pub fn patch_post_merge_regen(content: &str, opts: &PatchOpts) -> (String, Patch
     };
 
     let step_block = post_merge_regen_steps(opts, &pre_existing);
-    let pos = find_workflow_jobs_end(&lines, &opts.post_merge_workflow)
-        .expect("ensure_workflow_exists guarantees the workflow now exists");
+    let pos = insertion_point_after_required(&lines, &opts.post_merge_workflow, &pre_existing);
     insert_block_at(&mut lines, pos, &step_block);
     report
         .insertions
@@ -574,6 +573,18 @@ pub fn patch_post_merge_regen(content: &str, opts: &PatchOpts) -> (String, Patch
 /// order. Read-only: used so the relocated chain can require these jobs,
 /// never to edit them.
 fn pre_existing_job_names(lines: &[String], workflow: &str) -> Vec<String> {
+    job_entries_with_end(lines, workflow)
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect()
+}
+
+/// `(effective name, end-index)` for every job entry in `workflow`'s job
+/// list, in document order — `end` is one past the entry's last line, the
+/// same bound `pre_existing_job_names` used to walk past each entry once.
+/// Shared with `insertion_point_after_required`, which needs a specific
+/// entry's end rather than just its name.
+fn job_entries_with_end(lines: &[String], workflow: &str) -> Vec<(String, usize)> {
     let Some((jobs_start, jobs_end)) = find_workflow_jobs_bounds(lines, workflow) else {
         return Vec::new();
     };
@@ -582,7 +593,7 @@ fn pre_existing_job_names(lines: &[String], workflow: &str) -> Vec<String> {
     // fixed entry indent could silently miss every job under a form it
     // doesn't expect.
     let entry_indent = indent_of(&lines[jobs_start]) + 2;
-    let mut names = Vec::new();
+    let mut entries = Vec::new();
     let mut i = jobs_start + 1;
     while i < jobs_end {
         if indent_of(&lines[i]) == entry_indent && lines[i].trim_start().starts_with("- ") {
@@ -605,13 +616,41 @@ fn pre_existing_job_names(lines: &[String], workflow: &str) -> Vec<String> {
                     .strip_prefix("name: ")
                     .map(|s| strip_trailing_comment(s.trim()).to_string())
             });
-            names.push(explicit_name.unwrap_or_else(|| job_name_from_dash_line(&lines[i])));
+            let name = explicit_name.unwrap_or_else(|| job_name_from_dash_line(&lines[i]));
+            entries.push((name, end));
             i = end;
         } else {
             i += 1;
         }
     }
-    names
+    entries
+}
+
+/// Where the relocated chain's managed block belongs: right after the last
+/// (by document position) job named in `required`. When `required` is
+/// empty — the workflow had no jobs yet, so `post_merge_requires` fell back
+/// to an empty auto-detect (see `patch_post_merge_regen`) — or names no job
+/// actually present, falls back to the absolute end of the job list, same
+/// as before this function existed.
+///
+/// For the auto-detect default (`required` = every job already in the
+/// workflow, from `pre_existing_job_names`), this is always exactly the
+/// absolute end anyway — the last of "every job" IS the last job — so this
+/// changes nothing for any consumer that hasn't set `[post_merge_regen].requires`.
+/// It only matters once `requires` narrows the list, e.g. to let a
+/// hand-added trailing job (gen-circleci-orb#405) end up positioned after
+/// the block instead of wedged before it.
+fn insertion_point_after_required(lines: &[String], workflow: &str, required: &[String]) -> usize {
+    let jobs_end = find_workflow_jobs_end(lines, workflow).unwrap_or(lines.len());
+    if required.is_empty() {
+        return jobs_end;
+    }
+    job_entries_with_end(lines, workflow)
+        .into_iter()
+        .filter(|(name, _)| required.contains(name))
+        .map(|(_, end)| end)
+        .max()
+        .unwrap_or(jobs_end)
 }
 
 /// The job reference/name portion of a workflow job-list dash line, e.g.
@@ -3717,6 +3756,65 @@ workflows:
         );
         // The trailing job is preserved untouched.
         assert!(output.contains("requires: [post-merge-regenerate-orb]"));
+        // PR #405 review finding: the managed block must land right after
+        // the job(s) named in post_merge_requires, not unconditionally at
+        // the absolute end of the job list — otherwise a hand-added
+        // trailing job (like label-oldest-renovate-pr here) always ends up
+        // sandwiched between its own named requires job and the block,
+        // regardless of where the consumer actually wants it relative to
+        // the chain.
+        let block_pos = output
+            .find("name: post-merge-build-binary")
+            .expect("block must be inserted");
+        let trailing_pos = output
+            .find("name: label-oldest-renovate-pr")
+            .expect("trailing job must be preserved");
+        assert!(
+            block_pos < trailing_pos,
+            "block must be inserted BEFORE the trailing job in the file \
+             (i.e. right after update-prlog-on-main), not after it:\n{output}"
+        );
+    }
+
+    #[test]
+    fn resync_post_merge_regen_explicit_requires_inserts_before_trailing_job() {
+        // As above, but on the RESYNC path (block already exists, then a
+        // trailing job is added, then resynced again) — the fresh-insert
+        // and resync paths must agree on position, not just on `requires:`
+        // content (resync_post_merge_regen_explicit_requires_survives_a_trailing_job_added_after
+        // covers content only).
+        let content = "\
+version: 2.1
+
+orbs:
+  toolkit: jerus-org/circleci-toolkit@7.4.0
+
+workflows:
+  update_prlog:
+    jobs:
+      - toolkit/update_prlog:
+          name: update-prlog-on-main
+          context: [pcu-app]
+";
+        let opts = PatchOpts {
+            post_merge_requires: vec!["update-prlog-on-main".to_string()],
+            ..opts_with_post_merge_regen()
+        };
+        let (first, _) = resync_post_merge_regen(content, &opts);
+        let with_trailing_job = format!(
+            "{first}      - toolkit/label:\n          name: label-oldest-renovate-pr\n          requires: [post-merge-regenerate-orb]\n"
+        );
+        let (resynced, _) = resync_post_merge_regen(&with_trailing_job, &opts);
+        let block_pos = resynced
+            .find("name: post-merge-build-binary")
+            .expect("block must be inserted");
+        let trailing_pos = resynced
+            .find("name: label-oldest-renovate-pr")
+            .expect("trailing job must be preserved");
+        assert!(
+            block_pos < trailing_pos,
+            "resync must keep inserting the block BEFORE the trailing job:\n{resynced}"
+        );
     }
 
     #[test]
