@@ -41,6 +41,7 @@ test-fixtures = []
 [dev-dependencies]
 trycmd.workspace = true
 tempfile.workspace = true
+pretty_assertions.workspace = true
 
 [[bin]]
 name = "gen-circleci-orb"

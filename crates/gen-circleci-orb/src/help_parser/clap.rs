@@ -933,6 +933,7 @@ fn is_top_level_section(line: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
 
     // ── top-level parsing ──────────────────────────────────────────────────
 

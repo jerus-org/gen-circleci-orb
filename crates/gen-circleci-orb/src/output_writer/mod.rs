@@ -249,6 +249,7 @@ fn prune_dir(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
     use tempfile::TempDir;
 
     fn single_file(path: &str, content: &str) -> HashMap<PathBuf, String> {

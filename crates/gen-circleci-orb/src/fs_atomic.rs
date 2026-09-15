@@ -102,6 +102,7 @@ fn stage(temp: &Path, content: &[u8]) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::{assert_eq, assert_ne};
 
     #[test]
     fn the_temporary_is_a_sibling_of_the_target() {

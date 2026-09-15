@@ -324,6 +324,7 @@ fn same_value(a: &toml_edit::Item, b: &toml_edit::Item) -> bool {
 mod tests {
     use super::*;
     use indexmap::IndexMap;
+    use pretty_assertions::assert_eq;
     use tempfile::TempDir;
 
     fn write_toml(dir: &TempDir, content: &str) -> std::path::PathBuf {

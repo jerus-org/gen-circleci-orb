@@ -1289,6 +1289,7 @@ fn record_orb(orb_root: &std::path::Path, record: &crate::orb_config::RecordConf
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
     use std::fs;
     use tempfile::TempDir;
 

@@ -332,6 +332,7 @@ fn line_diff(current: &str, would_be: &str) -> String {
 mod tests {
     use super::*;
     use crate::orb_config::{CiSection, OrbConfig, OrbSection, PostMergeRegenConfig, RecordConfig};
+    use pretty_assertions::assert_eq;
 
     // ── config completeness (#155): update must rely on init-captured config ──
 
