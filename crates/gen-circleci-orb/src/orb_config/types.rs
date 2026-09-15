@@ -82,6 +82,15 @@ pub struct PostMergeRegenConfig {
     /// a dedicated "pull_request merged"-triggered pipeline).
     #[serde(default = "default_post_merge_regen_file")]
     pub file: String,
+    /// Job name(s) already in `workflow` for the relocated chain's first job
+    /// to wait on. Empty (the default) keeps the auto-detect behavior:
+    /// require every job already in the workflow, correct when the relocated
+    /// chain should simply run last. Set this explicitly when the workflow
+    /// has, or will have, a job that must instead run AFTER the relocated
+    /// chain — naming only the job(s) that should precede it, never the
+    /// one(s) meant to follow (see docs/post-merge-regeneration.md).
+    #[serde(default)]
+    pub requires: Vec<String>,
 }
 
 fn default_post_merge_regen_file() -> String {
@@ -98,6 +107,7 @@ impl Default for PostMergeRegenConfig {
             branch_patterns: Vec::new(),
             workflow: String::new(),
             file: default_post_merge_regen_file(),
+            requires: Vec::new(),
         }
     }
 }

@@ -1166,6 +1166,7 @@ impl Init {
             post_merge_branch_patterns: vec![],
             post_merge_workflow: String::new(),
             post_merge_ci_file: String::new(),
+            post_merge_requires: vec![],
         };
 
         let mode = if self.dry_run {
