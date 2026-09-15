@@ -23,6 +23,15 @@ workflows:
           pcu_from_merge: --from-merge
           update_pcu: << pipeline.parameters.update_pcu >>
           pcu_verbosity: "-vvv"
+          # Rebasing the oldest Renovate PR here would race the relocated
+          # regen chain's own push to main (gen-circleci-orb#394) — labeling
+          # is deferred to label-oldest-renovate-pr below, which waits for
+          # that push to land first.
+          run_label: false
+      - toolkit/label:
+          name: label-oldest-renovate-pr
+          context: [release, bot-check, pcu-app]
+          requires: [post-merge-regenerate-orb]
       # >>> gen-circleci-orb (managed — edits overwritten by 'gen-circleci-orb update')
       - gen-circleci-orb/build_rust_binary:
           name: post-merge-build-binary

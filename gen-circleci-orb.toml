@@ -118,3 +118,4 @@ build_executor = "toolkit/rust_env_rolling"
 branch_patterns = ["renovate/*"]
 workflow = "update_prlog"
 file = "update_prlog.yml"
+requires = ["update-prlog-on-main"]
