@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - deps: update dependency gen-circleci-orb to v0.1.19(pr [#404])
+- defer rebase-label until after regen push(pr [#405])
 
 ## [0.1.19] - 2026-09-15
 
@@ -1146,6 +1147,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#402]: https://github.com/jerus-org/gen-circleci-orb/pull/402
 [#403]: https://github.com/jerus-org/gen-circleci-orb/pull/403
 [#404]: https://github.com/jerus-org/gen-circleci-orb/pull/404
+[#405]: https://github.com/jerus-org/gen-circleci-orb/pull/405
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.19...HEAD
 [0.1.19]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.18...v0.1.19
 [0.1.18]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.17...v0.1.18
