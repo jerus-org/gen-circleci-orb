@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - cut over to post-merge regen (#328)(pr [#396])
+- explicit [post_merge_regen].requires config(pr [#403])
 
 ### Changed
 
@@ -1137,6 +1138,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#400]: https://github.com/jerus-org/gen-circleci-orb/pull/400
 [#401]: https://github.com/jerus-org/gen-circleci-orb/pull/401
 [#402]: https://github.com/jerus-org/gen-circleci-orb/pull/402
+[#403]: https://github.com/jerus-org/gen-circleci-orb/pull/403
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.18...HEAD
 [0.1.18]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.17...v0.1.18
 [0.1.17]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.16...v0.1.17
