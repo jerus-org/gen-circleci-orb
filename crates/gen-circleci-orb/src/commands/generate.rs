@@ -1327,7 +1327,8 @@ mod tests {
             unchanged: 33,
             removed: 0,
         };
-        assert!(verify_no_drift(&report).is_ok());
+        let result = verify_no_drift(&report);
+        assert!(result.is_ok(), "expected Ok, got {result:?}");
     }
 
     #[test]
@@ -1649,7 +1650,8 @@ mod tests {
     fn check_orb_dir_absent_is_ok() {
         let tmp = TempDir::new().unwrap();
         let orb_root = tmp.path().join("orb");
-        assert!(check_orb_dir(&orb_root).is_ok());
+        let result = check_orb_dir(&orb_root);
+        assert!(result.is_ok(), "expected Ok, got {result:?}");
     }
 
     #[test]
@@ -1658,7 +1660,8 @@ mod tests {
         let orb_root = tmp.path().join("orb");
         fs::create_dir_all(orb_root.join("src")).unwrap();
         fs::write(orb_root.join("src/@orb.yml"), "version: 2.1").unwrap();
-        assert!(check_orb_dir(&orb_root).is_ok());
+        let result = check_orb_dir(&orb_root);
+        assert!(result.is_ok(), "expected Ok, got {result:?}");
     }
 
     #[test]
@@ -1666,7 +1669,8 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let orb_root = tmp.path().join("orb");
         fs::create_dir_all(&orb_root).unwrap();
-        assert!(check_orb_dir(&orb_root).is_ok());
+        let result = check_orb_dir(&orb_root);
+        assert!(result.is_ok(), "expected Ok, got {result:?}");
     }
 
     #[test]
@@ -2361,7 +2365,8 @@ mod tests {
     #[test]
     fn cargo_tools_allowed_with_binstall() {
         let tools = vec!["cargo-audit".to_string()];
-        assert!(ensure_cargo_tools_supported(&InstallMethod::Binstall, &tools).is_ok());
+        let result = ensure_cargo_tools_supported(&InstallMethod::Binstall, &tools);
+        assert!(result.is_ok(), "expected Ok, got {result:?}");
     }
 
     #[test]
@@ -2374,8 +2379,10 @@ mod tests {
 
     #[test]
     fn no_cargo_tools_is_fine_with_any_method() {
-        assert!(ensure_cargo_tools_supported(&InstallMethod::Apt, &[]).is_ok());
-        assert!(ensure_cargo_tools_supported(&InstallMethod::Local, &[]).is_ok());
+        let result = ensure_cargo_tools_supported(&InstallMethod::Apt, &[]);
+        assert!(result.is_ok(), "expected Ok, got {result:?}");
+        let result = ensure_cargo_tools_supported(&InstallMethod::Local, &[]);
+        assert!(result.is_ok(), "expected Ok, got {result:?}");
     }
 
     // ── validate_cargo_tool_entries ─────────────────────────────────────────
@@ -2551,14 +2558,16 @@ mod tests {
     fn validate_param_overrides_accepts_a_valid_integer_default() {
         let cli = cli_with_params("release", vec![param("retries", ParamType::Integer)]);
         let config = config_with_override("release", "retries", "3");
-        assert!(validate_param_overrides(&cli, &config).is_ok());
+        let result = validate_param_overrides(&cli, &config);
+        assert!(result.is_ok(), "expected Ok, got {result:?}");
     }
 
     #[test]
     fn validate_param_overrides_accepts_a_valid_boolean_default() {
         let cli = cli_with_params("wire_ci", vec![param("check", ParamType::Boolean)]);
         let config = config_with_override("wire_ci", "check", "true");
-        assert!(validate_param_overrides(&cli, &config).is_ok());
+        let result = validate_param_overrides(&cli, &config);
+        assert!(result.is_ok(), "expected Ok, got {result:?}");
     }
 
     #[test]
@@ -2587,7 +2596,8 @@ mod tests {
         // No declared type to violate — any string is a valid string default.
         let cli = cli_with_params("generate", vec![param("orb_path", ParamType::String)]);
         let config = config_with_override("generate", "orb_path", "custom/@orb.yml");
-        assert!(validate_param_overrides(&cli, &config).is_ok());
+        let result = validate_param_overrides(&cli, &config);
+        assert!(result.is_ok(), "expected Ok, got {result:?}");
     }
 
     #[test]
@@ -2600,7 +2610,8 @@ mod tests {
             )],
         );
         let config = config_with_override("release", "log_level", "verbose");
-        assert!(validate_param_overrides(&cli, &config).is_ok());
+        let result = validate_param_overrides(&cli, &config);
+        assert!(result.is_ok(), "expected Ok, got {result:?}");
     }
 
     #[test]
@@ -2626,7 +2637,8 @@ mod tests {
         // unmatched override name as a no-op, unchanged by this check.
         let cli = cli_with_params("release", vec![param("retries", ParamType::Integer)]);
         let config = config_with_override("release", "does_not_exist", "3.5");
-        assert!(validate_param_overrides(&cli, &config).is_ok());
+        let result = validate_param_overrides(&cli, &config);
+        assert!(result.is_ok(), "expected Ok, got {result:?}");
     }
 
     #[test]
@@ -2713,7 +2725,8 @@ mod tests {
             ],
         );
         let push_subcommands = ["save".to_string()];
-        assert!(validate_job_group_step_order(&[group], &push_subcommands).is_ok());
+        let result = validate_job_group_step_order(&[group], &push_subcommands);
+        assert!(result.is_ok(), "expected Ok, got {result:?}");
     }
 
     #[test]
@@ -2760,7 +2773,8 @@ mod tests {
             ],
         );
         let push_subcommands = ["save".to_string()];
-        assert!(validate_job_group_step_order(&[group], &push_subcommands).is_ok());
+        let result = validate_job_group_step_order(&[group], &push_subcommands);
+        assert!(result.is_ok(), "expected Ok, got {result:?}");
     }
 
     #[test]
@@ -2825,7 +2839,8 @@ mod tests {
         // Simple-mode groups (step: None) are never inspected, regardless of
         // what would otherwise be a violation.
         let push_subcommands = ["save".to_string()];
-        assert!(validate_job_group_step_order(&[group], &push_subcommands).is_ok());
+        let result = validate_job_group_step_order(&[group], &push_subcommands);
+        assert!(result.is_ok(), "expected Ok, got {result:?}");
     }
 
     #[test]
@@ -2855,7 +2870,8 @@ mod tests {
             "build_mcp_server",
             vec![step_command("set_https_remote"), step_command("save")],
         );
-        assert!(validate_job_group_step_order(&[group], &[]).is_ok());
+        let result = validate_job_group_step_order(&[group], &[]);
+        assert!(result.is_ok(), "expected Ok, got {result:?}");
     }
 
     // ── MCP feature auto-provisions the executor image ─────────────────────
