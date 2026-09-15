@@ -162,6 +162,12 @@ workflows:
           requires: [post-merge-regenerate-orb]   # the chain's own last job
 ```
 
+`update` inserts the managed block immediately after the last job named in `[post_merge_regen].requires`
+— not necessarily the absolute end of the workflow's `jobs:` list. With `requires` set as above, the
+block lands right after `update-prlog-on-main`, so a hand-added trailing job like `toolkit/label` stays
+positioned after the block, exactly as written. `update --check` enforces this exact position — an
+unrelated job placed even later in the file (not named in `requires`) is left untouched wherever it is.
+
 With `[post_merge_regen].requires = ["update-prlog-on-main"]` set, the relocated chain's first job
 waits only on `update-prlog-on-main` — never on `label-oldest-renovate-pr`, even though it's also
 "already in the workflow." Without `requires` set, the auto-detect default would instead require
