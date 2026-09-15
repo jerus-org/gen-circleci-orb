@@ -3745,12 +3745,18 @@ workflows:
     }
 
     #[rstest]
-    #[case::true_pins(true, true)]
-    #[case::false_omits(false, false)]
-    fn patch_post_merge_regen_orb_tools_pin_follows_test_generation(
-        #[case] test_generation: bool,
-        #[case] expect_pin: bool,
-    ) {
+    #[case::test_generation_true(true)]
+    #[case::test_generation_false(false)]
+    fn patch_post_merge_regen_orb_tools_pin_follows_test_generation(#[case] test_generation: bool) {
+        // A single real input (test_generation) determines pin presence —
+        // there is no second, independently-settable variable here, so the
+        // expectation is derived from that one input directly rather than
+        // hand-picked per case. That removes the possibility PR #402 review
+        // flagged: a prior version of this test took `expect_pin` as its own
+        // #[case] parameter, which implied test_generation and pin presence
+        // could vary independently (four combinations) when in fact only two
+        // states exist — the other two were never reachable, not merely
+        // untested.
         let opts = PatchOpts {
             test_generation,
             ..opts_with_post_merge_regen()
@@ -3761,7 +3767,7 @@ workflows:
             opts.orb_tools_version
         ));
         assert_eq!(
-            has_pin, expect_pin,
+            has_pin, test_generation,
             "post-merge-pack-orb/review-orb need orb-tools declared only when \
              test_generation is true:\n{output}"
         );
@@ -3833,12 +3839,13 @@ workflows:
     }
 
     #[rstest]
-    #[case::false_omits(false, false)]
-    #[case::true_includes(true, true)]
-    fn patch_post_merge_regen_pack_review_follows_test_generation(
-        #[case] test_generation: bool,
-        #[case] expect_present: bool,
-    ) {
+    #[case::test_generation_false(false)]
+    #[case::test_generation_true(true)]
+    fn patch_post_merge_regen_pack_review_follows_test_generation(#[case] test_generation: bool) {
+        // Same fix as the orb-tools-pin test above (PR #402 review): derive
+        // expected presence from the one real input instead of a second,
+        // independently-chosen #[case] parameter that implied a 4-state
+        // matrix which doesn't actually exist.
         let opts = PatchOpts {
             test_generation,
             ..opts_with_post_merge_regen()
@@ -3846,12 +3853,12 @@ workflows:
         let (output, _) = patch_post_merge_regen(UPDATE_PRLOG_FIXTURE, &opts);
         assert_eq!(
             output.contains("name: post-merge-pack-orb"),
-            expect_present,
+            test_generation,
             "post-merge-pack-orb presence must follow test_generation:\n{output}"
         );
         assert_eq!(
             output.contains("name: post-merge-review-orb"),
-            expect_present,
+            test_generation,
             "post-merge-review-orb presence must follow test_generation:\n{output}"
         );
     }
@@ -3876,6 +3883,70 @@ workflows:
         let (twice, _) = resync_post_merge_regen(&once, &opts);
         assert_eq!(once, twice, "a second resync must be a no-op");
         assert!(once.contains("toolkit/update_prlog:"));
+    }
+
+    #[test]
+    fn resync_post_merge_regen_toggles_pack_review_when_test_generation_flips() {
+        // PR #402 review question: the two rstest cases above only exercise
+        // patch_post_merge_regen fresh, from opts alone — they don't say
+        // what happens to an ALREADY-wired file when test_generation flips
+        // later. The managed block (post-merge-build-binary through
+        // post-merge-review-orb) sits entirely between markers, so a resync
+        // (strip then re-patch) correctly rebuilds it from the new opts:
+        // pack/review appear or disappear across the flip, not just at
+        // first-insert time.
+        let on = PatchOpts {
+            test_generation: true,
+            ..opts_with_post_merge_regen()
+        };
+        let off = PatchOpts {
+            test_generation: false,
+            ..opts_with_post_merge_regen()
+        };
+
+        let (with_pack_review, _) = resync_post_merge_regen(UPDATE_PRLOG_FIXTURE, &on);
+        assert!(with_pack_review.contains("name: post-merge-pack-orb"));
+
+        let (flipped_off, _) = resync_post_merge_regen(&with_pack_review, &off);
+        assert!(
+            !flipped_off.contains("post-merge-pack-orb"),
+            "resync must remove pack/review once test_generation flips false:\n{flipped_off}"
+        );
+
+        let (flipped_back_on, _) = resync_post_merge_regen(&flipped_off, &on);
+        assert!(
+            flipped_back_on.contains("name: post-merge-pack-orb"),
+            "resync must re-add pack/review once test_generation flips back true:\n{flipped_back_on}"
+        );
+    }
+
+    #[test]
+    fn resync_post_merge_regen_never_removes_an_already_inserted_orb_tools_pin() {
+        // Same review question, for the orb-tools pin specifically: unlike
+        // the managed block above, the pin sits OUTSIDE the markers (by the
+        // same deliberate design as patch_build's own orb-tools handling —
+        // it's a shared orb pin other content in the file could depend on),
+        // so strip_managed never removes it. A test_generation flip to false
+        // after the pin was already inserted leaves it in place rather than
+        // retroactively stripping it.
+        let on = PatchOpts {
+            test_generation: true,
+            ..opts_with_post_merge_regen()
+        };
+        let off = PatchOpts {
+            test_generation: false,
+            ..opts_with_post_merge_regen()
+        };
+
+        let (with_pin, _) = resync_post_merge_regen(UPDATE_PRLOG_FIXTURE, &on);
+        assert!(with_pin.contains("orb-tools:"));
+
+        let (flipped_off, _) = resync_post_merge_regen(&with_pin, &off);
+        assert!(
+            flipped_off.contains("orb-tools:"),
+            "an already-inserted orb-tools pin must survive a later flip to \
+             test_generation = false, not be retroactively stripped:\n{flipped_off}"
+        );
     }
 
     #[test]
