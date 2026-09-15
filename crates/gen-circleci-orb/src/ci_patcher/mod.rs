@@ -87,6 +87,13 @@ pub struct PatchOpts {
     /// `post_merge_workflow`. Only meaningful when
     /// `post_merge_branch_patterns` is non-empty.
     pub post_merge_ci_file: String,
+    /// Explicit job name(s) for the relocated chain's first job to wait on,
+    /// overriding the `pre_existing_job_names` auto-detect (which requires
+    /// EVERY job currently in the workflow — wrong the moment a consumer
+    /// places a job after the relocated chain that must instead run after
+    /// it, e.g. a Renovate-PR-rebase-label step gated on the chain's own
+    /// push). Empty keeps the auto-detect default.
+    pub post_merge_requires: Vec<String>,
 }
 
 pub struct PatchReport {
@@ -539,8 +546,13 @@ pub fn patch_post_merge_regen(content: &str, opts: &PatchOpts) -> (String, Patch
     ensure_post_merge_regen_orb_pins(content, &mut lines, opts, &mut report);
     ensure_workflow_exists(&mut lines, &opts.post_merge_workflow);
     // Ensure the relocated chain runs after every job already in the
-    // workflow, without editing any of their blocks.
-    let pre_existing = pre_existing_job_names(&lines, &opts.post_merge_workflow);
+    // workflow, without editing any of their blocks — unless
+    // post_merge_requires overrides that (see its doc comment).
+    let pre_existing = if opts.post_merge_requires.is_empty() {
+        pre_existing_job_names(&lines, &opts.post_merge_workflow)
+    } else {
+        opts.post_merge_requires.clone()
+    };
 
     let step_block = post_merge_regen_steps(opts, &pre_existing);
     let pos = find_workflow_jobs_end(&lines, &opts.post_merge_workflow)
@@ -1385,6 +1397,7 @@ mod tests {
             post_merge_branch_patterns: vec![],
             post_merge_workflow: String::new(),
             post_merge_ci_file: String::new(),
+            post_merge_requires: vec![],
         }
     }
 
@@ -3660,6 +3673,53 @@ workflows:
     }
 
     #[test]
+    fn patch_post_merge_regen_explicit_requires_ignores_trailing_job() {
+        // PR review finding (gen-circleci-orb#328 follow-up): a consumer may
+        // place a job AFTER the relocated chain that itself `requires:` the
+        // chain's own last job (e.g. a Renovate-PR-rebase-label step gated
+        // on the chain's own push to main having already landed). The
+        // auto-detect default (pre_existing_job_names) blindly requires
+        // EVERY job in the workflow, including that trailing one — creating
+        // a circular requires: the trailing job requires the chain's last
+        // job, while the chain's first job would require the trailing job.
+        // post_merge_requires, when set, must be used verbatim instead of
+        // auto-detecting, ignoring the trailing job entirely.
+        let content = "\
+version: 2.1
+
+orbs:
+  toolkit: jerus-org/circleci-toolkit@7.4.0
+
+workflows:
+  update_prlog:
+    jobs:
+      - toolkit/update_prlog:
+          name: update-prlog-on-main
+          context: [pcu-app]
+      - toolkit/label:
+          name: label-oldest-renovate-pr
+          requires: [post-merge-regenerate-orb]
+";
+        let opts = PatchOpts {
+            post_merge_requires: vec!["update-prlog-on-main".to_string()],
+            ..opts_with_post_merge_regen()
+        };
+        let (output, _) = patch_post_merge_regen(content, &opts);
+        assert!(
+            output.contains("requires: [update-prlog-on-main]"),
+            "post-merge-build-binary must require only the explicit list, \
+             not the trailing label-oldest-renovate-pr job:\n{output}"
+        );
+        assert!(
+            !output.contains("requires: [update-prlog-on-main, label-oldest-renovate-pr]"),
+            "must not fold the trailing job into requires: (that would be \
+             circular — it itself requires post-merge-regenerate-orb):\n{output}"
+        );
+        // The trailing job is preserved untouched.
+        assert!(output.contains("requires: [post-merge-regenerate-orb]"));
+    }
+
+    #[test]
     fn patch_post_merge_regen_names_flow_mapping_job_correctly() {
         // `- deploy: {filters: {...}}` — an inline flow-mapping job entry —
         // must be named `deploy`, not misparsed as anything else, and must
@@ -3883,6 +3943,39 @@ workflows:
         let (twice, _) = resync_post_merge_regen(&once, &opts);
         assert_eq!(once, twice, "a second resync must be a no-op");
         assert!(once.contains("toolkit/update_prlog:"));
+    }
+
+    #[test]
+    fn resync_post_merge_regen_explicit_requires_survives_a_trailing_job_added_after() {
+        // The fresh-insert and resync paths must agree: explicit
+        // post_merge_requires must ignore a trailing job on a RESYNC too,
+        // not just on the first-ever insertion covered by
+        // patch_post_merge_regen_explicit_requires_ignores_trailing_job.
+        let opts = PatchOpts {
+            post_merge_requires: vec!["update-prlog-on-main".to_string()],
+            ..opts_with_post_merge_regen()
+        };
+        let (first, _) = resync_post_merge_regen(UPDATE_PRLOG_FIXTURE, &opts);
+        assert!(first.contains("requires: [update-prlog-on-main]"));
+
+        // Simulate a consumer hand-adding a trailing job after the block,
+        // then resyncing again (e.g. via `gen-circleci-orb update`).
+        let with_trailing_job = format!(
+            "{first}      - toolkit/label:\n          name: label-oldest-renovate-pr\n          requires: [post-merge-regenerate-orb]\n"
+        );
+        let (resynced, _) = resync_post_merge_regen(&with_trailing_job, &opts);
+        assert!(
+            resynced.contains("requires: [update-prlog-on-main]"),
+            "resync must keep ignoring the trailing job:\n{resynced}"
+        );
+        assert!(
+            !resynced.contains("requires: [update-prlog-on-main, label-oldest-renovate-pr]"),
+            "resync must not fold the trailing job into requires: either:\n{resynced}"
+        );
+        assert!(
+            resynced.contains("label-oldest-renovate-pr"),
+            "the trailing job itself must be preserved:\n{resynced}"
+        );
     }
 
     #[test]

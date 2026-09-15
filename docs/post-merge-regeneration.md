@@ -103,6 +103,7 @@ will need to create it and wire up the trigger yourself first.
 branch_patterns = ["renovate/*"]     # bash-glob branch name pattern(s) that qualify
 workflow = "update_prlog"            # workflow (within `file`) to add the relocated jobs to
 file = "update_prlog.yml"            # CI file containing that workflow; defaults to config.yml
+requires = ["update-prlog-on-main"]  # optional; see "Job ordering" below
 ```
 
 - `branch_patterns` — one or more bash-glob patterns (e.g. `["renovate/*", "dependabot/*"]`).
@@ -112,6 +113,8 @@ file = "update_prlog.yml"            # CI file containing that workflow; default
   defaults to `config.yml`. Only set this when the target workflow lives in a dedicated file, as
   it typically will for a "PR merged" trigger (see the prerequisite above) — you generally do not
   want an ordinary push-triggered pipeline evaluating the same workflow.
+- `requires` — job name(s) already in `workflow` for the relocated chain's first job to wait on.
+  Optional; see "Job ordering" below.
 
 `[post_merge_regen]` requires `[record].enabled = true` — `update`/`init` refuse to proceed
 otherwise, since there is nothing to relocate without auto-record enabled in the first place.
@@ -120,9 +123,9 @@ otherwise, since there is nothing to relocate without auto-record enabled in the
 
 A dedicated post-merge workflow commonly exists specifically to push administrative changes to
 `main`. To avoid racing one of those pushes against the relocated chain's own push, the generator
-makes the relocated chain run **last**: its first job automatically requires every job already in
-the workflow, using each job's effective name (an explicit `name:` override when it has one, else
-the job reference itself).
+by default makes the relocated chain run **last**: its first job automatically requires every job
+already in the workflow, using each job's effective name (an explicit `name:` override when it has
+one, else the job reference itself).
 
 This edit is made only on the relocated chain's own job — never by rewriting a pre-existing,
 customer-owned job block. Even inside a file this feature otherwise manages, editing someone
@@ -133,9 +136,37 @@ job is required by its bare reference instead, which fails loudly (a CircleCI "j
 error) rather than silently, in the rare case that matters.
 
 Requiring **every** pre-existing job also means one that is itself excluded by its own `filters:`
-on a given trigger silently keeps the relocated chain from running on that trigger too. A future
-`[post_merge_regen]` option to name which pre-existing jobs to wait on would put that control in
-the consumer's hands — not implemented yet.
+on a given trigger silently keeps the relocated chain from running on that trigger too — and it
+cannot distinguish a job meant to run *after* the relocated chain from one meant to run before it.
+Set `requires` explicitly to name only the job(s) that should precede the relocated chain when
+either of these applies, especially when a job in the workflow itself depends on the relocated
+chain having already run. A concrete example: a workflow whose first job both updates PRLOG.md
+*and* labels the oldest open Renovate PR for rebase (`toolkit/update_prlog`'s `run_label`) should
+not let that label fire before the relocated chain's own regen commit lands — the labeled PR would
+be rebased against a `main` that's about to change again, one commit stale. The fix is to split
+the two concerns and order them correctly:
+
+```yaml
+workflows:
+  update_prlog:
+    jobs:
+      - toolkit/update_prlog:
+          name: update-prlog-on-main
+          run_label: false   # disable the built-in (premature) label step
+          # ... other params unchanged
+      # >>> gen-circleci-orb (managed — edits overwritten by 'gen-circleci-orb update')
+      # ... the relocated chain, requires: [update-prlog-on-main] via [post_merge_regen].requires
+      # <<< gen-circleci-orb
+      - toolkit/label:
+          name: label-oldest-renovate-pr
+          requires: [post-merge-regenerate-orb]   # the chain's own last job
+```
+
+With `[post_merge_regen].requires = ["update-prlog-on-main"]` set, the relocated chain's first job
+waits only on `update-prlog-on-main` — never on `label-oldest-renovate-pr`, even though it's also
+"already in the workflow." Without `requires` set, the auto-detect default would instead require
+*both* jobs, including the trailing one — and since `label-oldest-renovate-pr` itself requires the
+relocated chain's last job, that produces a circular `requires:` CircleCI rejects outright.
 
 ## Verifying it live
 

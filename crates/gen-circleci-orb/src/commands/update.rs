@@ -195,7 +195,7 @@ fn validate_config_completeness(config: &orb_config::OrbConfig) -> Result<Vec<St
                 .to_string(),
         );
     }
-    if config.post_merge_regen.is_some() {
+    if let Some(post_merge_regen) = config.post_merge_regen.as_ref() {
         let record_enabled = config.record.as_ref().is_some_and(|r| r.enabled);
         if !record_enabled {
             anyhow::bail!(
@@ -204,6 +204,17 @@ fn validate_config_completeness(config: &orb_config::OrbConfig) -> Result<Vec<St
                  regen+record, and there is nothing to relocate without \
                  [record] enabled. Either enable [record] or remove \
                  [post_merge_regen]."
+            );
+        }
+        if post_merge_regen
+            .requires
+            .iter()
+            .any(|r| r.trim().is_empty())
+        {
+            anyhow::bail!(
+                "[post_merge_regen].requires has a blank entry — every job \
+                 name in the list must be non-empty. Remove the blank entry \
+                 or fix the typo (e.g. a trailing comma)."
             );
         }
     }
@@ -289,6 +300,9 @@ fn opts_from_config(config: &orb_config::OrbConfig) -> ci_patcher::PatchOpts {
             .map(|p| p.workflow.clone())
             .unwrap_or_default(),
         post_merge_ci_file: post_merge_regen.map(|p| p.file.clone()).unwrap_or_default(),
+        post_merge_requires: post_merge_regen
+            .map(|p| p.requires.clone())
+            .unwrap_or_default(),
     }
 }
 
@@ -474,6 +488,7 @@ mod tests {
                 branch_patterns: vec!["renovate/*".to_string()],
                 workflow: "update_prlog".to_string(),
                 file: "update_prlog.yml".to_string(),
+                ..PostMergeRegenConfig::default()
             }),
             ..complete_config()
         };
@@ -495,6 +510,7 @@ mod tests {
                 branch_patterns: vec!["renovate/*".to_string()],
                 workflow: "update_prlog".to_string(),
                 file: "update_prlog.yml".to_string(),
+                ..PostMergeRegenConfig::default()
             }),
             ..complete_config()
         };
@@ -509,6 +525,7 @@ mod tests {
                 branch_patterns: vec!["renovate/*".to_string()],
                 workflow: "update_prlog".to_string(),
                 file: "update_prlog.yml".to_string(),
+                ..PostMergeRegenConfig::default()
             }),
             ..complete_config()
         };
@@ -516,6 +533,26 @@ mod tests {
         assert!(
             warnings.is_empty(),
             "a complete config with valid post_merge_regen must produce no warnings: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn validate_fails_when_post_merge_regen_requires_has_a_blank_entry() {
+        // Code-review finding: a stray empty-string entry (e.g. a trailing-
+        // comma typo) would otherwise flow straight through to `requires: []`
+        // in the generated YAML with no diagnostic. Catch it at config-load
+        // time instead, matching this function's fail-loudly convention.
+        let config = OrbConfig {
+            post_merge_regen: Some(PostMergeRegenConfig {
+                requires: vec!["update-prlog-on-main".to_string(), String::new()],
+                ..PostMergeRegenConfig::default()
+            }),
+            ..complete_config()
+        };
+        let err = validate_config_completeness(&config).unwrap_err();
+        assert!(
+            err.to_string().contains("[post_merge_regen].requires"),
+            "error must name the offending field: {err}"
         );
     }
 
@@ -671,6 +708,29 @@ workflows:
         );
         assert_eq!(opts.post_merge_workflow, "update_prlog");
         assert_eq!(opts.post_merge_ci_file, "update_prlog.yml");
+    }
+
+    #[test]
+    fn opts_from_config_maps_post_merge_regen_requires() {
+        let toml_with_pmr = format!(
+            "{TOML}\n[post_merge_regen]\nbranch_patterns = [\"renovate/*\"]\nworkflow = \"update_prlog\"\nfile = \"update_prlog.yml\"\nrequires = [\"update-prlog-on-main\"]\n"
+        );
+        let config: orb_config::OrbConfig = toml::from_str(&toml_with_pmr).unwrap();
+        let opts = opts_from_config(&config);
+        assert_eq!(
+            opts.post_merge_requires,
+            vec!["update-prlog-on-main".to_string()]
+        );
+    }
+
+    #[test]
+    fn opts_from_config_post_merge_regen_requires_defaults_empty() {
+        let toml_with_pmr = format!(
+            "{TOML}\n[post_merge_regen]\nbranch_patterns = [\"renovate/*\"]\nworkflow = \"update_prlog\"\nfile = \"update_prlog.yml\"\n"
+        );
+        let config: orb_config::OrbConfig = toml::from_str(&toml_with_pmr).unwrap();
+        let opts = opts_from_config(&config);
+        assert!(opts.post_merge_requires.is_empty());
     }
 
     #[test]
