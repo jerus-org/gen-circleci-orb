@@ -133,7 +133,8 @@ mod tests {
     #[test]
     fn orb_exists_exit_0_returns_ok() {
         let runner = FakeRunner::new(vec![(0, "", "")]);
-        assert!(cmd("my-org/my-orb").run_with_runner(&runner, "tok").is_ok());
+        let result = cmd("my-org/my-orb").run_with_runner(&runner, "tok");
+        assert!(result.is_ok(), "expected Ok, got {result:?}");
     }
 
     #[test]
@@ -242,13 +243,15 @@ mod tests {
     fn create_already_exists_in_output_treated_as_success() {
         // Idempotent / race: the orb already exists. Accept regardless of exit code.
         let runner = FakeRunner::new(vec![(255, "", "not found"), (1, "orb already exists", "")]);
-        assert!(cmd("my-org/my-orb").run_with_runner(&runner, "tok").is_ok());
+        let result = cmd("my-org/my-orb").run_with_runner(&runner, "tok");
+        assert!(result.is_ok(), "expected Ok, got {result:?}");
     }
 
     #[test]
     fn create_exit_0_is_success() {
         let runner = FakeRunner::new(vec![(255, "", "not found"), (0, "", "")]);
-        assert!(cmd("my-org/my-orb").run_with_runner(&runner, "tok").is_ok());
+        let result = cmd("my-org/my-orb").run_with_runner(&runner, "tok");
+        assert!(result.is_ok(), "expected Ok, got {result:?}");
     }
 
     #[test]

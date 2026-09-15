@@ -1354,6 +1354,7 @@ mod tests {
     use super::*;
     use crate::output_writer::WriteMode;
     use pretty_assertions::{assert_eq, assert_ne};
+    use rstest::rstest;
     use tempfile::TempDir;
 
     fn make_opts() -> PatchOpts {
@@ -3369,6 +3370,25 @@ workflows:
     }
 
     #[test]
+    fn apply_patches_errs_when_config_file_is_unreadable() {
+        // The `?` on `std::fs::read_to_string` (apply_patches' only fallible
+        // step besides the write itself) had no test exercising its Err path
+        // — every existing test only reaches the Ok path via `.unwrap()`.
+        // A directory in place of the file reliably fails `read_to_string`
+        // (not a permissions test, so it's portable) while still passing
+        // `path.exists()`, so apply_patches doesn't just skip it as absent.
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir(dir.path().join("config.yml")).unwrap();
+
+        let result = apply_patches(dir.path(), &make_opts(), WriteMode::Preview);
+
+        assert!(
+            result.is_err(),
+            "a config.yml that can't be read as a file must propagate an error, got {result:?}"
+        );
+    }
+
+    #[test]
     fn apply_patches_creates_a_missing_post_merge_regen_file() {
         // gen-circleci-orb#328 review finding: most consumers won't already
         // have a dedicated post-merge file — apply_patches must create it,
@@ -3724,32 +3744,26 @@ workflows:
         );
     }
 
-    #[test]
-    fn patch_post_merge_regen_pins_orb_tools_when_test_generation_true() {
+    #[rstest]
+    #[case::true_pins(true, true)]
+    #[case::false_omits(false, false)]
+    fn patch_post_merge_regen_orb_tools_pin_follows_test_generation(
+        #[case] test_generation: bool,
+        #[case] expect_pin: bool,
+    ) {
         let opts = PatchOpts {
-            test_generation: true,
+            test_generation,
             ..opts_with_post_merge_regen()
         };
         let (output, _) = patch_post_merge_regen(UPDATE_PRLOG_FIXTURE, &opts);
-        assert!(
-            output.contains(&format!(
-                "orb-tools: circleci/orb-tools@{}",
-                opts.orb_tools_version
-            )),
-            "post-merge-pack-orb/review-orb need orb-tools declared:\n{output}"
-        );
-    }
-
-    #[test]
-    fn patch_post_merge_regen_omits_orb_tools_pin_when_test_generation_false() {
-        let opts = PatchOpts {
-            test_generation: false,
-            ..opts_with_post_merge_regen()
-        };
-        let (output, _) = patch_post_merge_regen(UPDATE_PRLOG_FIXTURE, &opts);
-        assert!(
-            !output.contains("orb-tools:"),
-            "no pack/review jobs means no need for orb-tools:\n{output}"
+        let has_pin = output.contains(&format!(
+            "orb-tools: circleci/orb-tools@{}",
+            opts.orb_tools_version
+        ));
+        assert_eq!(
+            has_pin, expect_pin,
+            "post-merge-pack-orb/review-orb need orb-tools declared only when \
+             test_generation is true:\n{output}"
         );
     }
 
@@ -3818,26 +3832,28 @@ workflows:
         assert!(output.contains("renovate/*)"));
     }
 
-    #[test]
-    fn patch_post_merge_regen_omits_pack_review_when_test_generation_false() {
+    #[rstest]
+    #[case::false_omits(false, false)]
+    #[case::true_includes(true, true)]
+    fn patch_post_merge_regen_pack_review_follows_test_generation(
+        #[case] test_generation: bool,
+        #[case] expect_present: bool,
+    ) {
         let opts = PatchOpts {
-            test_generation: false,
+            test_generation,
             ..opts_with_post_merge_regen()
         };
         let (output, _) = patch_post_merge_regen(UPDATE_PRLOG_FIXTURE, &opts);
-        assert!(!output.contains("post-merge-pack-orb"));
-        assert!(!output.contains("post-merge-review-orb"));
-    }
-
-    #[test]
-    fn patch_post_merge_regen_includes_pack_review_when_test_generation_true() {
-        let opts = PatchOpts {
-            test_generation: true,
-            ..opts_with_post_merge_regen()
-        };
-        let (output, _) = patch_post_merge_regen(UPDATE_PRLOG_FIXTURE, &opts);
-        assert!(output.contains("name: post-merge-pack-orb"));
-        assert!(output.contains("name: post-merge-review-orb"));
+        assert_eq!(
+            output.contains("name: post-merge-pack-orb"),
+            expect_present,
+            "post-merge-pack-orb presence must follow test_generation:\n{output}"
+        );
+        assert_eq!(
+            output.contains("name: post-merge-review-orb"),
+            expect_present,
+            "post-merge-review-orb presence must follow test_generation:\n{output}"
+        );
     }
 
     #[test]
