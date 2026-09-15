@@ -1934,7 +1934,7 @@ DEALINGS IN THE SOFTWARE.
 Used by:
 
 - backtrace 0.3.76
-- cc 1.4.5
+- cc 1.4.6
 - cfg-if 1.0.4
 - cmake 0.1.58
 - find-msvc-tools 0.1.12
@@ -2119,7 +2119,7 @@ THE SOFTWARE.
 
 Used by:
 
-- bitflags 2.13.1
+- bitflags 2.13.2
 - log 0.4.34
 - num-bigint 0.4.8
 - num-integer 0.1.47
@@ -2296,7 +2296,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- base62 2.2.4
+- base62 2.2.6
 
 ```text
 Copyright (c) 2015 François Bernier
@@ -2658,7 +2658,7 @@ Used by:
 
 - hyper-rustls 0.27.9
 - rustls-native-certs 0.8.4
-- rustls 0.23.44
+- rustls 0.23.45
 
 ```text
 Copyright (c) 2016 Joseph Birr-Pixton <jpixton@gmail.com>
@@ -3547,7 +3547,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- smallvec 1.16.0
+- smallvec 1.16.1
 
 ```text
 Copyright (c) 2018 The Servo Project Developers
@@ -4605,10 +4605,10 @@ Used by:
 - anstyle 1.0.14
 - clap-verbosity-flag 3.0.4
 - clap-verbosity 2.1.0
-- clap 4.6.6
-- clap_builder 4.6.6
-- clap_derive 4.6.4
-- clap_lex 1.1.0
+- clap 4.6.7
+- clap_builder 4.6.7
+- clap_derive 4.6.7
+- clap_lex 1.1.1
 - colorchoice 1.0.5
 - config 0.15.25
 - env_filter 2.0.0
@@ -4993,7 +4993,7 @@ SOFTWARE.
 
 Used by:
 
-- crc32fast 1.5.1
+- crc32fast 1.5.2
 
 ```text
 MIT License
@@ -5180,7 +5180,7 @@ SOFTWARE.
 
 Used by:
 
-- libredox 0.1.23
+- libredox 0.1.24
 
 ```text
 MIT License
@@ -5304,7 +5304,7 @@ SOFTWARE.
 
 Used by:
 
-- gen-circleci-orb 0.1.18
+- gen-circleci-orb 0.1.19
 
 ```text
 MIT License
@@ -5634,7 +5634,7 @@ Used by:
 - adler2 2.0.1
 - anyhow 1.0.104
 - atomic-waker 1.1.2
-- camino 1.2.5
+- camino 1.2.6
 - color-eyre 0.6.5
 - color-spantrace 0.3.0
 - displaydoc 0.2.7
@@ -5890,8 +5890,8 @@ THE SOFTWARE.
 Used by:
 
 - aho-corasick 1.1.5
-- jiff-core 0.1.0
-- jiff 0.2.35
+- jiff-core 0.1.1
+- jiff 0.2.37
 - memchr 2.8.3
 - ucd-trie 0.1.7
 - walkdir 2.5.0
@@ -6307,8 +6307,8 @@ SOFTWARE.
 
 Used by:
 
-- async-compression 0.4.46
-- compression-codecs 0.4.41
+- async-compression 0.4.47
+- compression-codecs 0.4.42
 - compression-core 0.4.33
 
 ```text
