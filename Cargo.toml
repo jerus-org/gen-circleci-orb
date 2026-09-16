@@ -53,4 +53,4 @@ trycmd = "1.2.1"
 tempfile = "3.27.0"
 uuid = { version = "1.26.1", features = ["v4"] }
 pretty_assertions = "1.4.1"
-rstest = "0.26.1"
+rstest = "0.27.0"
