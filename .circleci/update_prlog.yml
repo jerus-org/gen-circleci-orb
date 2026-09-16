@@ -11,7 +11,7 @@ orbs:
   toolkit: jerus-org/circleci-toolkit@7.4.0
 
   # >>> gen-circleci-orb (managed — edits overwritten by 'gen-circleci-orb update')
-  gen-circleci-orb: jerus-org/gen-circleci-orb@0.1.19
+  gen-circleci-orb: jerus-org/gen-circleci-orb@0.1.20
   # <<< gen-circleci-orb
 workflows:
   update_prlog:
@@ -28,10 +28,6 @@ workflows:
           # is deferred to label-oldest-renovate-pr below, which waits for
           # that push to land first.
           run_label: false
-      - toolkit/label:
-          name: label-oldest-renovate-pr
-          context: [release, bot-check, pcu-app]
-          requires: [post-merge-regenerate-orb]
       # >>> gen-circleci-orb (managed — edits overwritten by 'gen-circleci-orb update')
       - gen-circleci-orb/build_rust_binary:
           name: post-merge-build-binary
@@ -67,3 +63,7 @@ workflows:
                     *) echo "Not a qualifying branch ($CIRCLE_BRANCH) - nothing to do."; circleci-agent step halt ;;
                   esac
       # <<< gen-circleci-orb
+      - toolkit/label:
+          name: label-oldest-renovate-pr
+          context: [release, bot-check, pcu-app]
+          requires: [post-merge-regenerate-orb]
