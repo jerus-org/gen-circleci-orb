@@ -322,21 +322,27 @@ fn drift_message(version: &str, current: &str, would_be: &str) -> String {
 }
 
 /// Minimal line diff for the alert. Not a true unified diff (the authoritative
-/// diff is `git diff` after running `update`); lines unique to the current config
-/// are shown with `-`, lines unique to the re-synced config with `+`.
+/// diff is `git diff` after running `update`); removed lines are shown with
+/// `-`, added lines with `+`. A real (Myers) line diff, not a set-membership
+/// comparison — gen-circleci-orb#409: `current`/`would_be` can differ only by
+/// the POSITION of otherwise-identical lines (e.g. a hand-added job moving
+/// relative to the managed block) or by a dropped DUPLICATE of a line that
+/// still appears elsewhere, and a set-based comparison shows neither as a
+/// change even though `resynced != current` is true.
 fn line_diff(current: &str, would_be: &str) -> String {
-    use std::collections::HashSet;
-    let cur: HashSet<&str> = current.lines().collect();
-    let new: HashSet<&str> = would_be.lines().collect();
+    use similar::{ChangeTag, TextDiff};
+    let diff = TextDiff::from_lines(current, would_be);
     let mut out = String::new();
-    for l in current.lines() {
-        if !new.contains(l) {
-            out.push_str(&format!("- {l}\n"));
-        }
-    }
-    for l in would_be.lines() {
-        if !cur.contains(l) {
-            out.push_str(&format!("+ {l}\n"));
+    for change in diff.iter_all_changes() {
+        let prefix = match change.tag() {
+            ChangeTag::Delete => "- ",
+            ChangeTag::Insert => "+ ",
+            ChangeTag::Equal => continue,
+        };
+        out.push_str(prefix);
+        out.push_str(change.value());
+        if !change.value().ends_with('\n') {
+            out.push('\n');
         }
     }
     out
@@ -875,5 +881,56 @@ workflows:
         let created = fs::read_to_string(ci_dir.join("update_prlog.yml")).unwrap();
         assert!(created.starts_with("version: 2.1"));
         assert!(created.contains("name: post-merge-build-binary"));
+    }
+
+    // ── line_diff (gen-circleci-orb#409): must show REAL drift, not just ──
+    // ── lines whose CONTENT is unique to one side ──
+
+    #[test]
+    fn line_diff_shows_a_pure_reordering_of_identical_lines() {
+        // The exact failure mode hit live on the renovate/gen-circleci-orb-0.x
+        // PR (#405 follow-up, gen-circleci-orb#409): `resynced != current` was
+        // true (out_of_date correctly detected), but line_diff's old
+        // HashSet-based implementation only reports lines whose CONTENT is
+        // unique to one side — a pure position swap of byte-identical lines
+        // produces an empty diff, even though `git diff` after `update`
+        // would show real churn. A reader following the printed "run
+        // `gen-circleci-orb update` then `git diff`" instruction sees no
+        // preview of what that diff will be.
+        let current = "a\nb\nc\n";
+        let reordered = "a\nc\nb\n";
+        let diff = line_diff(current, reordered);
+        assert!(
+            !diff.trim().is_empty(),
+            "a pure line reordering must not produce an empty diff"
+        );
+    }
+
+    #[test]
+    fn line_diff_counts_duplicate_lines_by_occurrence() {
+        // A second failure mode of the same HashSet bug: dropping one of two
+        // duplicate occurrences of a line is invisible to set membership
+        // (the line is still "in the set" once), but is real drift.
+        let current = "x\nx\ny\n";
+        let dropped_one = "x\ny\n";
+        let diff = line_diff(current, dropped_one);
+        assert!(
+            !diff.trim().is_empty(),
+            "dropping one of two duplicate lines must not produce an empty diff"
+        );
+    }
+
+    #[test]
+    fn line_diff_reports_true_content_changes() {
+        // Regression guard: the common case (an actual content change, e.g.
+        // the orb pin version bump) must still show up, as it always has.
+        let current = "  gen-circleci-orb: jerus-org/gen-circleci-orb@0.1.19\n";
+        let bumped = "  gen-circleci-orb: jerus-org/gen-circleci-orb@0.1.20\n";
+        let diff = line_diff(current, bumped);
+        assert!(
+            diff.contains("0.1.19"),
+            "must show the removed line:\n{diff}"
+        );
+        assert!(diff.contains("0.1.20"), "must show the added line:\n{diff}");
     }
 }
