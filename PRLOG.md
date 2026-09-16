@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - deps: update rust crate rstest to 0.27.0(pr [#407])
 - prefix generated env vars with GCO_ (#370)(pr [#415])
 - nested subcommand support beyond depth 1(pr [#417])
+- reject ambiguous subcommand names (#358)(pr [#416])
 
 ## [0.1.20] - 2026-09-15
 
@@ -1168,6 +1169,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#407]: https://github.com/jerus-org/gen-circleci-orb/pull/407
 [#415]: https://github.com/jerus-org/gen-circleci-orb/pull/415
 [#417]: https://github.com/jerus-org/gen-circleci-orb/pull/417
+[#416]: https://github.com/jerus-org/gen-circleci-orb/pull/416
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.20...HEAD
 [0.1.20]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.19...v0.1.20
 [0.1.19]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.18...v0.1.19
