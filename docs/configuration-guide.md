@@ -337,6 +337,27 @@ generate time — `"true"`/`"false"` for a boolean parameter, a parseable intege
 silently emitting an invalid orb.yml. An override naming a parameter the CLI no longer has is not
 an error; it's simply not applied.
 
+### Rename a parameter's orb-facing key
+
+A restricted CLI flag name (currently just `name`) is automatically renamed to
+`{subcommand}_{param}` (e.g. `generate` + `--name` → `generate_name`) so it survives CircleCI's own
+restricted-parameter-name rejection. If that automatic rename happens to collide with a genuinely
+different, unrelated parameter on the same subcommand (e.g. a real `--generate-name` flag whose
+normalized name is already `generate_name`), generation fails loudly rather than letting one
+silently clobber the other. Set `orb_name` to give the colliding parameter an explicit key instead —
+keyed the same way `param.<name>` overrides always are, by the CLI's own flag name with hyphens
+normalized to underscores (`--generate-name` → `generate_name`), the same normalized form the
+collision itself is named after:
+
+```toml
+[subcommand.generate.param.generate_name]
+orb_name = "generate_name_alt"
+```
+
+This works even when you don't control the underlying CLI (so renaming the flag itself isn't an
+option) — `orb_name` always wins over both the bare CLI flag name and the automatic restricted-name
+rename.
+
 ### Pin extra orbs
 
 ```toml

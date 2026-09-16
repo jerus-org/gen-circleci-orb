@@ -335,6 +335,13 @@ pub struct SubcommandConfig {
 #[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq)]
 pub struct ParamOverride {
     pub default: Option<String>,
+    /// Explicit orb-facing parameter key for this param, overriding both the
+    /// bare CLI flag name and any automatic restricted-name renaming
+    /// (`name` -> `{subcommand}_name`). The escape hatch for a
+    /// `resolve_command_param_name` renamed-key collision
+    /// (gen-circleci-orb#412) — always available via `gen-circleci-orb.toml`,
+    /// even when the consumer doesn't control the underlying CLI.
+    pub orb_name: Option<String>,
 }
 
 /// A composed job assembled from the tool's own generated commands plus optional

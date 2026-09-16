@@ -438,7 +438,7 @@ fn render_subcommand(
         }
         files.insert(
             PathBuf::from(format!("src/scripts/{snake}.sh")),
-            render_command_script_content(sub, path, binary),
+            render_command_script_content(sub, path, binary, config),
         );
     }
     for child in &sub.subcommands {
@@ -476,6 +476,35 @@ fn resolve_command_param_name(subcommand: &str, param: &str) -> String {
     }
 }
 
+/// Resolve the orb-facing parameter name for a CLI parameter, honoring an
+/// explicit `[subcommand.<name>.param.<flag>] orb_name = "..."` override
+/// before falling back to automatic restricted-name renaming
+/// (`resolve_command_param_name`). The override is always available to a
+/// consumer via `gen-circleci-orb.toml`, even when they don't control the
+/// underlying CLI — it's the resolution path for a renamed-key collision
+/// between a restricted param's automatic rename and an unrelated, genuinely
+/// same-named flag (gen-circleci-orb#412; see #358 for why "force the
+/// consumer to redesign a CLI they may not control" is the wrong shape for
+/// this kind of fix).
+pub(crate) fn resolve_param_orb_name(
+    subcommand: &str,
+    param: &str,
+    config: Option<&OrbConfig>,
+) -> String {
+    if let Some(name) = config
+        .and_then(|c| c.subcommand.as_ref())
+        .and_then(|m| m.get(subcommand))
+        .and_then(|sc| sc.param.as_ref())
+        .and_then(|p| p.get(param))
+        .and_then(|po| po.orb_name.as_deref())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        return name.to_string();
+    }
+    resolve_command_param_name(subcommand, param)
+}
+
 /// Env var name for a CLI parameter's value inside a generated script or
 /// `environment:` block. Always `GCO_`-prefixed — never a bare uppercase of
 /// the orb parameter name — so it can never collide with a shell-reserved or
@@ -501,6 +530,30 @@ const RESERVED_JOB_PARAMS: &[&str] = &[
     "post_steps",
 ];
 
+/// Job parameter keys `render_job` synthesizes itself — `attach_workspace`/
+/// `workspace_root` unconditionally, the rest only for an orb-producing
+/// subcommand (one with an `orb_dir` param) — and inserts AFTER
+/// `build_orb_parameters`, unconditionally overwriting any CLI-derived entry
+/// already at that key (gen-circleci-orb#412). A resolved param key (bare,
+/// restricted-renamed, or `orb_name`-overridden) landing on one of these is
+/// silent corruption, not a normal collision `orb_name` can be used to avoid
+/// on its own — since these names aren't CLI-derived, a consumer has no way
+/// to know to avoid them without this list. Checked as an unconditional
+/// superset (not just the orb-producing subset) by
+/// `validate_param_key_collisions`: whether a given subcommand actually
+/// triggers the orb-producing branch depends on its own parsed params, which
+/// the pre-render validator doesn't re-derive — failing loudly for the full
+/// superset is the safe direction, matching this codebase's established
+/// preference for erroring over silently picking a winner.
+pub(crate) const SYNTHESIZED_JOB_PARAMS: &[&str] = &[
+    "attach_workspace",
+    "workspace_root",
+    "persist_orb_workspace",
+    "ssh_fingerprint",
+    "check_ci_wiring",
+    "target_branch",
+];
+
 /// Resolve the display name for a command's `run` step: a curated `label`
 /// from config, else `short_about`, else the bare subcommand name.
 fn resolve_run_step_name(sub: &SubCommand, config: Option<&OrbConfig>) -> String {
@@ -521,14 +574,15 @@ fn resolve_run_step_name(sub: &SubCommand, config: Option<&OrbConfig>) -> String
 }
 
 fn render_command(sub: &SubCommand, effective_name: &str, config: Option<&OrbConfig>) -> String {
-    let parameters = build_command_orb_parameters(sub);
+    let parameters = build_command_orb_parameters(sub, config);
     // Boolean flags are set as string env vars via `when` steps (reliable),
     // ahead of the run step that consumes them via BASH_ENV.
-    let mut steps = build_boolean_flag_env_steps(sub);
+    let mut steps = build_boolean_flag_env_steps(sub, config);
     steps.push(build_run_step(
         sub,
         effective_name,
         &resolve_run_step_name(sub, config),
+        config,
     ));
     let cmd = OrbCommand {
         description: sub.description.clone(),
@@ -543,13 +597,16 @@ fn render_command(sub: &SubCommand, effective_name: &str, config: Option<&OrbCon
 /// string env var to test (`[[ "${X:-false}" = "true" ]]`), instead of a YAML
 /// boolean in the `environment:` block — which CircleCI does not reliably expose
 /// to the shell as "true", so the flag would silently never be passed.
-fn build_boolean_flag_env_steps(sub: &SubCommand) -> Vec<serde_yaml::Value> {
+fn build_boolean_flag_env_steps(
+    sub: &SubCommand,
+    config: Option<&OrbConfig>,
+) -> Vec<serde_yaml::Value> {
     let mut steps = Vec::new();
     for p in &sub.parameters {
         if !matches!(p.param_type, ParamType::Boolean) {
             continue;
         }
-        let orb_name = resolve_command_param_name(&sub.name, &p.long_name);
+        let orb_name = resolve_param_orb_name(&sub.name, &p.long_name, config);
         let env_var = env_var_name(&orb_name);
 
         let mut run_map = serde_yaml::Mapping::new();
@@ -637,10 +694,13 @@ fn coerce_override_default(raw: &str, param_type: &str) -> serde_yaml::Value {
     }
 }
 
-fn build_command_orb_parameters(sub: &SubCommand) -> IndexMap<String, OrbParameter> {
+fn build_command_orb_parameters(
+    sub: &SubCommand,
+    config: Option<&OrbConfig>,
+) -> IndexMap<String, OrbParameter> {
     let mut params = IndexMap::new();
     for p in &sub.parameters {
-        let orb_name = resolve_command_param_name(&sub.name, &p.long_name);
+        let orb_name = resolve_param_orb_name(&sub.name, &p.long_name, config);
         let (type_str, enum_vals) = match &p.param_type {
             ParamType::String => ("string".to_string(), None),
             ParamType::Boolean => ("boolean".to_string(), None),
@@ -667,7 +727,12 @@ fn build_command_orb_parameters(sub: &SubCommand) -> IndexMap<String, OrbParamet
 /// Options are appended first and positionals last, in declaration order: a
 /// positional emitted between an option and its value would be read as that
 /// value.
-fn render_command_script_content(sub: &SubCommand, path: &[String], binary: &str) -> String {
+fn render_command_script_content(
+    sub: &SubCommand,
+    path: &[String],
+    binary: &str,
+    config: Option<&OrbConfig>,
+) -> String {
     // The real CLI invocation needs every ancestor segment, not just this
     // subcommand's own bare name — `ci release` must run `binary ci
     // release`, not `binary release` (gen-circleci-orb#358 redesign
@@ -682,7 +747,7 @@ fn render_command_script_content(sub: &SubCommand, path: &[String], binary: &str
         .partition(|p| p.kind == ParamKind::Positional);
 
     for p in options.into_iter().chain(positionals) {
-        let orb_name = resolve_command_param_name(&sub.name, &p.long_name);
+        let orb_name = resolve_param_orb_name(&sub.name, &p.long_name, config);
         let env_var = env_var_name(&orb_name);
         // A positional is passed bare; a short-only option by its short flag,
         // which is the only form the CLI accepts.
@@ -738,7 +803,7 @@ fn render_job(
     opts: &GenerateOpts,
     config: Option<&OrbConfig>,
 ) -> String {
-    let mut parameters = build_orb_parameters(sub, RESERVED_JOB_PARAMS);
+    let mut parameters = build_orb_parameters(sub, RESERVED_JOB_PARAMS, config);
 
     // Apply param default overrides from config
     if let Some(param_overrides) = config
@@ -747,15 +812,14 @@ fn render_job(
         .and_then(|sc_config| sc_config.param.as_ref())
     {
         for (param_name, override_) in param_overrides {
-            // Config keys a restricted param's override by its CLI flag
-            // name ("name"), but build_orb_parameters stores it under its
-            // renamed key ("generate_name") — resolve the same way, or the
-            // override silently no-ops (#369 follow-up).
-            let resolved_key = if RESTRICTED_COMMAND_PARAMS.contains(&param_name.as_str()) {
-                resolve_command_param_name(&sub.name, param_name)
-            } else {
-                param_name.clone()
-            };
+            // Config keys an override by its CLI flag name ("name"), but
+            // build_orb_parameters stores the param under its RESOLVED key —
+            // the same key resolve_param_orb_name computes (an explicit
+            // orb_name override, or the automatic restricted rename, e.g.
+            // "generate_name") — so the default lookup must resolve the same
+            // way, or it silently no-ops (#369 follow-up, generalized by
+            // #412's orb_name override).
+            let resolved_key = resolve_param_orb_name(&sub.name, param_name, config);
             if let Some(param) = parameters.get_mut(&resolved_key) {
                 if let Some(new_default) = &override_.default {
                     param.default = Some(coerce_override_default(new_default, &param.param_type));
@@ -782,7 +846,7 @@ fn render_job(
         parameters.insert("target_branch".to_string(), build_target_branch_param());
     }
 
-    let invoke_step = build_invoke_step(sub, effective_name, RESERVED_JOB_PARAMS);
+    let invoke_step = build_invoke_step(sub, effective_name, RESERVED_JOB_PARAMS, config);
     let mut steps = vec![serde_yaml::Value::String("checkout".to_string())];
     if is_orb_producing {
         steps.push(build_target_branch_switch_step());
@@ -1221,26 +1285,38 @@ fn render_example(cli: &CliDefinition, opts: &GenerateOpts, config: Option<&OrbC
 /// The job-level key to declare/forward parameter `p` under, or `None` if it
 /// should be dropped entirely. A param in `skip` is dropped unless it's ALSO
 /// RESTRICTED_COMMAND_PARAMS-renameable, in which case it's kept under the
-/// SAME renamed key the invoked command already uses (#369) rather than the
-/// bare skip-list name. Shared by `build_orb_parameters` and
-/// `build_invoke_step` so the two can't drift apart (a fix landing in only
-/// one would reintroduce #369 in the other).
-fn resolve_job_param_key(sub: &SubCommand, p: &Parameter, skip: &[&str]) -> Option<String> {
+/// SAME resolved key the invoked command already uses (#369) rather than the
+/// bare skip-list name. Every kept param — restricted or not — resolves via
+/// `resolve_param_orb_name`, so an `orb_name` override on an ordinary param
+/// also stays in sync between the job's declared parameter and the command
+/// it invokes (#412) — not just the restricted-rename case. Shared by
+/// `build_orb_parameters` and `build_invoke_step` so the two can't drift
+/// apart (a fix landing in only one would reintroduce #369 in the other).
+fn resolve_job_param_key(
+    sub: &SubCommand,
+    p: &Parameter,
+    skip: &[&str],
+    config: Option<&OrbConfig>,
+) -> Option<String> {
     if skip.contains(&p.long_name.as_str()) {
         if RESTRICTED_COMMAND_PARAMS.contains(&p.long_name.as_str()) {
-            Some(resolve_command_param_name(&sub.name, &p.long_name))
+            Some(resolve_param_orb_name(&sub.name, &p.long_name, config))
         } else {
             None
         }
     } else {
-        Some(p.long_name.clone())
+        Some(resolve_param_orb_name(&sub.name, &p.long_name, config))
     }
 }
 
-fn build_orb_parameters(sub: &SubCommand, skip: &[&str]) -> IndexMap<String, OrbParameter> {
+fn build_orb_parameters(
+    sub: &SubCommand,
+    skip: &[&str],
+    config: Option<&OrbConfig>,
+) -> IndexMap<String, OrbParameter> {
     let mut params = IndexMap::new();
     for p in &sub.parameters {
-        let Some(key) = resolve_job_param_key(sub, p, skip) else {
+        let Some(key) = resolve_job_param_key(sub, p, skip, config) else {
             continue;
         };
         let (type_str, enum_vals) = match &p.param_type {
@@ -1265,7 +1341,12 @@ fn build_orb_parameters(sub: &SubCommand, skip: &[&str]) -> IndexMap<String, Orb
 
 /// Build the `run:` step for a command, referencing the script file (RC009 compliance).
 /// Adds an `environment:` block so the script can read params as uppercased env vars.
-fn build_run_step(sub: &SubCommand, effective_name: &str, run_name: &str) -> serde_yaml::Value {
+fn build_run_step(
+    sub: &SubCommand,
+    effective_name: &str,
+    run_name: &str,
+    config: Option<&OrbConfig>,
+) -> serde_yaml::Value {
     serde_yaml::Value::Mapping({
         let mut m = serde_yaml::Mapping::new();
         let mut run_map = serde_yaml::Mapping::new();
@@ -1291,7 +1372,7 @@ fn build_run_step(sub: &SubCommand, effective_name: &str, run_name: &str) -> ser
             if matches!(p.param_type, ParamType::Boolean) {
                 continue;
             }
-            let orb_name = resolve_command_param_name(&sub.name, &p.long_name);
+            let orb_name = resolve_param_orb_name(&sub.name, &p.long_name, config);
             let env_var = env_var_name(&orb_name);
             env_map.insert(
                 serde_yaml::Value::String(env_var),
@@ -1316,10 +1397,15 @@ fn build_run_step(sub: &SubCommand, effective_name: &str, run_name: &str) -> ser
 /// the key the invoked command is actually rendered under
 /// (`render_command`/`compute_effective_names`) — not necessarily
 /// `sub.name`, when this subcommand's bare name collides elsewhere.
-fn build_invoke_step(sub: &SubCommand, effective_name: &str, skip: &[&str]) -> serde_yaml::Value {
+fn build_invoke_step(
+    sub: &SubCommand,
+    effective_name: &str,
+    skip: &[&str],
+    config: Option<&OrbConfig>,
+) -> serde_yaml::Value {
     let mut invoke_map = serde_yaml::Mapping::new();
     for p in &sub.parameters {
-        let Some(key) = resolve_job_param_key(sub, p, skip) else {
+        let Some(key) = resolve_job_param_key(sub, p, skip, config) else {
             continue;
         };
         let value = format!("<< parameters.{key} >>");
@@ -2039,6 +2125,55 @@ mod tests {
     }
 
     #[test]
+    fn param_orb_name_falls_back_to_restricted_rename_with_no_config() {
+        // No config at all, or no matching override: behaves exactly like
+        // resolve_command_param_name (gen-circleci-orb#412's fallback path).
+        assert_eq!(
+            resolve_param_orb_name("generate", "name", None),
+            "generate_name"
+        );
+        assert_eq!(resolve_param_orb_name("generate", "steps", None), "steps");
+    }
+
+    #[test]
+    fn param_orb_name_honors_an_explicit_override() {
+        // [subcommand.generate.param.generate_name] orb_name = "..." must win
+        // over both the bare CLI flag name and automatic restricted renaming
+        // -- the resolution path for a renamed-key collision (#412).
+        let mut param_overrides = IndexMap::new();
+        param_overrides.insert(
+            "generate_name".to_string(),
+            crate::orb_config::ParamOverride {
+                default: None,
+                orb_name: Some("generate_name_alt".to_string()),
+            },
+        );
+        let mut subcommands = IndexMap::new();
+        subcommands.insert(
+            "generate".to_string(),
+            crate::orb_config::SubcommandConfig {
+                param: Some(param_overrides),
+                ..Default::default()
+            },
+        );
+        let config = OrbConfig {
+            subcommand: Some(subcommands),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            resolve_param_orb_name("generate", "generate_name", Some(&config)),
+            "generate_name_alt"
+        );
+        // A restricted param under the same subcommand, with no override of
+        // its own, still falls back to automatic renaming untouched.
+        assert_eq!(
+            resolve_param_orb_name("generate", "name", Some(&config)),
+            "generate_name"
+        );
+    }
+
+    #[test]
     fn enum_param_without_default_uses_first_value() {
         // An enum param with no CLI default must default to a valid enum value
         // (the first), never "" — `circleci orb validate` rejects an empty
@@ -2080,8 +2215,14 @@ mod tests {
             }],
         );
         let want = Some(serde_yaml::Value::String("binstall".to_string()));
-        assert_eq!(build_orb_parameters(&sub, &[])["method"].default, want);
-        assert_eq!(build_command_orb_parameters(&sub)["method"].default, want);
+        assert_eq!(
+            build_orb_parameters(&sub, &[], None)["method"].default,
+            want
+        );
+        assert_eq!(
+            build_command_orb_parameters(&sub, None)["method"].default,
+            want
+        );
     }
 
     fn make_leaf(name: &str, params: Vec<Parameter>) -> SubCommand {
@@ -3784,6 +3925,7 @@ mod tests {
             "name".to_string(),
             crate::orb_config::ParamOverride {
                 default: Some("my-default".to_string()),
+                orb_name: None,
             },
         );
         subcommands.insert(
@@ -3804,6 +3946,76 @@ mod tests {
             job.contains("generate_name:") && job.contains("default: my-default"),
             "override on 'name' must apply to the renamed 'generate_name' job param:\n{job}"
         );
+    }
+
+    #[test]
+    fn orb_name_override_resolves_a_renamed_key_collision() {
+        // gen-circleci-orb#412: a restricted `--name` on subcommand
+        // `generate` renames to `generate_name` -- which collides with an
+        // unrelated, genuinely-named `--generate-name` flag on the same
+        // subcommand (long_name already normalized to `generate_name`).
+        // An `orb_name` override on the real flag disambiguates it, without
+        // touching the restricted param's own automatic rename.
+        let params = vec![
+            Parameter {
+                long_name: "name".to_string(),
+                short: Some('n'),
+                param_type: ParamType::String,
+                default: Some(String::new()),
+                required: false,
+                description: "Name for the output.".to_string(),
+                ..Default::default()
+            },
+            Parameter {
+                long_name: "generate_name".to_string(),
+                short: None,
+                param_type: ParamType::Boolean,
+                default: Some("false".to_string()),
+                required: false,
+                description: "Whether to generate a name.".to_string(),
+                ..Default::default()
+            },
+        ];
+        let sub = make_leaf("generate", params);
+        let cli = make_cli("mytool", vec![sub]);
+
+        let mut param_overrides = IndexMap::new();
+        param_overrides.insert(
+            "generate_name".to_string(),
+            crate::orb_config::ParamOverride {
+                default: None,
+                orb_name: Some("generate_name_alt".to_string()),
+            },
+        );
+        let mut subcommands = IndexMap::new();
+        subcommands.insert(
+            "generate".to_string(),
+            crate::orb_config::SubcommandConfig {
+                param: Some(param_overrides),
+                ..Default::default()
+            },
+        );
+        let config = OrbConfig {
+            subcommand: Some(subcommands),
+            ..Default::default()
+        };
+
+        let files = generate(&cli, &default_opts(), Some(&config));
+        let command = &files[&PathBuf::from("src/commands/generate.yml")];
+        let job = &files[&PathBuf::from("src/jobs/generate.yml")];
+        for rendered in [command, job] {
+            assert!(
+                rendered.contains("generate_name:"),
+                "the restricted 'name' param must still render under its \
+                 automatic rename 'generate_name':\n{rendered}"
+            );
+            assert!(
+                rendered.contains("generate_name_alt:"),
+                "the genuinely-named 'generate_name' param must render under \
+                 its 'orb_name' override 'generate_name_alt', not clobber \
+                 'generate_name':\n{rendered}"
+            );
+        }
     }
 
     #[test]
@@ -5487,6 +5699,7 @@ mod tests {
             "orb_path".to_string(),
             ParamOverride {
                 default: Some("custom/@orb.yml".to_string()),
+                orb_name: None,
             },
         );
         let mut subcommands = IndexMap::new();
@@ -5536,6 +5749,7 @@ mod tests {
             "check".to_string(),
             ParamOverride {
                 default: Some("true".to_string()),
+                orb_name: None,
             },
         );
         let mut subcommands = IndexMap::new();
@@ -5585,6 +5799,7 @@ mod tests {
             "retries".to_string(),
             ParamOverride {
                 default: Some("3".to_string()),
+                orb_name: None,
             },
         );
         let mut subcommands = IndexMap::new();
