@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - chore-resync CI wiring to 0.1.20(pr [#408])
 
+### Fixed
+
+- use a real diff for drift summary(pr [#409])
+
 ## [0.1.20] - 2026-09-15
 
 ### Fixed
@@ -1155,6 +1159,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#404]: https://github.com/jerus-org/gen-circleci-orb/pull/404
 [#405]: https://github.com/jerus-org/gen-circleci-orb/pull/405
 [#408]: https://github.com/jerus-org/gen-circleci-orb/pull/408
+[#409]: https://github.com/jerus-org/gen-circleci-orb/pull/409
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.20...HEAD
 [0.1.20]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.19...v0.1.20
 [0.1.19]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.18...v0.1.19
