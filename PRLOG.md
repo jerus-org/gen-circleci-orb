@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - rename restricted params in jobs (#369)(pr [#411])
 - deps: update rust crate rstest to 0.27.0(pr [#407])
 - prefix generated env vars with GCO_ (#370)(pr [#415])
+- nested subcommand support beyond depth 1(pr [#417])
 
 ## [0.1.20] - 2026-09-15
 
@@ -1166,6 +1167,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#411]: https://github.com/jerus-org/gen-circleci-orb/pull/411
 [#407]: https://github.com/jerus-org/gen-circleci-orb/pull/407
 [#415]: https://github.com/jerus-org/gen-circleci-orb/pull/415
+[#417]: https://github.com/jerus-org/gen-circleci-orb/pull/417
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.20...HEAD
 [0.1.20]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.19...v0.1.20
 [0.1.19]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.18...v0.1.19
