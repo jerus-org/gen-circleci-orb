@@ -780,6 +780,56 @@ fn find_subcommand<'a>(
     None
 }
 
+/// Rejects a CLI tree where two leaf subcommands share a bare name at
+/// different nesting depths (e.g. a top-level `release` and a nested `ci
+/// release`).
+///
+/// This is not merely a config-lookup ambiguity: every `[subcommand.<name>]`
+/// lookup in this codebase matches by bare name (see `find_subcommand`'s own
+/// doc comment), and `render_subcommand` (`orb_generator::render`) writes
+/// every leaf's generated job/command to a path keyed by the bare
+/// snake-cased name alone (`src/jobs/{snake}.yml`) — never a dotted path. A
+/// name collision therefore silently clobbers one leaf's entire generated
+/// job/command with the other's in the generator's output map, independent
+/// of any config ambiguity. #358.
+pub(crate) fn validate_subcommand_name_uniqueness(
+    cli: &help_parser::types::CliDefinition,
+) -> Result<()> {
+    let mut by_name: std::collections::BTreeMap<&str, Vec<String>> =
+        std::collections::BTreeMap::new();
+    collect_names_with_paths(&cli.subcommands, "", &mut by_name);
+
+    let mut errors: Vec<String> = by_name
+        .into_iter()
+        .filter(|(_, paths)| paths.len() > 1)
+        .map(|(name, paths)| format!("{name:?} used at: {}", paths.join(", ")))
+        .collect();
+    errors.sort();
+    if !errors.is_empty() {
+        anyhow::bail!("ambiguous subcommand name(s):\n{}", errors.join("\n"));
+    }
+    Ok(())
+}
+
+/// Recursively collects every subcommand's bare name, keyed by that name,
+/// with each occurrence's full dotted path — so a name used at more than one
+/// path is easy to detect and report.
+fn collect_names_with_paths<'a>(
+    subs: &'a [help_parser::types::SubCommand],
+    prefix: &str,
+    by_name: &mut std::collections::BTreeMap<&'a str, Vec<String>>,
+) {
+    for sub in subs {
+        let path = if prefix.is_empty() {
+            sub.name.clone()
+        } else {
+            format!("{prefix}.{}", sub.name)
+        };
+        by_name.entry(&sub.name).or_default().push(path.clone());
+        collect_names_with_paths(&sub.subcommands, &path, by_name);
+    }
+}
+
 /// `Err` names why `raw` can't be coerced to `param_type` — mirrors the
 /// coercions `coerce_override_default` (orb_generator::render) actually
 /// performs, so this rejects exactly the inputs that function would
@@ -983,6 +1033,8 @@ impl Generate {
             .clone()
             .or_else(|| config_url.and_then(|o| o.home_url.clone()))
             .or_else(|| detected_url.clone());
+
+        validate_subcommand_name_uniqueness(&cli_def)?;
 
         let install_method = resolve_install_method(self.install_method.as_ref(), &orb_config);
         let cargo_tools = resolve_cargo_tools(&self.cargo_tools, &orb_config);
@@ -2666,6 +2718,93 @@ mod tests {
         let config = config_with_override("release", "retries", "not-a-number");
         let err = validate_param_overrides(&cli, &config).unwrap_err();
         assert!(err.to_string().contains("retries"), "got: {err}");
+    }
+
+    // ── validate_subcommand_name_uniqueness (#358) ──────────────────────────
+
+    #[test]
+    fn validate_subcommand_name_uniqueness_rejects_a_top_level_and_nested_collision() {
+        // #358: render_subcommand writes every leaf's generated job/command to
+        // a path keyed by the BARE snake-cased name only ("src/jobs/{snake}.yml"),
+        // never a dotted path — so a top-level "release" and a nested
+        // "ci.release" silently clobber each other's generated output, on top
+        // of every [subcommand.release] config lookup being ambiguous between
+        // them.
+        let nested = help_parser::types::SubCommand {
+            name: "release".to_string(),
+            description: String::new(),
+            short_about: String::new(),
+            is_leaf: true,
+            parameters: vec![],
+            subcommands: vec![],
+        };
+        let cli = help_parser::types::CliDefinition {
+            binary_name: "demo".to_string(),
+            description: String::new(),
+            subcommands: vec![
+                help_parser::types::SubCommand {
+                    name: "release".to_string(),
+                    description: String::new(),
+                    short_about: String::new(),
+                    is_leaf: true,
+                    parameters: vec![],
+                    subcommands: vec![],
+                },
+                help_parser::types::SubCommand {
+                    name: "ci".to_string(),
+                    description: String::new(),
+                    short_about: String::new(),
+                    is_leaf: false,
+                    parameters: vec![],
+                    subcommands: vec![nested],
+                },
+            ],
+        };
+        let err = validate_subcommand_name_uniqueness(&cli).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("release"),
+            "must name the colliding name: {msg}"
+        );
+        assert!(
+            msg.contains("ci.release"),
+            "must name the nested path: {msg}"
+        );
+    }
+
+    #[test]
+    fn validate_subcommand_name_uniqueness_accepts_distinct_names() {
+        let nested = help_parser::types::SubCommand {
+            name: "deploy".to_string(),
+            description: String::new(),
+            short_about: String::new(),
+            is_leaf: true,
+            parameters: vec![],
+            subcommands: vec![],
+        };
+        let cli = help_parser::types::CliDefinition {
+            binary_name: "demo".to_string(),
+            description: String::new(),
+            subcommands: vec![
+                help_parser::types::SubCommand {
+                    name: "release".to_string(),
+                    description: String::new(),
+                    short_about: String::new(),
+                    is_leaf: true,
+                    parameters: vec![],
+                    subcommands: vec![],
+                },
+                help_parser::types::SubCommand {
+                    name: "ci".to_string(),
+                    description: String::new(),
+                    short_about: String::new(),
+                    is_leaf: false,
+                    parameters: vec![],
+                    subcommands: vec![nested],
+                },
+            ],
+        };
+        assert!(validate_subcommand_name_uniqueness(&cli).is_ok());
     }
 
     // ── validate_job_group_step_order ───────────────────────────────────────
