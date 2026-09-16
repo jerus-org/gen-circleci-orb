@@ -77,40 +77,40 @@ steps:
     condition: << parameters.dry_run >>
     steps:
     - run:
-        name: Set DRY_RUN flag
-        command: echo 'export DRY_RUN=true' >> "$BASH_ENV"
+        name: Set GCO_DRY_RUN flag
+        command: echo 'export GCO_DRY_RUN=true' >> "$BASH_ENV"
 - when:
     condition: << parameters.no_record >>
     steps:
     - run:
-        name: Set NO_RECORD flag
-        command: echo 'export NO_RECORD=true' >> "$BASH_ENV"
+        name: Set GCO_NO_RECORD flag
+        command: echo 'export GCO_NO_RECORD=true' >> "$BASH_ENV"
 - when:
     condition: << parameters.check >>
     steps:
     - run:
-        name: Set CHECK flag
-        command: echo 'export CHECK=true' >> "$BASH_ENV"
+        name: Set GCO_CHECK flag
+        command: echo 'export GCO_CHECK=true' >> "$BASH_ENV"
 - when:
     condition: << parameters.allow_main_record >>
     steps:
     - run:
-        name: Set ALLOW_MAIN_RECORD flag
-        command: echo 'export ALLOW_MAIN_RECORD=true' >> "$BASH_ENV"
+        name: Set GCO_ALLOW_MAIN_RECORD flag
+        command: echo 'export GCO_ALLOW_MAIN_RECORD=true' >> "$BASH_ENV"
 - run:
     name: Generate orb source files from a CLI binary's --help output
     command: <<include(scripts/generate.sh)>>
     environment:
-      BINARY: << parameters.binary >>
-      ORB_NAMESPACE: << parameters.orb_namespace >>
-      OUTPUT: << parameters.output >>
-      INSTALL_METHOD: << parameters.install_method >>
-      BASE_IMAGE: << parameters.base_image >>
-      HOME_URL: << parameters.home_url >>
-      SOURCE_URL: << parameters.source_url >>
-      ORB_DIR: << parameters.orb_dir >>
-      GIT_PUSH_SUBCOMMAND: << parameters.git_push_subcommand >>
-      CIRCLECI_CLI_VERSION: << parameters.circleci_cli_version >>
-      APT_PACKAGES: << parameters.apt_packages >>
-      CARGO_TOOL: << parameters.cargo_tool >>
-      CONFIG: << parameters.config >>
+      GCO_BINARY: << parameters.binary >>
+      GCO_ORB_NAMESPACE: << parameters.orb_namespace >>
+      GCO_OUTPUT: << parameters.output >>
+      GCO_INSTALL_METHOD: << parameters.install_method >>
+      GCO_BASE_IMAGE: << parameters.base_image >>
+      GCO_HOME_URL: << parameters.home_url >>
+      GCO_SOURCE_URL: << parameters.source_url >>
+      GCO_ORB_DIR: << parameters.orb_dir >>
+      GCO_GIT_PUSH_SUBCOMMAND: << parameters.git_push_subcommand >>
+      GCO_CIRCLECI_CLI_VERSION: << parameters.circleci_cli_version >>
+      GCO_APT_PACKAGES: << parameters.apt_packages >>
+      GCO_CARGO_TOOL: << parameters.cargo_tool >>
+      GCO_CONFIG: << parameters.config >>

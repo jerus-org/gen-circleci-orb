@@ -17,11 +17,11 @@ steps:
     condition: << parameters.check >>
     steps:
     - run:
-        name: Set CHECK flag
-        command: echo 'export CHECK=true' >> "$BASH_ENV"
+        name: Set GCO_CHECK flag
+        command: echo 'export GCO_CHECK=true' >> "$BASH_ENV"
 - run:
     name: Re-sync an existing repo's orb-managed CI wiring to the current flow
     command: <<include(scripts/update.sh)>>
     environment:
-      CONFIG: << parameters.config >>
-      CI_DIR: << parameters.ci_dir >>
+      GCO_CONFIG: << parameters.config >>
+      GCO_CI_DIR: << parameters.ci_dir >>
