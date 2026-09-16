@@ -223,4 +223,14 @@ fn generate_rejects_a_real_ambiguous_subcommand_name() {
         stderr.contains("release") && stderr.contains("ci.release"),
         "stderr must name the colliding name and both paths:\n{stderr}"
     );
+    // Review follow-up: since generation is rejected, there must be no
+    // orb -- not a partial/broken one. validate_subcommand_name_uniqueness
+    // runs before any file is written, so the output directory should be
+    // completely untouched.
+    let orb_root = out.path().join("orb");
+    assert!(
+        !orb_root.exists(),
+        "a rejected generate must leave no orb output behind, found: {}",
+        orb_root.display()
+    );
 }
