@@ -610,7 +610,16 @@ fn render_job(sub: &SubCommand, opts: &GenerateOpts, config: Option<&OrbConfig>)
         .and_then(|sc_config| sc_config.param.as_ref())
     {
         for (param_name, override_) in param_overrides {
-            if let Some(param) = parameters.get_mut(param_name) {
+            // Config keys a restricted param's override by its CLI flag
+            // name ("name"), but build_orb_parameters stores it under its
+            // renamed key ("generate_name") — resolve the same way, or the
+            // override silently no-ops (#369 follow-up).
+            let resolved_key = if RESTRICTED_COMMAND_PARAMS.contains(&param_name.as_str()) {
+                resolve_command_param_name(&sub.name, param_name)
+            } else {
+                param_name.clone()
+            };
+            if let Some(param) = parameters.get_mut(&resolved_key) {
                 if let Some(new_default) = &override_.default {
                     param.default = Some(coerce_override_default(new_default, &param.param_type));
                 }
@@ -1072,20 +1081,30 @@ fn render_example(cli: &CliDefinition, opts: &GenerateOpts, config: Option<&OrbC
     out
 }
 
+/// The job-level key to declare/forward parameter `p` under, or `None` if it
+/// should be dropped entirely. A param in `skip` is dropped unless it's ALSO
+/// RESTRICTED_COMMAND_PARAMS-renameable, in which case it's kept under the
+/// SAME renamed key the invoked command already uses (#369) rather than the
+/// bare skip-list name. Shared by `build_orb_parameters` and
+/// `build_invoke_step` so the two can't drift apart (a fix landing in only
+/// one would reintroduce #369 in the other).
+fn resolve_job_param_key(sub: &SubCommand, p: &Parameter, skip: &[&str]) -> Option<String> {
+    if skip.contains(&p.long_name.as_str()) {
+        if RESTRICTED_COMMAND_PARAMS.contains(&p.long_name.as_str()) {
+            Some(resolve_command_param_name(&sub.name, &p.long_name))
+        } else {
+            None
+        }
+    } else {
+        Some(p.long_name.clone())
+    }
+}
+
 fn build_orb_parameters(sub: &SubCommand, skip: &[&str]) -> IndexMap<String, OrbParameter> {
     let mut params = IndexMap::new();
     for p in &sub.parameters {
-        let key = if skip.contains(&p.long_name.as_str()) {
-            if !RESTRICTED_COMMAND_PARAMS.contains(&p.long_name.as_str()) {
-                continue;
-            }
-            // Reserved at the job level too, but the invoked command already
-            // renames it rather than dropping it (RESTRICTED_COMMAND_PARAMS) —
-            // the job must declare/forward it under that SAME renamed key or
-            // the value has no way to reach the command (#369).
-            resolve_command_param_name(&sub.name, &p.long_name)
-        } else {
-            p.long_name.clone()
+        let Some(key) = resolve_job_param_key(sub, p, skip) else {
+            continue;
         };
         let (type_str, enum_vals) = match &p.param_type {
             ParamType::String => ("string".to_string(), None),
@@ -1160,20 +1179,13 @@ fn build_run_step(sub: &SubCommand, run_name: &str) -> serde_yaml::Value {
 fn build_invoke_step(sub: &SubCommand, skip: &[&str]) -> serde_yaml::Value {
     let mut invoke_map = serde_yaml::Mapping::new();
     for p in &sub.parameters {
-        let key = if skip.contains(&p.long_name.as_str()) {
-            if !RESTRICTED_COMMAND_PARAMS.contains(&p.long_name.as_str()) {
-                continue;
-            }
-            // Same renamed key on both sides: the job declares it (see
-            // build_orb_parameters) and the command expects it under this
-            // name too (resolve_command_param_name) — forward it verbatim.
-            resolve_command_param_name(&sub.name, &p.long_name)
-        } else {
-            p.long_name.clone()
+        let Some(key) = resolve_job_param_key(sub, p, skip) else {
+            continue;
         };
+        let value = format!("<< parameters.{key} >>");
         invoke_map.insert(
-            serde_yaml::Value::String(key.clone()),
-            serde_yaml::Value::String(format!("<< parameters.{key} >>")),
+            serde_yaml::Value::String(key),
+            serde_yaml::Value::String(value),
         );
     }
     serde_yaml::Value::Mapping({
@@ -3392,8 +3404,56 @@ mod tests {
         // RESTRICTED_COMMAND_PARAMS (type, filters, matrix, requires,
         // context, pre_steps, post_steps) are CircleCI job-INVOCATION-site
         // keys, not something commands rename — #369's fix must not start
-        // renaming these too.
+        // renaming these too. Combines ALL of them plus the ONE renameable
+        // name ("name") in a single subcommand, so a branch-ordering bug
+        // affecting only later/earlier params in the loop can't hide behind
+        // testing one reserved name at a time.
         let params = vec![
+            Parameter {
+                long_name: "name".to_string(),
+                short: None,
+                param_type: ParamType::String,
+                default: None,
+                required: false,
+                description: "Name.".to_string(),
+                ..Default::default()
+            },
+            Parameter {
+                long_name: "type".to_string(),
+                short: None,
+                param_type: ParamType::String,
+                default: None,
+                required: false,
+                description: "Type.".to_string(),
+                ..Default::default()
+            },
+            Parameter {
+                long_name: "filters".to_string(),
+                short: None,
+                param_type: ParamType::String,
+                default: None,
+                required: false,
+                description: "Filters.".to_string(),
+                ..Default::default()
+            },
+            Parameter {
+                long_name: "matrix".to_string(),
+                short: None,
+                param_type: ParamType::String,
+                default: None,
+                required: false,
+                description: "Matrix.".to_string(),
+                ..Default::default()
+            },
+            Parameter {
+                long_name: "requires".to_string(),
+                short: None,
+                param_type: ParamType::String,
+                default: None,
+                required: false,
+                description: "Requires.".to_string(),
+                ..Default::default()
+            },
             Parameter {
                 long_name: "context".to_string(),
                 short: None,
@@ -3401,6 +3461,24 @@ mod tests {
                 default: None,
                 required: false,
                 description: "Some context value.".to_string(),
+                ..Default::default()
+            },
+            Parameter {
+                long_name: "pre_steps".to_string(),
+                short: None,
+                param_type: ParamType::String,
+                default: None,
+                required: false,
+                description: "Pre steps.".to_string(),
+                ..Default::default()
+            },
+            Parameter {
+                long_name: "post_steps".to_string(),
+                short: None,
+                param_type: ParamType::String,
+                default: None,
+                required: false,
+                description: "Post steps.".to_string(),
                 ..Default::default()
             },
             Parameter {
@@ -3418,17 +3496,82 @@ mod tests {
         let files = generate(&cli, &default_opts(), None);
         let job = &files[&PathBuf::from("src/jobs/generate.yml")];
 
+        // "name" is the only renameable one — must be kept under its rename.
         assert!(
-            !job.contains("\n  context:\n"),
-            "job must still drop 'context' (job-invocation-reserved, not renameable):\n{job}"
+            job.contains("generate_name:"),
+            "job must still rename+keep 'name':\n{job}"
         );
-        assert!(
-            !job.contains("generate_context"),
-            "job must not invent a rename for a job-invocation-reserved param:\n{job}"
-        );
+        // Every other reserved key stays dropped, not renamed.
+        for reserved in [
+            "type",
+            "filters",
+            "matrix",
+            "requires",
+            "context",
+            "pre_steps",
+            "post_steps",
+        ] {
+            assert!(
+                !job.contains(&format!("\n  {reserved}:\n")),
+                "job must still drop '{reserved}' (job-invocation-reserved, not renameable):\n{job}"
+            );
+            assert!(
+                !job.contains(&format!("generate_{reserved}")),
+                "job must not invent a rename for job-invocation-reserved '{reserved}':\n{job}"
+            );
+        }
         assert!(
             job.contains("output:"),
             "job must still contain non-reserved parameter 'output':\n{job}"
+        );
+    }
+
+    #[test]
+    fn job_param_override_targets_the_renamed_restricted_param() {
+        // Code-review finding on #369's fix: render_job's config
+        // param-default-override lookup used the raw CLI flag name
+        // ("name"), but build_orb_parameters now stores a restricted+
+        // renameable param under its RENAMED key ("generate_name"). An
+        // override keyed by the config's bare "name" must still reach it —
+        // config is written in terms of the CLI's own flag name, not the
+        // internal rename.
+        let params = vec![Parameter {
+            long_name: "name".to_string(),
+            short: Some('n'),
+            param_type: ParamType::String,
+            default: Some(String::new()),
+            required: false,
+            description: "Name for the output.".to_string(),
+            ..Default::default()
+        }];
+        let sub = make_leaf("generate", params);
+        let cli = make_cli("mytool", vec![sub]);
+
+        let mut subcommands = IndexMap::new();
+        let mut param_overrides = IndexMap::new();
+        param_overrides.insert(
+            "name".to_string(),
+            crate::orb_config::ParamOverride {
+                default: Some("my-default".to_string()),
+            },
+        );
+        subcommands.insert(
+            "generate".to_string(),
+            crate::orb_config::SubcommandConfig {
+                param: Some(param_overrides),
+                ..Default::default()
+            },
+        );
+        let config = OrbConfig {
+            subcommand: Some(subcommands),
+            ..Default::default()
+        };
+
+        let files = generate(&cli, &default_opts(), Some(&config));
+        let job = &files[&PathBuf::from("src/jobs/generate.yml")];
+        assert!(
+            job.contains("generate_name:") && job.contains("default: my-default"),
+            "override on 'name' must apply to the renamed 'generate_name' job param:\n{job}"
         );
     }
 
