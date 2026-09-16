@@ -1,3 +1,3 @@
 set -- fixture-cli configure
-[[ -n "${CONFIG_PATH:-}" ]] && set -- "$@" --config-path "${CONFIG_PATH}"
+[[ -n "${GCO_CONFIG_PATH:-}" ]] && set -- "$@" --config-path "${GCO_CONFIG_PATH}"
 "$@"

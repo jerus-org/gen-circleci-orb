@@ -366,6 +366,18 @@ fn resolve_command_param_name(subcommand: &str, param: &str) -> String {
     }
 }
 
+/// Env var name for a CLI parameter's value inside a generated script or
+/// `environment:` block. Always `GCO_`-prefixed — never a bare uppercase of
+/// the orb parameter name — so it can never collide with a shell-reserved or
+/// tool-reserved variable (`PATH`, `HOME`, `IFS`, `GIT_*`, `SSH_*`, ...)
+/// without needing to enumerate them (gen-circleci-orb#370). `GCO_` mirrors
+/// `CIRCLE_*` being CircleCI's own meaningfully-named env-var namespace.
+/// Applied unconditionally, to every param — not just ones that happen to
+/// collide with something today.
+fn env_var_name(orb_param_name: &str) -> String {
+    format!("GCO_{}", orb_param_name.to_uppercase())
+}
+
 /// CircleCI job parameter names that are reserved by the platform and cannot be
 /// used as user-defined parameters in job definitions.
 const RESERVED_JOB_PARAMS: &[&str] = &[
@@ -424,7 +436,7 @@ fn build_boolean_flag_env_steps(sub: &SubCommand) -> Vec<serde_yaml::Value> {
             continue;
         }
         let orb_name = resolve_command_param_name(&sub.name, &p.long_name);
-        let env_var = orb_name.to_uppercase();
+        let env_var = env_var_name(&orb_name);
 
         let mut run_map = serde_yaml::Mapping::new();
         run_map.insert(
@@ -551,7 +563,7 @@ fn render_command_script_content(sub: &SubCommand, binary: &str) -> String {
 
     for p in options.into_iter().chain(positionals) {
         let orb_name = resolve_command_param_name(&sub.name, &p.long_name);
-        let env_var = orb_name.to_uppercase();
+        let env_var = env_var_name(&orb_name);
         // A positional is passed bare; a short-only option by its short flag,
         // which is the only form the CLI accepts.
         let flag = match p.kind {
@@ -1155,7 +1167,7 @@ fn build_run_step(sub: &SubCommand, run_name: &str) -> serde_yaml::Value {
                 continue;
             }
             let orb_name = resolve_command_param_name(&sub.name, &p.long_name);
-            let env_var = orb_name.to_uppercase();
+            let env_var = env_var_name(&orb_name);
             env_map.insert(
                 serde_yaml::Value::String(env_var),
                 serde_yaml::Value::String(format!("<< parameters.{orb_name} >>")),
@@ -2688,7 +2700,7 @@ mod tests {
         let files = generate(&cli, &default_opts(), None);
         let script = &files[&PathBuf::from("src/scripts/generate.sh")];
         assert!(
-            script.contains("set -- \"$@\" --orb-path \"${ORB_PATH}\""),
+            script.contains("set -- \"$@\" --orb-path \"${GCO_ORB_PATH}\""),
             "script must append required param via env var:\n{script}"
         );
         assert!(
@@ -2713,8 +2725,8 @@ mod tests {
         let files = generate(&cli, &default_opts(), None);
         let script = &files[&PathBuf::from("src/scripts/generate.sh")];
         assert!(
-            script.contains("[[ -n \"${OUTPUT:-}\" ]]")
-                && script.contains("--output \"${OUTPUT}\""),
+            script.contains("[[ -n \"${GCO_OUTPUT:-}\" ]]")
+                && script.contains("--output \"${GCO_OUTPUT}\""),
             "optional param in script must use shell conditional on env var:\n{script}"
         );
     }
@@ -2735,7 +2747,8 @@ mod tests {
         let files = generate(&cli, &default_opts(), None);
         let script = &files[&PathBuf::from("src/scripts/generate.sh")];
         assert!(
-            script.contains("[[ \"${FORCE:-false}\" = \"true\" ]]") && script.contains("--force"),
+            script.contains("[[ \"${GCO_FORCE:-false}\" = \"true\" ]]")
+                && script.contains("--force"),
             "boolean flag in script must use shell conditional on env var:\n{script}"
         );
     }
@@ -2846,7 +2859,7 @@ mod tests {
         let files = generate(&cli, &default_opts(), None);
         let script = &files[&PathBuf::from("src/scripts/release.sh")];
         assert!(
-            script.contains("case \"${LOG_LEVEL:-default}\" in"),
+            script.contains("case \"${GCO_LOG_LEVEL:-default}\" in"),
             "script must translate log_level via a case statement:\n{script}"
         );
         for (arm, flags) in [
@@ -2889,7 +2902,7 @@ mod tests {
         let files = generate(&cli, &default_opts(), None);
         let script = &files[&PathBuf::from("src/scripts/verify.sh")];
         let positional = script
-            .find(r#"set -- "$@" "${VERSION}""#)
+            .find(r#"set -- "$@" "${GCO_VERSION}""#)
             .unwrap_or_else(|| panic!("positional not passed:\n{script}"));
         let flag = script
             .find("--advisory-db")
@@ -2919,7 +2932,7 @@ mod tests {
         let files = generate(&cli, &default_opts(), None);
         let script = &files[&PathBuf::from("src/scripts/build.sh")];
         assert!(
-            script.contains(r#"[[ -n "${TARGET:-}" ]] && set -- "$@" "${TARGET}""#),
+            script.contains(r#"[[ -n "${GCO_TARGET:-}" ]] && set -- "$@" "${GCO_TARGET}""#),
             "optional positional must be conditional:\n{script}"
         );
     }
@@ -2951,11 +2964,11 @@ mod tests {
         let files = generate(&cli, &default_opts(), None);
         let script = &files[&PathBuf::from("src/scripts/run.sh")];
         assert!(
-            script.contains(r#"[[ "${FORCE:-false}" = "true" ]] && set -- "$@" -f"#),
+            script.contains(r#"[[ "${GCO_FORCE:-false}" = "true" ]] && set -- "$@" -f"#),
             "short-only boolean must be passed as -f:\n{script}"
         );
         assert!(
-            script.contains(r#"set -- "$@" -n "${REPEAT_COUNT}""#),
+            script.contains(r#"set -- "$@" -n "${GCO_REPEAT_COUNT}""#),
             "short-only value option must be passed as -n <value>:\n{script}"
         );
         assert!(
@@ -2994,9 +3007,17 @@ mod tests {
             content.contains("environment:"),
             "command run step must have environment block:\n{content}"
         );
+        // gen-circleci-orb#370: env var names are always GCO_-prefixed, never a
+        // bare uppercase of the param name, so they can never collide with a
+        // shell-reserved variable (PATH, HOME, IFS, ...) without needing to
+        // enumerate them.
         assert!(
-            content.contains("ORB_PATH: << parameters.orb_path >>"),
-            "environment must map ORB_PATH:\n{content}"
+            content.contains("GCO_ORB_PATH: << parameters.orb_path >>"),
+            "environment must map GCO_ORB_PATH:\n{content}"
+        );
+        assert!(
+            !content.contains("\nORB_PATH:"),
+            "environment must never use the bare (unprefixed) env var name:\n{content}"
         );
         // Boolean params are NOT YAML-boolean env values (unreliable at runtime);
         // they're set as strings via a `when` condition + BASH_ENV instead.
@@ -3006,8 +3027,53 @@ mod tests {
         );
         assert!(
             content.contains("condition: << parameters.force >>")
-                && content.contains("export FORCE=true"),
-            "boolean FORCE must be gated via when + exported as a string:\n{content}"
+                && content.contains("export GCO_FORCE=true"),
+            "boolean FORCE must be gated via when + exported as a GCO_-prefixed string:\n{content}"
+        );
+    }
+
+    #[test]
+    fn env_var_is_prefixed_even_for_a_shell_reserved_name() {
+        // gen-circleci-orb#370: a param named "path" would previously uppercase
+        // to the bare env var PATH, clobbering the real PATH for the rest of
+        // the script's execution. No denylist is maintained — every param's
+        // env var is unconditionally GCO_-prefixed instead.
+        let params = vec![Parameter {
+            long_name: "path".to_string(),
+            short: None,
+            param_type: ParamType::String,
+            default: None,
+            required: true,
+            description: "A path value.".to_string(),
+            ..Default::default()
+        }];
+        let sub = make_leaf("configure", params);
+        let cli = make_cli("mytool", vec![sub]);
+        let files = generate(&cli, &default_opts(), None);
+
+        let cmd = &files[&PathBuf::from("src/commands/configure.yml")];
+        assert!(
+            cmd.contains("GCO_PATH: << parameters.path >>"),
+            "environment must map GCO_PATH, not bare PATH:\n{cmd}"
+        );
+        assert!(
+            !cmd.contains("\nPATH:") && !cmd.contains("  PATH:"),
+            "environment must never set the bare (unprefixed, shell-reserved) PATH:\n{cmd}"
+        );
+
+        let script = &files[&PathBuf::from("src/scripts/configure.sh")];
+        assert!(
+            script.contains("GCO_PATH"),
+            "script must reference the prefixed GCO_PATH env var:\n{script}"
+        );
+        assert!(
+            !script.contains("\"${PATH:-}\"") && !script.contains("\"${PATH}\""),
+            "script must never read/clobber the real shell PATH:\n{script}"
+        );
+        // The CLI flag itself is unaffected — still --path.
+        assert!(
+            script.contains("--path"),
+            "script must still emit the original --path flag to the binary:\n{script}"
         );
     }
 
@@ -3165,11 +3231,11 @@ mod tests {
         let files = generate(&cli, &default_opts(), None);
         let script = &files[&PathBuf::from("src/scripts/generate.sh")];
         assert!(
-            script.contains("set -- \"$@\" --orb-path \"${ORB_PATH}\""),
+            script.contains("set -- \"$@\" --orb-path \"${GCO_ORB_PATH}\""),
             "required param must unconditionally append via env var:\n{script}"
         );
         assert!(
-            !script.contains("[ -n") || !script.contains("ORB_PATH"),
+            !script.contains("[ -n") || !script.contains("GCO_ORB_PATH"),
             "required param must not use conditional guard:\n{script}"
         );
     }
@@ -3190,7 +3256,7 @@ mod tests {
         let files = generate(&cli, &default_opts(), None);
         let script = &files[&PathBuf::from("src/scripts/generate.sh")];
         assert!(
-            script.contains("[[ -n \"${OUTPUT:-}\" ]]"),
+            script.contains("[[ -n \"${GCO_OUTPUT:-}\" ]]"),
             "optional param should use shell conditional on env var:\n{script}"
         );
     }
@@ -3211,7 +3277,7 @@ mod tests {
         let files = generate(&cli, &default_opts(), None);
         let script = &files[&PathBuf::from("src/scripts/generate.sh")];
         assert!(
-            script.contains("[[ \"${FORCE:-false}\" = \"true\" ]]"),
+            script.contains("[[ \"${GCO_FORCE:-false}\" = \"true\" ]]"),
             "boolean flag must use shell conditional on env var:\n{script}"
         );
     }
@@ -3882,15 +3948,15 @@ mod tests {
             "boolean flag must be gated via a when condition:\n{cmd}"
         );
         assert!(
-            cmd.contains("export NO_RECORD=true"),
+            cmd.contains("export GCO_NO_RECORD=true"),
             "the when step must export the flag as a string to BASH_ENV:\n{cmd}"
         );
         // The script still reads the (now reliably-string) env var + emits the flag.
         let script = &files[&PathBuf::from("src/scripts/generate.sh")];
         assert!(
-            script.contains(r#"[[ "${NO_RECORD:-false}" = "true" ]]"#)
+            script.contains(r#"[[ "${GCO_NO_RECORD:-false}" = "true" ]]"#)
                 && script.contains("--no-record"),
-            "script must still test NO_RECORD and emit --no-record:\n{script}"
+            "script must still test GCO_NO_RECORD and emit --no-record:\n{script}"
         );
     }
 
