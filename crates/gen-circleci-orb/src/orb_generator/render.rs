@@ -85,6 +85,11 @@ pub fn generate(
     let cli = normalize_verbosity_flags(cli, config);
     let cli = &cli;
 
+    // gen-circleci-orb#358: computed once, threaded through every leaf's
+    // rendering so a colliding bare name is qualified consistently
+    // everywhere it's used (file names, the job's own invoke-step key).
+    let effective_names = compute_effective_names(cli, config);
+
     let mut files = HashMap::new();
 
     // @orb.yml — metadata only; hand-formatted so `version: 2.1` stays unquoted
@@ -107,6 +112,7 @@ pub fn generate(
             &cli.binary_name,
             opts,
             config,
+            &effective_names,
             &mut files,
         );
     }
@@ -320,17 +326,93 @@ pub(crate) fn is_interactive(config: Option<&OrbConfig>, name: &str) -> bool {
         .unwrap_or_else(|| DEFAULT_INTERACTIVE.contains(&name))
 }
 
+/// The orb-resource name to use for every leaf subcommand `render_subcommand`
+/// will actually render, keyed by that leaf's full dotted path (e.g.
+/// `"ci.release"`). A bare name unique across the whole tree keeps its bare
+/// name — zero behavior change for the overwhelming majority of consumers.
+/// A bare name used at more than one path is qualified at EVERY occurrence
+/// by its full underscore-joined path (e.g. `ci_release`) — a root-level
+/// occurrence's own path already equals its bare name, so it's naturally
+/// unaffected without any special-casing.
+///
+/// gen-circleci-orb#358: this REPLACES an earlier reject-based validator.
+/// Rejecting an ambiguous CLI pushed the generator's own bare-name-only
+/// addressing limitation onto the CLI author — painful or impossible for a
+/// CLI they don't control. Qualifying instead means no user-visible
+/// workaround is ever required; a non-colliding CLI, at any depth, is
+/// completely unaffected.
+///
+/// Mirrors `render_subcommand`'s own traversal exactly: a non-leaf group
+/// never writes its own file, so its name is never collected; a subtree
+/// excluded via `is_interactive` writes nothing at all, so it's skipped
+/// entirely, same as `render_subcommand` skips recursing into it.
+pub(crate) fn compute_effective_names(
+    cli: &CliDefinition,
+    config: Option<&OrbConfig>,
+) -> HashMap<String, String> {
+    let mut by_bare_name: HashMap<&str, Vec<String>> = HashMap::new();
+    collect_leaf_paths(&cli.subcommands, "", config, &mut by_bare_name);
+
+    let mut effective = HashMap::new();
+    for (bare_name, paths) in by_bare_name {
+        if paths.len() == 1 {
+            effective.insert(paths.into_iter().next().unwrap(), bare_name.to_string());
+        } else {
+            for path in paths {
+                let qualified = path.replace('.', "_");
+                effective.insert(path, qualified);
+            }
+        }
+    }
+    effective
+}
+
+/// Recursively collects every rendered leaf's dotted path, keyed by its bare
+/// name, so `compute_effective_names` can tell which bare names are unique.
+fn collect_leaf_paths<'a>(
+    subs: &'a [SubCommand],
+    prefix: &str,
+    config: Option<&OrbConfig>,
+    by_bare_name: &mut HashMap<&'a str, Vec<String>>,
+) {
+    for sub in subs {
+        if is_interactive(config, &sub.name) {
+            continue;
+        }
+        let path = if prefix.is_empty() {
+            sub.name.clone()
+        } else {
+            format!("{prefix}.{}", sub.name)
+        };
+        if sub.is_leaf {
+            by_bare_name
+                .entry(&sub.name)
+                .or_default()
+                .push(path.clone());
+        }
+        collect_leaf_paths(&sub.subcommands, &path, config, by_bare_name);
+    }
+}
+
 /// `path` is the full chain of subcommand names from the root down to (and
 /// including) `sub` — e.g. `["ci", "release"]` for `ci release`. Needed so
 /// the invocation script (`render_command_script_content`) can reconstruct
 /// the real CLI command line for a nested subcommand, not just its own bare
 /// leaf name (gen-circleci-orb#358 redesign prerequisite).
+///
+/// `effective_names` (from `compute_effective_names`) is looked up by the
+/// dotted form of `path` to get the orb-resource name to render THIS leaf
+/// under — its own bare name unless it collides with another leaf
+/// elsewhere in the tree, in which case it's already been qualified by its
+/// full path.
+#[allow(clippy::too_many_arguments)]
 fn render_subcommand(
     sub: &SubCommand,
     path: &[String],
     binary: &str,
     opts: &GenerateOpts,
     config: Option<&OrbConfig>,
+    effective_names: &HashMap<String, String>,
     files: &mut HashMap<PathBuf, String>,
 ) {
     // Interactive/CLI-only: emit nothing for this subcommand or its subtree.
@@ -338,15 +420,20 @@ fn render_subcommand(
         return;
     }
     if sub.is_leaf {
-        let snake = sub.name.replace('-', "_");
+        let dotted_path = path.join(".");
+        let effective_name = effective_names
+            .get(&dotted_path)
+            .cloned()
+            .unwrap_or_else(|| sub.name.clone());
+        let snake = effective_name.replace('-', "_");
         files.insert(
             PathBuf::from(format!("src/commands/{snake}.yml")),
-            render_command(sub, config),
+            render_command(sub, &effective_name, config),
         );
-        if !is_job_suppressed(config, &sub.name) {
+        if !is_job_suppressed(config, &effective_name) {
             files.insert(
                 PathBuf::from(format!("src/jobs/{snake}.yml")),
-                render_job(sub, opts, config),
+                render_job(sub, &effective_name, opts, config),
             );
         }
         files.insert(
@@ -357,7 +444,15 @@ fn render_subcommand(
     for child in &sub.subcommands {
         let mut child_path = path.to_vec();
         child_path.push(child.name.clone());
-        render_subcommand(child, &child_path, binary, opts, config, files);
+        render_subcommand(
+            child,
+            &child_path,
+            binary,
+            opts,
+            config,
+            effective_names,
+            files,
+        );
     }
 }
 
@@ -425,12 +520,16 @@ fn resolve_run_step_name(sub: &SubCommand, config: Option<&OrbConfig>) -> String
     sub.name.clone()
 }
 
-fn render_command(sub: &SubCommand, config: Option<&OrbConfig>) -> String {
+fn render_command(sub: &SubCommand, effective_name: &str, config: Option<&OrbConfig>) -> String {
     let parameters = build_command_orb_parameters(sub);
     // Boolean flags are set as string env vars via `when` steps (reliable),
     // ahead of the run step that consumes them via BASH_ENV.
     let mut steps = build_boolean_flag_env_steps(sub);
-    steps.push(build_run_step(sub, &resolve_run_step_name(sub, config)));
+    steps.push(build_run_step(
+        sub,
+        effective_name,
+        &resolve_run_step_name(sub, config),
+    ));
     let cmd = OrbCommand {
         description: sub.description.clone(),
         parameters,
@@ -633,7 +732,12 @@ fn render_log_level_case(env_var: &str) -> String {
     out
 }
 
-fn render_job(sub: &SubCommand, opts: &GenerateOpts, config: Option<&OrbConfig>) -> String {
+fn render_job(
+    sub: &SubCommand,
+    effective_name: &str,
+    opts: &GenerateOpts,
+    config: Option<&OrbConfig>,
+) -> String {
     let mut parameters = build_orb_parameters(sub, RESERVED_JOB_PARAMS);
 
     // Apply param default overrides from config
@@ -678,7 +782,7 @@ fn render_job(sub: &SubCommand, opts: &GenerateOpts, config: Option<&OrbConfig>)
         parameters.insert("target_branch".to_string(), build_target_branch_param());
     }
 
-    let invoke_step = build_invoke_step(sub, RESERVED_JOB_PARAMS);
+    let invoke_step = build_invoke_step(sub, effective_name, RESERVED_JOB_PARAMS);
     let mut steps = vec![serde_yaml::Value::String("checkout".to_string())];
     if is_orb_producing {
         steps.push(build_target_branch_switch_step());
@@ -1161,7 +1265,7 @@ fn build_orb_parameters(sub: &SubCommand, skip: &[&str]) -> IndexMap<String, Orb
 
 /// Build the `run:` step for a command, referencing the script file (RC009 compliance).
 /// Adds an `environment:` block so the script can read params as uppercased env vars.
-fn build_run_step(sub: &SubCommand, run_name: &str) -> serde_yaml::Value {
+fn build_run_step(sub: &SubCommand, effective_name: &str, run_name: &str) -> serde_yaml::Value {
     serde_yaml::Value::Mapping({
         let mut m = serde_yaml::Mapping::new();
         let mut run_map = serde_yaml::Mapping::new();
@@ -1173,7 +1277,7 @@ fn build_run_step(sub: &SubCommand, run_name: &str) -> serde_yaml::Value {
             serde_yaml::Value::String("command".to_string()),
             serde_yaml::Value::String(format!(
                 "<<include(scripts/{}.sh)>>",
-                sub.name.replace('-', "_")
+                effective_name.replace('-', "_")
             )),
         );
         // Boolean params are NOT put in the environment block: a boolean
@@ -1208,8 +1312,11 @@ fn build_run_step(sub: &SubCommand, run_name: &str) -> serde_yaml::Value {
     })
 }
 
-/// Build the command invocation step for a job.
-fn build_invoke_step(sub: &SubCommand, skip: &[&str]) -> serde_yaml::Value {
+/// Build the command invocation step for a job. `effective_name` must match
+/// the key the invoked command is actually rendered under
+/// (`render_command`/`compute_effective_names`) — not necessarily
+/// `sub.name`, when this subcommand's bare name collides elsewhere.
+fn build_invoke_step(sub: &SubCommand, effective_name: &str, skip: &[&str]) -> serde_yaml::Value {
     let mut invoke_map = serde_yaml::Mapping::new();
     for p in &sub.parameters {
         let Some(key) = resolve_job_param_key(sub, p, skip) else {
@@ -1224,7 +1331,7 @@ fn build_invoke_step(sub: &SubCommand, skip: &[&str]) -> serde_yaml::Value {
     serde_yaml::Value::Mapping({
         let mut m = serde_yaml::Mapping::new();
         m.insert(
-            serde_yaml::Value::String(sub.name.replace('-', "_")),
+            serde_yaml::Value::String(effective_name.replace('-', "_")),
             serde_yaml::Value::Mapping(invoke_map),
         );
         m
@@ -5175,6 +5282,158 @@ mod tests {
         assert!(
             !files.contains_key(&PathBuf::from("src/commands/setup.yml")),
             "and no command either"
+        );
+    }
+
+    // ── compute_effective_names (#358) ──────────────────────────────────────
+
+    #[test]
+    fn compute_effective_names_qualifies_a_colliding_nested_leaf() {
+        // gen-circleci-orb#358: a top-level "release" and a nested
+        // "ci.release" collide. Rather than rejecting, the root occurrence
+        // keeps its bare name (its own path IS "release" already) and the
+        // nested one is qualified by its full underscore-joined path.
+        let nested = SubCommand {
+            name: "release".to_string(),
+            description: String::new(),
+            short_about: String::new(),
+            is_leaf: true,
+            parameters: vec![],
+            subcommands: vec![],
+        };
+        let cli = CliDefinition {
+            binary_name: "demo".to_string(),
+            description: String::new(),
+            subcommands: vec![
+                make_leaf("release", vec![]),
+                SubCommand {
+                    name: "ci".to_string(),
+                    description: String::new(),
+                    short_about: String::new(),
+                    is_leaf: false,
+                    parameters: vec![],
+                    subcommands: vec![nested],
+                },
+            ],
+        };
+        let effective = compute_effective_names(&cli, None);
+        assert_eq!(
+            effective.get("release").map(String::as_str),
+            Some("release")
+        );
+        assert_eq!(
+            effective.get("ci.release").map(String::as_str),
+            Some("ci_release")
+        );
+    }
+
+    #[test]
+    fn compute_effective_names_leaves_distinct_names_bare() {
+        let nested = SubCommand {
+            name: "deploy".to_string(),
+            description: String::new(),
+            short_about: String::new(),
+            is_leaf: true,
+            parameters: vec![],
+            subcommands: vec![],
+        };
+        let cli = CliDefinition {
+            binary_name: "demo".to_string(),
+            description: String::new(),
+            subcommands: vec![
+                make_leaf("release", vec![]),
+                SubCommand {
+                    name: "ci".to_string(),
+                    description: String::new(),
+                    short_about: String::new(),
+                    is_leaf: false,
+                    parameters: vec![],
+                    subcommands: vec![nested],
+                },
+            ],
+        };
+        let effective = compute_effective_names(&cli, None);
+        assert_eq!(
+            effective.get("release").map(String::as_str),
+            Some("release")
+        );
+        assert_eq!(
+            effective.get("ci.deploy").map(String::as_str),
+            Some("deploy")
+        );
+    }
+
+    #[test]
+    fn compute_effective_names_ignores_a_non_leaf_group_collision() {
+        // Only LEAF subcommands ever write a generated file — a non-leaf
+        // group's own name can never clobber anything, so it's absent from
+        // the map (it's never looked up, since render_subcommand only
+        // consults this map for leaves).
+        let cli = CliDefinition {
+            binary_name: "demo".to_string(),
+            description: String::new(),
+            subcommands: vec![
+                SubCommand {
+                    name: "db".to_string(),
+                    description: String::new(),
+                    short_about: String::new(),
+                    is_leaf: false,
+                    parameters: vec![],
+                    subcommands: vec![make_leaf("migrate", vec![])],
+                },
+                SubCommand {
+                    name: "other".to_string(),
+                    description: String::new(),
+                    short_about: String::new(),
+                    is_leaf: false,
+                    parameters: vec![],
+                    subcommands: vec![make_leaf("db", vec![])],
+                },
+            ],
+        };
+        let effective = compute_effective_names(&cli, None);
+        assert_eq!(
+            effective.get("other.db").map(String::as_str),
+            Some("db"),
+            "the only LEAF named 'db' has no real collision to qualify against"
+        );
+    }
+
+    #[test]
+    fn compute_effective_names_ignores_an_interactive_excluded_collision() {
+        // is_interactive gates by BARE name (not path), matching
+        // render_subcommand's own gate exactly — so EVERY occurrence of an
+        // interactive-reserved name (e.g. "init", DEFAULT_INTERACTIVE) is
+        // excluded uniformly, regardless of nesting. Confirms the collision
+        // walk correctly skips both occurrences (and their subtrees)
+        // entirely, rather than reporting a false collision between two
+        // subcommands that render_subcommand would never actually emit.
+        let cli = CliDefinition {
+            binary_name: "demo".to_string(),
+            description: String::new(),
+            subcommands: vec![
+                make_leaf("init", vec![]), // interactive by default
+                SubCommand {
+                    name: "db".to_string(),
+                    description: String::new(),
+                    short_about: String::new(),
+                    is_leaf: false,
+                    parameters: vec![],
+                    subcommands: vec![make_leaf("init", vec![])],
+                },
+            ],
+        };
+        let effective = compute_effective_names(&cli, None);
+        assert_eq!(
+            effective.get("init"),
+            None,
+            "the top-level 'init' is interactive-excluded, not a candidate at all"
+        );
+        assert_eq!(
+            effective.get("db.init"),
+            None,
+            "the nested 'db init' is ALSO interactive-excluded (bare-name gate applies \
+             to every occurrence, not just the first)"
         );
     }
 

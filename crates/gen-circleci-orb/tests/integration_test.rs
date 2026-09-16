@@ -169,16 +169,17 @@ fn parse_binary_handles_three_levels_of_subcommand_nesting() {
     );
 }
 
-/// gen-circleci-orb#358, review finding on PR #416: every existing
-/// uniqueness test builds a `CliDefinition` literal by hand — none exercise
-/// the real `--help`-parsing pipeline. fixture-cli-collision has a genuine
-/// top-level `release` and a nested `ci release` sharing a bare name; this
-/// runs `generate` against it as a real subprocess, through the actual
-/// `--help` output and parser, and confirms `validate_subcommand_name_uniqueness`
-/// rejects it end-to-end, not just against a hand-built fixture.
+/// gen-circleci-orb#358 redesign (superseding the reject-based first pass,
+/// per PR #416 review: rejecting pushed the generator's own bare-name-
+/// addressing limitation onto the CLI author instead of fixing it).
+/// fixture-cli-collision has a genuine top-level `release` and a nested `ci
+/// release` sharing a bare name; this runs `generate` against it as a real
+/// subprocess and confirms it now SUCCEEDS, with the root occurrence kept
+/// under its bare name and the nested occurrence qualified by its full path
+/// — never a rejection, and no user-visible workaround required.
 #[test]
 #[cfg(feature = "test-fixtures")]
-fn generate_rejects_a_real_ambiguous_subcommand_name() {
+fn generate_qualifies_a_real_ambiguous_subcommand_name() {
     let out = TempDir::new().unwrap();
     let binary = env!("CARGO_BIN_EXE_gen-circleci-orb");
 
@@ -211,26 +212,41 @@ fn generate_rejects_a_real_ambiguous_subcommand_name() {
         .unwrap();
 
     assert!(
-        !output.status.success(),
-        "generate must reject a real ambiguous subcommand name, not succeed"
+        output.status.success(),
+        "generate must qualify a colliding name and succeed, not reject:\n{}",
+        String::from_utf8_lossy(&output.stderr)
     );
-    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    let src = out.path().join("orb").join("src");
     assert!(
-        stderr.contains("ambiguous subcommand name"),
-        "stderr must name the ambiguity:\n{stderr}"
+        src.join("commands/release.yml").exists(),
+        "the ROOT-level 'release' must keep its bare name (its own path IS \
+         its bare name, nothing to qualify)"
     );
     assert!(
-        stderr.contains("release") && stderr.contains("ci.release"),
-        "stderr must name the colliding name and both paths:\n{stderr}"
+        src.join("jobs/release.yml").exists(),
+        "the root job must also keep its bare name"
     );
-    // Review follow-up: since generation is rejected, there must be no
-    // orb -- not a partial/broken one. validate_subcommand_name_uniqueness
-    // runs before any file is written, so the output directory should be
-    // completely untouched.
-    let orb_root = out.path().join("orb");
     assert!(
-        !orb_root.exists(),
-        "a rejected generate must leave no orb output behind, found: {}",
-        orb_root.display()
+        src.join("commands/ci_release.yml").exists(),
+        "the NESTED 'ci release' must be qualified by its full path, not \
+         collide with the root one"
+    );
+    assert!(
+        src.join("jobs/ci_release.yml").exists(),
+        "the nested job must also be qualified"
+    );
+
+    // Both must have genuinely distinct, correct content -- not one
+    // clobbering the other.
+    let root_script = std::fs::read_to_string(src.join("scripts/release.sh")).unwrap();
+    assert!(
+        root_script.starts_with("set -- fixture-cli-collision release\n"),
+        "root script must invoke the top-level path:\n{root_script}"
+    );
+    let nested_script = std::fs::read_to_string(src.join("scripts/ci_release.sh")).unwrap();
+    assert!(
+        nested_script.starts_with("set -- fixture-cli-collision ci release\n"),
+        "nested script must invoke the full nested path:\n{nested_script}"
     );
 }
