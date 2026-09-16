@@ -1075,9 +1075,18 @@ fn render_example(cli: &CliDefinition, opts: &GenerateOpts, config: Option<&OrbC
 fn build_orb_parameters(sub: &SubCommand, skip: &[&str]) -> IndexMap<String, OrbParameter> {
     let mut params = IndexMap::new();
     for p in &sub.parameters {
-        if skip.contains(&p.long_name.as_str()) {
-            continue;
-        }
+        let key = if skip.contains(&p.long_name.as_str()) {
+            if !RESTRICTED_COMMAND_PARAMS.contains(&p.long_name.as_str()) {
+                continue;
+            }
+            // Reserved at the job level too, but the invoked command already
+            // renames it rather than dropping it (RESTRICTED_COMMAND_PARAMS) —
+            // the job must declare/forward it under that SAME renamed key or
+            // the value has no way to reach the command (#369).
+            resolve_command_param_name(&sub.name, &p.long_name)
+        } else {
+            p.long_name.clone()
+        };
         let (type_str, enum_vals) = match &p.param_type {
             ParamType::String => ("string".to_string(), None),
             ParamType::Boolean => ("boolean".to_string(), None),
@@ -1086,7 +1095,7 @@ fn build_orb_parameters(sub: &SubCommand, skip: &[&str]) -> IndexMap<String, Orb
         };
         let default = orb_param_default(p);
         params.insert(
-            p.long_name.clone(),
+            key,
             OrbParameter {
                 param_type: type_str,
                 description: p.description.clone(),
@@ -1151,12 +1160,20 @@ fn build_run_step(sub: &SubCommand, run_name: &str) -> serde_yaml::Value {
 fn build_invoke_step(sub: &SubCommand, skip: &[&str]) -> serde_yaml::Value {
     let mut invoke_map = serde_yaml::Mapping::new();
     for p in &sub.parameters {
-        if skip.contains(&p.long_name.as_str()) {
-            continue;
-        }
+        let key = if skip.contains(&p.long_name.as_str()) {
+            if !RESTRICTED_COMMAND_PARAMS.contains(&p.long_name.as_str()) {
+                continue;
+            }
+            // Same renamed key on both sides: the job declares it (see
+            // build_orb_parameters) and the command expects it under this
+            // name too (resolve_command_param_name) — forward it verbatim.
+            resolve_command_param_name(&sub.name, &p.long_name)
+        } else {
+            p.long_name.clone()
+        };
         invoke_map.insert(
-            serde_yaml::Value::String(p.long_name.clone()),
-            serde_yaml::Value::String(format!("<< parameters.{} >>", p.long_name)),
+            serde_yaml::Value::String(key.clone()),
+            serde_yaml::Value::String(format!("<< parameters.{key} >>")),
         );
     }
     serde_yaml::Value::Mapping({
@@ -3313,10 +3330,13 @@ mod tests {
     }
 
     #[test]
-    fn job_excludes_reserved_circleci_parameter_names() {
-        // CircleCI reserves "name" (and others) as job-level parameters.
-        // The generator must omit reserved names from job files so orb pack
-        // does not reject the output with "Reserved job parameter name: 'name'".
+    fn job_renames_restricted_reserved_param_instead_of_dropping_it() {
+        // gen-circleci-orb#369: CircleCI reserves "name" as a job-level
+        // parameter, but the invoked COMMAND already renames it to
+        // "generate_name" (RESTRICTED_COMMAND_PARAMS/resolve_command_param_name)
+        // rather than dropping it. The job must follow suit — declare and
+        // forward the SAME renamed key — or the value has no way to reach
+        // the command at all when the job is invoked from a workflow.
         let params = vec![
             Parameter {
                 long_name: "name".to_string(),
@@ -3340,15 +3360,72 @@ mod tests {
         let sub = make_leaf("generate", params);
         let cli = make_cli("mytool", vec![sub]);
         let files = generate(&cli, &default_opts(), None);
-
-        // Job must NOT contain `name:` as a parameter key (2-space indent = parameter level).
         let job = &files[&PathBuf::from("src/jobs/generate.yml")];
+
+        // Must NOT appear as the bare restricted name (CircleCI rejects it).
         assert!(
             !job.contains("\n  name:\n"),
-            "job must not contain reserved parameter 'name':\n{job}"
+            "job must not declare the bare restricted parameter 'name':\n{job}"
+        );
+        // MUST be declared under the same renamed key the command uses.
+        assert!(
+            job.contains("generate_name:"),
+            "job must declare 'generate_name' (matching the command's own rename):\n{job}"
+        );
+        // MUST forward it to the command under that same renamed key, not
+        // just declare it — otherwise the job still can't supply a value.
+        assert!(
+            job.contains("generate_name: << parameters.generate_name >>"),
+            "job must forward generate_name to the command's generate_name param:\n{job}"
         );
 
-        // Non-reserved param must still appear in the job
+        // Non-reserved param must still appear in the job, unchanged.
+        assert!(
+            job.contains("output:"),
+            "job must still contain non-reserved parameter 'output':\n{job}"
+        );
+    }
+
+    #[test]
+    fn job_still_drops_params_reserved_only_at_job_invocation_site() {
+        // Regression guard: RESERVED_JOB_PARAMS entries that are NOT also in
+        // RESTRICTED_COMMAND_PARAMS (type, filters, matrix, requires,
+        // context, pre_steps, post_steps) are CircleCI job-INVOCATION-site
+        // keys, not something commands rename — #369's fix must not start
+        // renaming these too.
+        let params = vec![
+            Parameter {
+                long_name: "context".to_string(),
+                short: None,
+                param_type: ParamType::String,
+                default: None,
+                required: false,
+                description: "Some context value.".to_string(),
+                ..Default::default()
+            },
+            Parameter {
+                long_name: "output".to_string(),
+                short: Some('o'),
+                param_type: ParamType::String,
+                default: Some("./dist".to_string()),
+                required: false,
+                description: "Output dir.".to_string(),
+                ..Default::default()
+            },
+        ];
+        let sub = make_leaf("generate", params);
+        let cli = make_cli("mytool", vec![sub]);
+        let files = generate(&cli, &default_opts(), None);
+        let job = &files[&PathBuf::from("src/jobs/generate.yml")];
+
+        assert!(
+            !job.contains("\n  context:\n"),
+            "job must still drop 'context' (job-invocation-reserved, not renameable):\n{job}"
+        );
+        assert!(
+            !job.contains("generate_context"),
+            "job must not invent a rename for a job-invocation-reserved param:\n{job}"
+        );
         assert!(
             job.contains("output:"),
             "job must still contain non-reserved parameter 'output':\n{job}"
