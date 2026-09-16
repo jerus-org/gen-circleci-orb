@@ -29,7 +29,7 @@ steps:
     name: Build a target, with a name, format and verbosity controls
     command: <<include(scripts/build.sh)>>
     environment:
-      TARGET: << parameters.target >>
-      BUILD_NAME: << parameters.build_name >>
-      FORMAT: << parameters.format >>
-      LOG_LEVEL: << parameters.log_level >>
+      GCO_TARGET: << parameters.target >>
+      GCO_BUILD_NAME: << parameters.build_name >>
+      GCO_FORMAT: << parameters.format >>
+      GCO_LOG_LEVEL: << parameters.log_level >>

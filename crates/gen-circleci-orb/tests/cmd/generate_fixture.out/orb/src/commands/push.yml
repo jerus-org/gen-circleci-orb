@@ -9,4 +9,4 @@ steps:
     name: Push one or more tags
     command: <<include(scripts/push.sh)>>
     environment:
-      TAG: << parameters.tag >>
+      GCO_TAG: << parameters.tag >>

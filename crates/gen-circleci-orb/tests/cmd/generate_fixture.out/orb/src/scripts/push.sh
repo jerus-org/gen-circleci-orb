@@ -1,3 +1,3 @@
 set -- fixture-cli push
-[[ -n "${TAG:-}" ]] && set -- "$@" --tag "${TAG}"
+[[ -n "${GCO_TAG:-}" ]] && set -- "$@" --tag "${GCO_TAG}"
 "$@"

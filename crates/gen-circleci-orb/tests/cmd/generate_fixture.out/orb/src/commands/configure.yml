@@ -9,4 +9,4 @@ steps:
     name: Configure the tool (interactivity is asserted via gen-circleci-orb.toml, not this --help)
     command: <<include(scripts/configure.sh)>>
     environment:
-      CONFIG_PATH: << parameters.config_path >>
+      GCO_CONFIG_PATH: << parameters.config_path >>
