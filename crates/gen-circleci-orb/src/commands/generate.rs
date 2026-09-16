@@ -780,6 +780,12 @@ fn find_subcommand<'a>(
     None
 }
 
+// gen-circleci-orb#358: the reject-based validator that used to live here
+// (validate_subcommand_name_uniqueness) is replaced by
+// orb_generator::render::compute_effective_names, called from `generate()`
+// below — an ambiguous name is now qualified by its full path, never
+// rejected. See that function's doc comment for the rationale.
+
 /// `Err` names why `raw` can't be coerced to `param_type` — mirrors the
 /// coercions `coerce_override_default` (orb_generator::render) actually
 /// performs, so this rejects exactly the inputs that function would
@@ -983,6 +989,28 @@ impl Generate {
             .clone()
             .or_else(|| config_url.and_then(|o| o.home_url.clone()))
             .or_else(|| detected_url.clone());
+
+        // gen-circleci-orb#358: an ambiguous bare name is qualified by its
+        // full path (e.g. `ci_release`), never rejected — see
+        // compute_effective_names' doc comment. Log which ones, since a
+        // consumer with an existing `[subcommand.release]` override or a
+        // job_group step referencing the old bare command name needs a
+        // clear signal to update it; that reference doesn't auto-migrate.
+        let effective_names =
+            orb_generator::render::compute_effective_names(&cli_def, Some(&orb_config));
+        let qualified: Vec<String> = effective_names
+            .iter()
+            .filter(|(path, name)| path.as_str() != name.as_str())
+            .map(|(path, name)| format!("{path} -> {name}"))
+            .collect();
+        if !qualified.is_empty() {
+            let mut qualified = qualified;
+            qualified.sort();
+            tracing::info!(
+                "Qualified ambiguous subcommand name(s): {}",
+                qualified.join(", ")
+            );
+        }
 
         let install_method = resolve_install_method(self.install_method.as_ref(), &orb_config);
         let cargo_tools = resolve_cargo_tools(&self.cargo_tools, &orb_config);

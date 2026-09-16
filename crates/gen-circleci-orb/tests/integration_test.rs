@@ -168,3 +168,85 @@ fn parse_binary_handles_three_levels_of_subcommand_nesting() {
         c.parameters
     );
 }
+
+/// gen-circleci-orb#358 redesign (superseding the reject-based first pass,
+/// per PR #416 review: rejecting pushed the generator's own bare-name-
+/// addressing limitation onto the CLI author instead of fixing it).
+/// fixture-cli-collision has a genuine top-level `release` and a nested `ci
+/// release` sharing a bare name; this runs `generate` against it as a real
+/// subprocess and confirms it now SUCCEEDS, with the root occurrence kept
+/// under its bare name and the nested occurrence qualified by its full path
+/// — never a rejection, and no user-visible workaround required.
+#[test]
+#[cfg(feature = "test-fixtures")]
+fn generate_qualifies_a_real_ambiguous_subcommand_name() {
+    let out = TempDir::new().unwrap();
+    let binary = env!("CARGO_BIN_EXE_gen-circleci-orb");
+
+    // "fixture-cli-collision" is invoked by gen-circleci-orb as a bare-name
+    // subprocess (a real PATH lookup), so its directory must be on the
+    // spawned process's PATH — same requirement/reasoning as cli_tests.rs's
+    // fixture-cli PATH injection.
+    let fixture_bin = std::path::Path::new(env!("CARGO_BIN_EXE_fixture-cli-collision"));
+    let fixture_dir = fixture_bin
+        .parent()
+        .expect("fixture-cli-collision binary path has a parent directory");
+    let existing_path = std::env::var_os("PATH").unwrap_or_default();
+    let mut paths: Vec<_> = std::env::split_paths(&existing_path).collect();
+    paths.insert(0, fixture_dir.to_path_buf());
+    let new_path = std::env::join_paths(paths).expect("PATH entries are valid");
+
+    let output = Command::new(binary)
+        .args([
+            "generate",
+            "--binary",
+            "fixture-cli-collision",
+            "--orb-namespace",
+            "jerus-org",
+            "--output",
+            out.path().to_str().unwrap(),
+            "--no-record",
+        ])
+        .env("PATH", new_path)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "generate must qualify a colliding name and succeed, not reject:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let src = out.path().join("orb").join("src");
+    assert!(
+        src.join("commands/release.yml").exists(),
+        "the ROOT-level 'release' must keep its bare name (its own path IS \
+         its bare name, nothing to qualify)"
+    );
+    assert!(
+        src.join("jobs/release.yml").exists(),
+        "the root job must also keep its bare name"
+    );
+    assert!(
+        src.join("commands/ci_release.yml").exists(),
+        "the NESTED 'ci release' must be qualified by its full path, not \
+         collide with the root one"
+    );
+    assert!(
+        src.join("jobs/ci_release.yml").exists(),
+        "the nested job must also be qualified"
+    );
+
+    // Both must have genuinely distinct, correct content -- not one
+    // clobbering the other.
+    let root_script = std::fs::read_to_string(src.join("scripts/release.sh")).unwrap();
+    assert!(
+        root_script.starts_with("set -- fixture-cli-collision release\n"),
+        "root script must invoke the top-level path:\n{root_script}"
+    );
+    let nested_script = std::fs::read_to_string(src.join("scripts/ci_release.sh")).unwrap();
+    assert!(
+        nested_script.starts_with("set -- fixture-cli-collision ci release\n"),
+        "nested script must invoke the full nested path:\n{nested_script}"
+    );
+}
