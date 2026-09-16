@@ -4,6 +4,9 @@ parameters:
   target:
     type: string
     description: Build target
+  build_name:
+    type: string
+    description: Human-readable name for this build
   format:
     type: enum
     description: Output format
@@ -44,5 +47,6 @@ steps:
           WORKSPACE_ROOT: << parameters.workspace_root >>
 - build:
     target: << parameters.target >>
+    build_name: << parameters.build_name >>
     format: << parameters.format >>
     log_level: << parameters.log_level >>
