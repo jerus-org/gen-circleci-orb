@@ -1,0 +1,16 @@
+description: Build only the cli-installer Docker stage and smoke-test the pinned circleci-cli, without the Rust builder stage or a push. Lets a broken [orb].circleci_cli_version pin (gen-circleci-orb#326/#328) fail a PR instead of only a release. Halts as a fast no-op unless orb/Dockerfile or the CLI-related config changed on this branch.
+parameters:
+  orb_dir:
+    type: string
+    description: Directory containing the Dockerfile
+    default: orb
+steps:
+  - run:
+      name: Check relevant files changed
+      command: <<include(scripts/check-cli-pin-relevant-files.sh)>>
+  - setup_remote_docker
+  - run:
+      name: Verify circleci-cli pin (cli-installer stage only)
+      command: <<include(scripts/verify-cli-pin.sh)>>
+      environment:
+        ORB_DIR: << parameters.orb_dir >>

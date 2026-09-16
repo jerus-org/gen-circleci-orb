@@ -187,6 +187,7 @@ const MANAGED_VALIDATION_JOBS: &[&str] = &[
     "build-binary",
     "regenerate-orb",
     "check-ci-wiring",
+    "verify-cli-pin",
     "pack-orb",
     "review-orb",
     "push-orb",
@@ -1090,6 +1091,7 @@ fn pack_validate_steps(opts: &PatchOpts) -> Vec<String> {
         push_build_and_regenerate_steps(&mut steps, opts);
     }
     push_check_ci_wiring_step(&mut steps);
+    push_verify_cli_pin_step(&mut steps, opts);
     if opts.test_generation {
         push_live_pack_and_review_steps(&mut steps, opts);
     }
@@ -1186,6 +1188,27 @@ fn push_check_ci_wiring_step(steps: &mut Vec<String>) {
     steps.push("      - gen-circleci-orb/update:".to_string());
     steps.push("          name: check-ci-wiring".to_string());
     steps.push("          check: true".to_string());
+    push_branch_ignore(steps, &["main"]);
+}
+
+/// verify-cli-pin — smoke-tests only the Dockerfile's cli-installer stage
+/// (not the whole container, no Rust build, no push) so a broken
+/// `[orb].circleci_cli_version` pin fails a PR instead of only a release
+/// (gen-circleci-orb#328's remaining gap — this is the exact bug that
+/// deadlocked PR #326). Not tag-gated, unlike `orb-release-container`'s full
+/// build — the job itself halts as a fast no-op unless `orb/Dockerfile` or
+/// `gen-circleci-orb.toml` changed on this branch (a file-diff guard baked
+/// into the orb job itself, since a `pre-steps:` guard injected here would
+/// run before `checkout` and have no git repo to diff against — unlike the
+/// two existing branch-name guards in this file, which only need
+/// `$CIRCLE_BRANCH`). Present unconditionally: every consumer gets a
+/// Dockerfile, regardless of `test_generation`/`[record]`.
+fn push_verify_cli_pin_step(steps: &mut Vec<String>, opts: &PatchOpts) {
+    steps.push("      - gen-circleci-orb/verify_cli_pin:".to_string());
+    steps.push("          name: verify-cli-pin".to_string());
+    if opts.orb_dir != "orb" {
+        steps.push(format!("          orb_dir: {}", opts.orb_dir));
+    }
     push_branch_ignore(steps, &["main"]);
 }
 
@@ -1467,6 +1490,62 @@ mod tests {
         assert!(steps.contains("name: build-binary"));
         assert!(steps.contains("name: regenerate-orb"));
         assert!(steps.contains("attach_workspace: true"));
+    }
+
+    #[test]
+    fn verify_cli_pin_present_in_validation_workflow() {
+        // gen-circleci-orb#328 remaining gap: a broken [orb].circleci_cli_version
+        // pin only 404s at release time (PR #326) because the jobs that build
+        // orb/Dockerfile are all tag-gated. verify-cli-pin smoke-tests just the
+        // cli-installer stage on every PR instead.
+        let steps = pack_validate_steps(&make_opts()).join("\n");
+        assert!(
+            steps.contains("gen-circleci-orb/verify_cli_pin:"),
+            "validation workflow must invoke verify_cli_pin:\n{steps}"
+        );
+        assert!(
+            steps.contains("name: verify-cli-pin"),
+            "job must be named verify-cli-pin:\n{steps}"
+        );
+    }
+
+    #[test]
+    fn verify_cli_pin_is_not_tag_gated() {
+        // Unlike orb-release-container (release-tag only), this must run on
+        // every ordinary PR branch — that's the whole point of the fix.
+        let steps = pack_validate_steps(&make_opts()).join("\n");
+        let job_start = steps
+            .find("gen-circleci-orb/verify_cli_pin:")
+            .expect("job must be present");
+        let job_block = &steps[job_start..];
+        let job_end = job_block[1..]
+            .find("\n      - ")
+            .map(|i| i + 1)
+            .unwrap_or(job_block.len());
+        let job_block = &job_block[..job_end];
+        assert!(
+            !job_block.contains("tags:"),
+            "verify-cli-pin must not be tag-gated, unlike orb-release-container:\n{job_block}"
+        );
+        assert!(
+            job_block.contains("branches:") && job_block.contains("ignore:"),
+            "verify-cli-pin must still exclude main (same as check-ci-wiring):\n{job_block}"
+        );
+    }
+
+    #[test]
+    fn verify_cli_pin_present_regardless_of_test_generation() {
+        // Unconditional: every consumer gets a Dockerfile from render_dockerfile,
+        // independent of test_generation/[record] — the pin can be broken either way.
+        let opts = PatchOpts {
+            test_generation: false,
+            ..make_opts()
+        };
+        let steps = pack_validate_steps(&opts).join("\n");
+        assert!(
+            steps.contains("name: verify-cli-pin"),
+            "verify-cli-pin must run even when test_generation is false:\n{steps}"
+        );
     }
 
     #[test]
@@ -2236,6 +2315,30 @@ mod tests {
         assert_eq!(
             r1, r2,
             "running update twice must be stable:\n--- r1 ---\n{r1}\n--- r2 ---\n{r2}"
+        );
+    }
+
+    #[test]
+    fn resync_never_duplicates_verify_cli_pin() {
+        // Regression: MANAGED_VALIDATION_JOBS is the whitelist strip_managed
+        // uses to recognise which job blocks inside the markers are ours to
+        // remove on resync — a job name missing from it is treated as
+        // "unrecognised content" and KEPT in place, so the next patch_build
+        // inserts a second copy alongside it. Caught live: omitting
+        // "verify-cli-pin" from that list broke resync_is_stable_when_run_twice
+        // with exactly this duplication.
+        let opts = make_opts();
+        let (patched, _) = patch_build(BUILD_FIXTURE, &opts);
+        let (resynced, report) = resync_build(&patched, &opts);
+        assert_eq!(
+            resynced.matches("gen-circleci-orb/verify_cli_pin:").count(),
+            1,
+            "resync must not duplicate verify-cli-pin:\n{resynced}"
+        );
+        assert!(
+            report.warnings.is_empty(),
+            "verify-cli-pin must be recognised, not flagged as unrecognised content: {:?}",
+            report.warnings
         );
     }
 
