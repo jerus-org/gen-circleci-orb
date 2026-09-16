@@ -54,6 +54,11 @@ name = "fixture-cli"
 path = "src/bin/fixture-cli.rs"
 required-features = ["test-fixtures"]
 
+[[bin]]
+name = "fixture-cli-nested"
+path = "src/bin/fixture-cli-nested.rs"
+required-features = ["test-fixtures"]
+
 [lib]
 name = "gen_circleci_orb"
 path = "src/lib.rs"

@@ -116,3 +116,55 @@ fn generate_is_idempotent() {
         "second run should produce no changes:\n{second_stdout}"
     );
 }
+
+/// gen-circleci-orb#358 redesign, prerequisite bug: `parse_subcommand`'s own
+/// recursion (`help_parser::clap`) re-derives `run_help(binary, &[name,
+/// child_name])` at each level -- only the immediate parent, never the full
+/// accumulated ancestor chain. For a genuinely 3-level-deep CLI (`a b c`),
+/// parsing leaf `c` actually runs `fixture-cli-nested b c --help` (missing
+/// `a`), which clap rejects as "unrecognized subcommand 'b'" -- and that
+/// error text gets silently absorbed as `c`'s description, with an EMPTY
+/// parameter list, no hard failure. This proves the real --help-parsing
+/// pipeline correctly captures a depth-3 leaf's real parameters.
+#[test]
+#[cfg(feature = "test-fixtures")]
+fn parse_binary_handles_three_levels_of_subcommand_nesting() {
+    let binary = env!("CARGO_BIN_EXE_fixture-cli-nested");
+    let cli = gen_circleci_orb::help_parser::parse_binary(
+        binary,
+        &gen_circleci_orb::help_parser::ParseOptions::default(),
+    )
+    .expect("parse_binary must succeed against a real, well-formed nested CLI");
+
+    let a = cli
+        .subcommands
+        .iter()
+        .find(|s| s.name == "a")
+        .expect("top-level 'a' must be discovered");
+    let b = a
+        .subcommands
+        .iter()
+        .find(|s| s.name == "b")
+        .expect("nested 'a b' must be discovered");
+    let c = b
+        .subcommands
+        .iter()
+        .find(|s| s.name == "c")
+        .expect("nested 'a b c' must be discovered");
+
+    assert!(
+        c.is_leaf,
+        "'a b c' has no children of its own, must be a leaf"
+    );
+    assert!(
+        !c.description.to_lowercase().contains("unrecognized"),
+        "a clap parse error must never leak into the leaf's description: {:?}",
+        c.description
+    );
+    assert!(
+        c.parameters.iter().any(|p| p.long_name == "value"),
+        "'a b c --value' must be captured as a real parameter, not lost \
+         to a mis-parsed --help call: {:?}",
+        c.parameters
+    );
+}
