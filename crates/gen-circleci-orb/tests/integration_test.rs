@@ -168,3 +168,59 @@ fn parse_binary_handles_three_levels_of_subcommand_nesting() {
         c.parameters
     );
 }
+
+/// gen-circleci-orb#358, review finding on PR #416: every existing
+/// uniqueness test builds a `CliDefinition` literal by hand — none exercise
+/// the real `--help`-parsing pipeline. fixture-cli-collision has a genuine
+/// top-level `release` and a nested `ci release` sharing a bare name; this
+/// runs `generate` against it as a real subprocess, through the actual
+/// `--help` output and parser, and confirms `validate_subcommand_name_uniqueness`
+/// rejects it end-to-end, not just against a hand-built fixture.
+#[test]
+#[cfg(feature = "test-fixtures")]
+fn generate_rejects_a_real_ambiguous_subcommand_name() {
+    let out = TempDir::new().unwrap();
+    let binary = env!("CARGO_BIN_EXE_gen-circleci-orb");
+
+    // "fixture-cli-collision" is invoked by gen-circleci-orb as a bare-name
+    // subprocess (a real PATH lookup), so its directory must be on the
+    // spawned process's PATH — same requirement/reasoning as cli_tests.rs's
+    // fixture-cli PATH injection.
+    let fixture_bin = std::path::Path::new(env!("CARGO_BIN_EXE_fixture-cli-collision"));
+    let fixture_dir = fixture_bin
+        .parent()
+        .expect("fixture-cli-collision binary path has a parent directory");
+    let existing_path = std::env::var_os("PATH").unwrap_or_default();
+    let mut paths: Vec<_> = std::env::split_paths(&existing_path).collect();
+    paths.insert(0, fixture_dir.to_path_buf());
+    let new_path = std::env::join_paths(paths).expect("PATH entries are valid");
+
+    let output = Command::new(binary)
+        .args([
+            "generate",
+            "--binary",
+            "fixture-cli-collision",
+            "--orb-namespace",
+            "jerus-org",
+            "--output",
+            out.path().to_str().unwrap(),
+            "--no-record",
+        ])
+        .env("PATH", new_path)
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "generate must reject a real ambiguous subcommand name, not succeed"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("ambiguous subcommand name"),
+        "stderr must name the ambiguity:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("release") && stderr.contains("ci.release"),
+        "stderr must name the colliding name and both paths:\n{stderr}"
+    );
+}
