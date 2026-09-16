@@ -16,7 +16,7 @@ from the dependency graph with [`cargo-about`](https://github.com/EmbarkStudios/
 - **MIT License** — 332 crate(s)
 - **ISC License** — 21 crate(s)
 - **Unicode License v3** — 19 crate(s)
-- **Apache License 2.0** — 8 crate(s)
+- **Apache License 2.0** — 9 crate(s)
 - **BSD 3-Clause "New" or "Revised" License** — 4 crate(s)
 - **Community Data License Agreement Permissive 2.0** — 2 crate(s)
 - **Mozilla Public License 2.0** — 1 crate(s)
@@ -521,6 +521,7 @@ Used by:
 
 - git2_credentials 0.16.0
 - ring 0.17.14
+- similar 3.2.0
 
 ```text
                               Apache License
@@ -5304,7 +5305,7 @@ SOFTWARE.
 
 Used by:
 
-- gen-circleci-orb 0.1.20
+- gen-circleci-orb 0.1.21
 
 ```text
 MIT License

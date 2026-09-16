@@ -5,9 +5,26 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.21] - 2026-09-16
+
+Summary: Fixed[10], Testing[3]
+
+### Fixed
+
+ - fix: qualify, don't reject, subcommand collisions
+ - fix: skip non-rendered subcommands in #358 check
+ - fix: reject ambiguous subcommand names (#358)
+ - fix: name the full path in naming/coverage errors
+ - fix: nested subcommand support beyond depth 1
+ - fix: prefix generated env vars with GCO_ (#370)
+ - fix(deps): update rust crate rstest to 0.27.0
+ - fix: apply #369 review findings
+ - fix: rename restricted params in jobs (#369)
+ - fix: use a real diff for drift summary
+
 ## [0.1.20] - 2026-09-15
 
-Summary: Fixed[1]
+Summary: Chore[1], Fixed[1]
 
 ### Fixed
 
@@ -909,7 +926,8 @@ Summary: Added[2], Chore[1], Fixed[2], Testing[1]
 
 Summary: Chore[2]
 
-[Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.19...HEAD
+[Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.20...HEAD
+[0.1.20]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.19...v0.1.20
 [0.1.19]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.18...v0.1.19
 [0.1.18]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.17...v0.1.18
 [0.1.17]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.16...v0.1.17
