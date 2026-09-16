@@ -782,7 +782,7 @@ fn find_subcommand<'a>(
 
 /// Rejects a CLI tree where two leaf subcommands share a bare name at
 /// different nesting depths (e.g. a top-level `release` and a nested `ci
-/// release`).
+/// release`) — but ONLY when both would actually be rendered.
 ///
 /// This is not merely a config-lookup ambiguity: every `[subcommand.<name>]`
 /// lookup in this codebase matches by bare name (see `find_subcommand`'s own
@@ -792,12 +792,21 @@ fn find_subcommand<'a>(
 /// name collision therefore silently clobbers one leaf's entire generated
 /// job/command with the other's in the generator's output map, independent
 /// of any config ambiguity. #358.
+///
+/// Mirrors `render_subcommand`'s own traversal exactly (code-review finding:
+/// an earlier version walked every node unconditionally, false-rejecting
+/// collisions that can never actually clobber anything): a non-leaf group
+/// never writes its own file, so its name is never collected; a subtree
+/// excluded via `is_interactive` writes nothing at all (command, job,
+/// script, or any descendant), so it's skipped entirely, same as
+/// `render_subcommand` skips recursing into it.
 pub(crate) fn validate_subcommand_name_uniqueness(
     cli: &help_parser::types::CliDefinition,
+    config: Option<&orb_config::OrbConfig>,
 ) -> Result<()> {
     let mut by_name: std::collections::BTreeMap<&str, Vec<String>> =
         std::collections::BTreeMap::new();
-    collect_names_with_paths(&cli.subcommands, "", &mut by_name);
+    collect_names_with_paths(&cli.subcommands, "", config, &mut by_name);
 
     let mut errors: Vec<String> = by_name
         .into_iter()
@@ -811,22 +820,30 @@ pub(crate) fn validate_subcommand_name_uniqueness(
     Ok(())
 }
 
-/// Recursively collects every subcommand's bare name, keyed by that name,
-/// with each occurrence's full dotted path — so a name used at more than one
-/// path is easy to detect and report.
+/// Recursively collects the bare name of every LEAF subcommand that
+/// `render_subcommand` would actually write a file for, keyed by that name,
+/// with each occurrence's full dotted path.
 fn collect_names_with_paths<'a>(
     subs: &'a [help_parser::types::SubCommand],
     prefix: &str,
+    config: Option<&orb_config::OrbConfig>,
     by_name: &mut std::collections::BTreeMap<&'a str, Vec<String>>,
 ) {
     for sub in subs {
+        // Interactive/CLI-only: render_subcommand emits nothing for this
+        // subcommand OR its subtree — never a collision candidate.
+        if orb_generator::render::is_interactive(config, &sub.name) {
+            continue;
+        }
         let path = if prefix.is_empty() {
             sub.name.clone()
         } else {
             format!("{prefix}.{}", sub.name)
         };
-        by_name.entry(&sub.name).or_default().push(path.clone());
-        collect_names_with_paths(&sub.subcommands, &path, by_name);
+        if sub.is_leaf {
+            by_name.entry(&sub.name).or_default().push(path.clone());
+        }
+        collect_names_with_paths(&sub.subcommands, &path, config, by_name);
     }
 }
 
@@ -1034,7 +1051,7 @@ impl Generate {
             .or_else(|| config_url.and_then(|o| o.home_url.clone()))
             .or_else(|| detected_url.clone());
 
-        validate_subcommand_name_uniqueness(&cli_def)?;
+        validate_subcommand_name_uniqueness(&cli_def, Some(&orb_config))?;
 
         let install_method = resolve_install_method(self.install_method.as_ref(), &orb_config);
         let cargo_tools = resolve_cargo_tools(&self.cargo_tools, &orb_config);
@@ -2760,7 +2777,7 @@ mod tests {
                 },
             ],
         };
-        let err = validate_subcommand_name_uniqueness(&cli).unwrap_err();
+        let err = validate_subcommand_name_uniqueness(&cli, None).unwrap_err();
         let msg = err.to_string();
         assert!(
             msg.contains("release"),
@@ -2804,7 +2821,104 @@ mod tests {
                 },
             ],
         };
-        assert!(validate_subcommand_name_uniqueness(&cli).is_ok());
+        assert!(validate_subcommand_name_uniqueness(&cli, None).is_ok());
+    }
+
+    #[test]
+    fn validate_subcommand_name_uniqueness_ignores_a_non_leaf_group_collision() {
+        // Code-review finding on #358's fix: only LEAF subcommands ever write
+        // a generated file (render_subcommand only inserts into `files` when
+        // `sub.is_leaf`) — a non-leaf group's own name can never clobber
+        // anything, so it must not be flagged, even if it happens to share a
+        // name with something else.
+        let cli = help_parser::types::CliDefinition {
+            binary_name: "demo".to_string(),
+            description: String::new(),
+            subcommands: vec![
+                // Non-leaf group "db" — never writes its own file.
+                help_parser::types::SubCommand {
+                    name: "db".to_string(),
+                    description: String::new(),
+                    short_about: String::new(),
+                    is_leaf: false,
+                    parameters: vec![],
+                    subcommands: vec![help_parser::types::SubCommand {
+                        name: "migrate".to_string(),
+                        description: String::new(),
+                        short_about: String::new(),
+                        is_leaf: true,
+                        parameters: vec![],
+                        subcommands: vec![],
+                    }],
+                },
+                // Unrelated leaf elsewhere, also literally named "db" — this
+                // is the only thing that ever writes src/jobs/db.yml.
+                help_parser::types::SubCommand {
+                    name: "other".to_string(),
+                    description: String::new(),
+                    short_about: String::new(),
+                    is_leaf: false,
+                    parameters: vec![],
+                    subcommands: vec![help_parser::types::SubCommand {
+                        name: "db".to_string(),
+                        description: String::new(),
+                        short_about: String::new(),
+                        is_leaf: true,
+                        parameters: vec![],
+                        subcommands: vec![],
+                    }],
+                },
+            ],
+        };
+        assert!(
+            validate_subcommand_name_uniqueness(&cli, None).is_ok(),
+            "a non-leaf group's name must never be flagged as a collision"
+        );
+    }
+
+    #[test]
+    fn validate_subcommand_name_uniqueness_ignores_an_interactive_excluded_collision() {
+        // Code-review finding on #358's fix: is_interactive(config, name)
+        // excludes a subcommand AND ITS WHOLE SUBTREE from generation
+        // entirely (render_subcommand returns before writing anything or
+        // recursing) — a name collision where one side is interactive-only
+        // can never clobber a real generated file either. "init" is
+        // interactive by default (DEFAULT_INTERACTIVE).
+        let cli = help_parser::types::CliDefinition {
+            binary_name: "demo".to_string(),
+            description: String::new(),
+            subcommands: vec![
+                // Top-level "init" — interactive by default, excluded.
+                help_parser::types::SubCommand {
+                    name: "init".to_string(),
+                    description: String::new(),
+                    short_about: String::new(),
+                    is_leaf: true,
+                    parameters: vec![],
+                    subcommands: vec![],
+                },
+                // A real, generated leaf that happens to share the name.
+                help_parser::types::SubCommand {
+                    name: "db".to_string(),
+                    description: String::new(),
+                    short_about: String::new(),
+                    is_leaf: false,
+                    parameters: vec![],
+                    subcommands: vec![help_parser::types::SubCommand {
+                        name: "init".to_string(),
+                        description: String::new(),
+                        short_about: String::new(),
+                        is_leaf: true,
+                        parameters: vec![],
+                        subcommands: vec![],
+                    }],
+                },
+            ],
+        };
+        assert!(
+            validate_subcommand_name_uniqueness(&cli, None).is_ok(),
+            "an interactive-excluded subcommand's name must never be flagged as a collision"
+        );
     }
 
     // ── validate_job_group_step_order ───────────────────────────────────────
