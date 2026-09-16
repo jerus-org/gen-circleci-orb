@@ -101,7 +101,14 @@ pub fn generate(
 
     // commands/<name>.yml and jobs/<name>.yml for each leaf subcommand
     for sub in &cli.subcommands {
-        render_subcommand(sub, &cli.binary_name, opts, config, &mut files);
+        render_subcommand(
+            sub,
+            std::slice::from_ref(&sub.name),
+            &cli.binary_name,
+            opts,
+            config,
+            &mut files,
+        );
     }
 
     // Dockerfile
@@ -313,8 +320,14 @@ pub(crate) fn is_interactive(config: Option<&OrbConfig>, name: &str) -> bool {
         .unwrap_or_else(|| DEFAULT_INTERACTIVE.contains(&name))
 }
 
+/// `path` is the full chain of subcommand names from the root down to (and
+/// including) `sub` — e.g. `["ci", "release"]` for `ci release`. Needed so
+/// the invocation script (`render_command_script_content`) can reconstruct
+/// the real CLI command line for a nested subcommand, not just its own bare
+/// leaf name (gen-circleci-orb#358 redesign prerequisite).
 fn render_subcommand(
     sub: &SubCommand,
+    path: &[String],
     binary: &str,
     opts: &GenerateOpts,
     config: Option<&OrbConfig>,
@@ -338,11 +351,13 @@ fn render_subcommand(
         }
         files.insert(
             PathBuf::from(format!("src/scripts/{snake}.sh")),
-            render_command_script_content(sub, binary),
+            render_command_script_content(sub, path, binary),
         );
     }
     for child in &sub.subcommands {
-        render_subcommand(child, binary, opts, config, files);
+        let mut child_path = path.to_vec();
+        child_path.push(child.name.clone());
+        render_subcommand(child, &child_path, binary, opts, config, files);
     }
 }
 
@@ -553,8 +568,14 @@ fn build_command_orb_parameters(sub: &SubCommand) -> IndexMap<String, OrbParamet
 /// Options are appended first and positionals last, in declaration order: a
 /// positional emitted between an option and its value would be read as that
 /// value.
-fn render_command_script_content(sub: &SubCommand, binary: &str) -> String {
-    let mut lines: Vec<String> = vec![format!("set -- {} {}", binary, sub.name.replace('_', "-"))];
+fn render_command_script_content(sub: &SubCommand, path: &[String], binary: &str) -> String {
+    // The real CLI invocation needs every ancestor segment, not just this
+    // subcommand's own bare name — `ci release` must run `binary ci
+    // release`, not `binary release` (gen-circleci-orb#358 redesign
+    // prerequisite: previously only `sub.name` was used here, silently
+    // breaking any subcommand nested more than one level deep).
+    let full_command: Vec<String> = path.iter().map(|seg| seg.replace('_', "-")).collect();
+    let mut lines: Vec<String> = vec![format!("set -- {} {}", binary, full_command.join(" "))];
 
     let (positionals, options): (Vec<&Parameter>, Vec<&Parameter>) = sub
         .parameters
@@ -2914,6 +2935,43 @@ mod tests {
         assert!(
             !script.contains("--version"),
             "a positional has no flag:\n{script}"
+        );
+    }
+
+    /// gen-circleci-orb#358 redesign prerequisite: a nested subcommand's
+    /// generated invocation script must run the FULL CLI path (every
+    /// ancestor, not just the leaf's own bare name), or the underlying
+    /// binary rejects it as an unrecognized subcommand at runtime.
+    #[test]
+    fn script_invokes_the_full_nested_command_path() {
+        let leaf = SubCommand {
+            name: "deploy".to_string(),
+            description: "Deploy things.".to_string(),
+            short_about: "Deploy things.".to_string(),
+            is_leaf: true,
+            parameters: vec![Parameter {
+                long_name: "target".to_string(),
+                param_type: ParamType::String,
+                description: "Deploy target.".to_string(),
+                ..Default::default()
+            }],
+            subcommands: vec![],
+        };
+        let group = SubCommand {
+            name: "ci".to_string(),
+            description: "CI-related commands.".to_string(),
+            short_about: "CI-related commands.".to_string(),
+            is_leaf: false,
+            parameters: vec![],
+            subcommands: vec![leaf],
+        };
+        let cli = make_cli("mytool", vec![group]);
+        let files = generate(&cli, &default_opts(), None);
+        let script = &files[&PathBuf::from("src/scripts/deploy.sh")];
+        assert!(
+            script.starts_with("set -- mytool ci deploy\n"),
+            "script must invoke the full nested path 'mytool ci deploy', \
+             not just the leaf's own bare name:\n{script}"
         );
     }
 

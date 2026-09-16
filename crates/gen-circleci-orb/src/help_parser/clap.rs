@@ -17,7 +17,7 @@ pub fn parse_top_level(
     let mut subcommands = Vec::new();
     for name in sub_names {
         let sub_help = run_help(binary, &[&name])?;
-        let sub = parse_subcommand(&name, &sub_help, binary, opts)?;
+        let sub = parse_subcommand(&[name], &sub_help, binary, opts)?;
         subcommands.push(sub);
     }
 
@@ -41,12 +41,19 @@ fn normalize_binary_name(binary: &str) -> String {
         .to_string()
 }
 
+/// `path` is the full chain of subcommand names from the root down to (and
+/// including) the one being parsed — e.g. `["ci", "release"]` for `ci
+/// release`. Every recursive `run_help` call must use this full chain, not
+/// just the immediate parent: `--help` fetching for a subcommand nested
+/// three or more levels deep otherwise silently invokes the wrong CLI path
+/// (gen-circleci-orb#358 redesign prerequisite).
 fn parse_subcommand(
-    name: &str,
+    path: &[String],
     help_text: &str,
     binary: &str,
     opts: &ParseOptions,
 ) -> Result<SubCommand> {
+    let name = path.last().expect("path is never empty").clone();
     let description = extract_description(help_text);
     let short_about = extract_short_about(help_text);
     let child_names = extract_subcommand_names(help_text);
@@ -54,22 +61,25 @@ fn parse_subcommand(
 
     let mut subcommands = Vec::new();
     for child_name in &child_names {
-        let child_help = run_help(binary, &[name, child_name])?;
-        let child = parse_subcommand(child_name, &child_help, binary, opts)?;
+        let mut child_path = path.to_vec();
+        child_path.push(child_name.clone());
+        let path_refs: Vec<&str> = child_path.iter().map(String::as_str).collect();
+        let child_help = run_help(binary, &path_refs)?;
+        let child = parse_subcommand(&child_path, &child_help, binary, opts)?;
         subcommands.push(child);
     }
 
     let parameters = if is_leaf {
-        let parsed = parse_parameters_detailed(help_text, name, opts);
-        check_naming(name, &parsed.errors)?;
-        check_coverage(name, &parsed.unparsed, opts)?;
+        let parsed = parse_parameters_detailed(help_text, &name, opts);
+        check_naming(&name, &parsed.errors)?;
+        check_coverage(&name, &parsed.unparsed, opts)?;
         parsed.parameters
     } else {
         Vec::new()
     };
 
     Ok(SubCommand {
-        name: name.to_string(),
+        name,
         description,
         short_about,
         is_leaf,
@@ -2344,7 +2354,7 @@ Options:
             allow_unparsed_help: true,
             ..ParseOptions::default()
         };
-        let err = parse_subcommand("cmd", help, "tool", &opts)
+        let err = parse_subcommand(&["cmd".to_string()], help, "tool", &opts)
             .expect_err("a naming failure must still fail generation");
         assert!(err.to_string().contains("short_param"));
     }
