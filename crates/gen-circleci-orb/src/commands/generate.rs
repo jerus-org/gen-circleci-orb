@@ -2837,6 +2837,47 @@ mod tests {
     }
 
     #[test]
+    fn validate_param_key_collisions_rejects_a_no_op_orb_name_override() {
+        // Review follow-up on #421: an `orb_name` override that resolves to
+        // the SAME string the collision already produces (i.e. doesn't
+        // actually rename anything) must still be rejected -- the check
+        // isn't fooled by a no-op "rename to itself" that leaves the
+        // collision unresolved.
+        let cli = cli_with_params(
+            "generate",
+            vec![
+                param("name", ParamType::String),
+                param("generate_name", ParamType::Boolean),
+            ],
+        );
+        use crate::orb_config::{OrbConfig, ParamOverride, SubcommandConfig};
+        let mut overrides = IndexMap::new();
+        overrides.insert(
+            "name".to_string(),
+            ParamOverride {
+                default: None,
+                // Same string the automatic restricted-name rename already
+                // produces -- a genuinely no-op override.
+                orb_name: Some("generate_name".to_string()),
+            },
+        );
+        let mut subcommands = IndexMap::new();
+        subcommands.insert(
+            "generate".to_string(),
+            SubcommandConfig {
+                param: Some(overrides),
+                ..Default::default()
+            },
+        );
+        let config = OrbConfig {
+            subcommand: Some(subcommands),
+            ..Default::default()
+        };
+        let err = validate_param_key_collisions(&cli, &config).unwrap_err();
+        assert!(err.to_string().contains("generate_name"), "got: {err}");
+    }
+
+    #[test]
     fn validate_param_key_collisions_accepts_non_colliding_params() {
         let cli = cli_with_params(
             "generate",

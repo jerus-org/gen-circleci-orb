@@ -4086,6 +4086,142 @@ mod tests {
     }
 
     #[test]
+    fn orb_name_override_allows_renaming_both_colliding_params() {
+        // Review follow-up on #421: the user is free to override EITHER or
+        // BOTH colliding params, not steered into exactly one canonical fix
+        // -- overriding both simultaneously (two changes) must work just as
+        // well as overriding just one.
+        let params = vec![
+            Parameter {
+                long_name: "name".to_string(),
+                short: Some('n'),
+                param_type: ParamType::String,
+                default: Some(String::new()),
+                required: false,
+                description: "Name for the output.".to_string(),
+                ..Default::default()
+            },
+            Parameter {
+                long_name: "generate_name".to_string(),
+                short: None,
+                param_type: ParamType::Boolean,
+                default: Some("false".to_string()),
+                required: false,
+                description: "Whether to generate a name.".to_string(),
+                ..Default::default()
+            },
+        ];
+        let sub = make_leaf("generate", params);
+        let cli = make_cli("mytool", vec![sub]);
+
+        let mut param_overrides = IndexMap::new();
+        param_overrides.insert(
+            "name".to_string(),
+            crate::orb_config::ParamOverride {
+                default: None,
+                orb_name: Some("name_alt".to_string()),
+            },
+        );
+        param_overrides.insert(
+            "generate_name".to_string(),
+            crate::orb_config::ParamOverride {
+                default: None,
+                orb_name: Some("generate_name_alt".to_string()),
+            },
+        );
+        let mut subcommands = IndexMap::new();
+        subcommands.insert(
+            "generate".to_string(),
+            crate::orb_config::SubcommandConfig {
+                param: Some(param_overrides),
+                ..Default::default()
+            },
+        );
+        let config = OrbConfig {
+            subcommand: Some(subcommands),
+            ..Default::default()
+        };
+
+        let files = generate(&cli, &default_opts(), Some(&config));
+        let command = &files[&PathBuf::from("src/commands/generate.yml")];
+        let job = &files[&PathBuf::from("src/jobs/generate.yml")];
+        for rendered in [command, job] {
+            assert!(
+                rendered.contains("name_alt:"),
+                "the restricted 'name' param must render under its own \
+                 override 'name_alt':\n{rendered}"
+            );
+            assert!(
+                rendered.contains("generate_name_alt:"),
+                "the genuinely-named 'generate_name' flag must ALSO render \
+                 under its own override 'generate_name_alt' -- both params \
+                 may be renamed at once:\n{rendered}"
+            );
+            assert!(
+                !rendered.contains("generate_name:"),
+                "neither param may keep the collision-causing bare \
+                 'generate_name' key once both are overridden:\n{rendered}"
+            );
+        }
+    }
+
+    #[test]
+    fn orb_name_override_applies_with_no_collision_present() {
+        // Review follow-up on #421: `orb_name` is a general-purpose rename,
+        // not gated behind "only takes effect when resolving a collision" --
+        // it must apply even on a plain, non-restricted param with nothing
+        // else on the subcommand for it to clash with.
+        let params = vec![Parameter {
+            long_name: "output".to_string(),
+            short: None,
+            param_type: ParamType::String,
+            default: Some(String::new()),
+            required: false,
+            description: "Where to write the output.".to_string(),
+            ..Default::default()
+        }];
+        let sub = make_leaf("generate", params);
+        let cli = make_cli("mytool", vec![sub]);
+
+        let mut param_overrides = IndexMap::new();
+        param_overrides.insert(
+            "output".to_string(),
+            crate::orb_config::ParamOverride {
+                default: None,
+                orb_name: Some("custom_output".to_string()),
+            },
+        );
+        let mut subcommands = IndexMap::new();
+        subcommands.insert(
+            "generate".to_string(),
+            crate::orb_config::SubcommandConfig {
+                param: Some(param_overrides),
+                ..Default::default()
+            },
+        );
+        let config = OrbConfig {
+            subcommand: Some(subcommands),
+            ..Default::default()
+        };
+
+        let files = generate(&cli, &default_opts(), Some(&config));
+        let command = &files[&PathBuf::from("src/commands/generate.yml")];
+        let job = &files[&PathBuf::from("src/jobs/generate.yml")];
+        for rendered in [command, job] {
+            assert!(
+                rendered.contains("custom_output:"),
+                "a plain, non-colliding param must still honor its own \
+                 'orb_name' override:\n{rendered}"
+            );
+            assert!(
+                !rendered.contains("\n  output:\n"),
+                "the un-overridden bare 'output' key must not also appear as \
+                 its own entry (substring of 'custom_output:' doesn't count):\n{rendered}"
+            );
+        }
+    }
+
+    #[test]
     fn orb_producing_job_gains_persist_orb_workspace() {
         // A job for an orb-producing command (one with an `orb_dir` param) must
         // gain a `persist_orb_workspace` toggle (default false) and a conditional
