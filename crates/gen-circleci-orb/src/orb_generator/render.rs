@@ -1754,6 +1754,17 @@ fn find_leaf_subcommand<'a>(cli: &'a CliDefinition, name: &str) -> Option<&'a Su
     search(&cli.subcommands, name)
 }
 
+/// Out of scope for gen-circleci-orb#413 (which is specifically about
+/// `add_mandatory_params`/`build_job_group_invoke_step` silently dropping a
+/// restricted param): an explicitly-`params`-selected restricted param
+/// (e.g. a `job_group.params` list naming `"name"`) still isn't resolved
+/// through `resolve_param_orb_name` here, and would keep the bare,
+/// CircleCI-reserved key. Same gap in `resolve_shared_params` below, and
+/// structurally harder there — a "shared" param spans multiple subcommands,
+/// each of which would resolve a restricted name differently (e.g.
+/// `release_name` vs `deploy_name`), so one unified job key can't cleanly
+/// represent it; needs its own design pass, not a small follow-on to #413.
+/// Filed as gen-circleci-orb#422.
 fn resolve_explicit_params(
     explicit: &[String],
     step_subs: &[&SubCommand],
@@ -1798,27 +1809,48 @@ fn resolve_shared_params(step_subs: &[&SubCommand]) -> IndexMap<String, OrbParam
     result
 }
 
-fn add_mandatory_params(params: &mut IndexMap<String, OrbParameter>, step_subs: &[&SubCommand]) {
+/// A required, non-boolean param not already in the job's shared/explicit
+/// parameter set gets a mandatory slot here. Resolves each candidate through
+/// `resolve_param_orb_name` FIRST (restricted-name rename / `orb_name`
+/// override, same as the per-subcommand path #369/#412 already fixed) before
+/// checking for a cross-subcommand name collision — a restricted param on
+/// two different subcommands already differs once resolved (e.g.
+/// `release_name` vs `deploy_name`), so it needs no further disambiguation;
+/// only a genuine remaining collision gets the additional `{sub}_` prefix.
+fn add_mandatory_params(
+    params: &mut IndexMap<String, OrbParameter>,
+    step_subs: &[&SubCommand],
+    config: Option<&OrbConfig>,
+) {
     let mut present: std::collections::HashSet<String> = params.keys().cloned().collect();
     for sub in step_subs {
         for p in &sub.parameters {
             if !p.required || matches!(p.param_type, ParamType::Boolean) {
                 continue;
             }
+            // Already selected by shared/explicit mode under its own bare
+            // CLI name (gen-circleci-orb#422's gap: neither resolves a
+            // restricted rename) -- don't ALSO add a resolved-rename
+            // duplicate on top of it; that would both triple-declare the
+            // param and reintroduce the bare, CircleCI-reserved key this
+            // function exists to avoid for the ones it does add.
             if present.contains(&p.long_name) {
+                continue;
+            }
+            let resolved = resolve_param_orb_name(&sub.name, &p.long_name, config);
+            if present.contains(&resolved) {
                 continue;
             }
             let collides = step_subs.iter().any(|other| {
                 other.name != sub.name
-                    && other
-                        .parameters
-                        .iter()
-                        .any(|op| op.long_name == p.long_name)
+                    && other.parameters.iter().any(|op| {
+                        resolve_param_orb_name(&other.name, &op.long_name, config) == resolved
+                    })
             });
             let job_name = if collides {
-                format!("{}_{}", sub.name, p.long_name)
+                format!("{}_{resolved}", sub.name)
             } else {
-                p.long_name.clone()
+                resolved
             };
             params.insert(job_name.clone(), cli_param_to_orb_param(p));
             present.insert(job_name);
@@ -1829,36 +1861,54 @@ fn add_mandatory_params(params: &mut IndexMap<String, OrbParameter>, step_subs: 
 fn build_job_group_params(
     group: &crate::orb_config::JobGroup,
     step_subs: &[&SubCommand],
+    config: Option<&OrbConfig>,
 ) -> IndexMap<String, OrbParameter> {
     let mut params = if let Some(explicit) = &group.params {
         resolve_explicit_params(explicit, step_subs)
     } else {
         resolve_shared_params(step_subs)
     };
-    add_mandatory_params(&mut params, step_subs);
+    add_mandatory_params(&mut params, step_subs, config);
     params
 }
 
+/// The invoke step's key (left side) must match the SAME key the invoked
+/// command itself declares that parameter under — `resolve_param_orb_name`,
+/// not the bare CLI flag name (gen-circleci-orb#413: forwarding under the
+/// bare name broke for any restricted/`orb_name`-overridden param once #412
+/// started renaming the command's own declared key).
 fn build_job_group_invoke_step(
     sub: &SubCommand,
     job_params: &IndexMap<String, OrbParameter>,
+    config: Option<&OrbConfig>,
 ) -> serde_yaml::Value {
     let mut invoke_map = serde_yaml::Mapping::new();
     for p in &sub.parameters {
-        // Find the name this param has in the merged job parameter set
-        let job_param_name = if job_params.contains_key(&p.long_name) {
-            Some(p.long_name.clone())
+        let command_key = resolve_param_orb_name(&sub.name, &p.long_name, config);
+        // Find the name this param has in the merged job parameter set:
+        // the resolved key first (add_mandatory_params' own scheme), then
+        // the sub-prefixed resolved form (cross-subcommand collision
+        // disambiguation), then finally the bare CLI name -- shared/explicit
+        // mode doesn't yet resolve a restricted rename (gen-circleci-orb#422),
+        // so a param they selected can only be found there. Whichever key is
+        // found, the invoke step's own key (left side) is always
+        // `command_key` -- the invoked command's real declared parameter
+        // name, independent of what the job happens to expose it as.
+        let job_param_name = if job_params.contains_key(&command_key) {
+            Some(command_key.clone())
         } else {
-            let prefixed = format!("{}_{}", sub.name, p.long_name);
+            let prefixed = format!("{}_{command_key}", sub.name);
             if job_params.contains_key(&prefixed) {
                 Some(prefixed)
+            } else if job_params.contains_key(&p.long_name) {
+                Some(p.long_name.clone())
             } else {
                 None
             }
         };
         if let Some(job_name) = job_param_name {
             invoke_map.insert(
-                serde_yaml::Value::String(p.long_name.clone()),
+                serde_yaml::Value::String(command_key),
                 serde_yaml::Value::String(format!("<< parameters.{job_name} >>")),
             );
         }
@@ -2057,7 +2107,7 @@ fn render_rich_job_group(
 fn render_job_group(
     group: &crate::orb_config::JobGroup,
     cli: &CliDefinition,
-    _config: Option<&OrbConfig>,
+    config: Option<&OrbConfig>,
     files: &mut HashMap<PathBuf, String>,
 ) -> String {
     // Rich mode (explicit `step` list) takes precedence over the simple `steps` list.
@@ -2070,7 +2120,7 @@ fn render_job_group(
         .filter_map(|name| find_leaf_subcommand(cli, name))
         .collect();
 
-    let mut parameters = build_job_group_params(group, &step_subs);
+    let mut parameters = build_job_group_params(group, &step_subs, config);
 
     let (attach_param, root_param) = build_workspace_params();
     parameters.insert("attach_workspace".to_string(), attach_param);
@@ -2081,7 +2131,7 @@ fn render_job_group(
         build_attach_workspace_step(),
     ];
     for sub in &step_subs {
-        steps.push(build_job_group_invoke_step(sub, &parameters));
+        steps.push(build_job_group_invoke_step(sub, &parameters, config));
     }
 
     let description = group
@@ -6213,6 +6263,174 @@ mod tests {
         assert!(
             job.contains("orb_path:"),
             "shared param orb_path must appear in merged job:\n{job}"
+        );
+    }
+
+    #[test]
+    fn job_group_renames_a_restricted_mandatory_param_instead_of_dropping_it() {
+        // gen-circleci-orb#413: the job-group path (add_mandatory_params /
+        // build_job_group_invoke_step) never applied #369's restricted-param
+        // rename. A required `--name` on "release" (not in the shared/explicit
+        // set, since "generate" has no "name" param) must surface as
+        // "release_name" in both the job's declared parameters and its
+        // invoke step -- not the bare "name" key, which collides with
+        // CircleCI's own reserved job "name" field.
+        let name_param = Parameter {
+            long_name: "name".to_string(),
+            short: None,
+            param_type: ParamType::String,
+            default: None,
+            required: true,
+            description: "Name for the release.".to_string(),
+            ..Default::default()
+        };
+        let subs = vec![
+            make_leaf("generate", vec![]),
+            make_leaf("release", vec![name_param]),
+        ];
+        let cli = make_cli("mytool", subs);
+        let config = crate::orb_config::OrbConfig {
+            job_group: Some(vec![crate::orb_config::JobGroup {
+                name: "sync".to_string(),
+                description: None,
+                steps: vec!["generate".to_string(), "release".to_string()],
+                params: None,
+                ..Default::default()
+            }]),
+            ..crate::orb_config::OrbConfig::default()
+        };
+        let files = generate(&cli, &default_opts(), Some(&config));
+        let job = &files[&PathBuf::from("src/jobs/sync.yml")];
+        assert!(
+            job.contains("release_name:"),
+            "the restricted 'name' param must be renamed to 'release_name', \
+             not dropped or left bare (colliding with the reserved job \
+             'name' field):\n{job}"
+        );
+        assert!(
+            !job.contains("\n  name:\n"),
+            "the bare, CircleCI-reserved 'name' key must never appear as a \
+             job parameter:\n{job}"
+        );
+        assert!(
+            job.contains("release_name: << parameters.release_name >>"),
+            "the invoke step must forward under the SAME key the 'release' \
+             command itself declares -- 'release_name' on both sides, since \
+             #412 already renames the restricted param at the command \
+             level too, not the bare CLI flag name 'name':\n{job}"
+        );
+    }
+
+    #[test]
+    fn job_group_explicit_restricted_param_still_reaches_the_command() {
+        // Code-review finding on #413: resolve_explicit_params (gen-circleci-
+        // orb#422, deliberately out of scope) still stores an explicitly
+        // job_group.params-selected restricted param under its bare CLI
+        // name ("name"). build_job_group_invoke_step's lookup must still
+        // find it there and wire it through to the command's own resolved
+        // key ("release_name") -- not silently drop the value because the
+        // primary (resolved-key) lookup misses.
+        use crate::orb_config::{JobGroup, OrbConfig};
+
+        let name_param = Parameter {
+            long_name: "name".to_string(),
+            short: None,
+            param_type: ParamType::String,
+            default: None,
+            required: false,
+            description: "Name for the release.".to_string(),
+            ..Default::default()
+        };
+        let subs = vec![
+            make_leaf("generate", vec![]),
+            make_leaf("release", vec![name_param]),
+        ];
+        let cli = make_cli("mytool", subs);
+        let config = OrbConfig {
+            job_group: Some(vec![JobGroup {
+                name: "sync".to_string(),
+                description: None,
+                steps: vec!["generate".to_string(), "release".to_string()],
+                params: Some(vec!["name".to_string()]),
+                ..Default::default()
+            }]),
+            ..OrbConfig::default()
+        };
+        let files = generate(&cli, &default_opts(), Some(&config));
+        let job = &files[&PathBuf::from("src/jobs/sync.yml")];
+        assert!(
+            job.contains("\n  name:\n"),
+            "explicit params list must still declare 'name' as the job's \
+             own parameter (its #422 gap, unchanged by #413):\n{job}"
+        );
+        assert!(
+            job.contains("release_name: << parameters.name >>"),
+            "the invoke step must forward the job's 'name' value to the \
+             command's own resolved key 'release_name', not drop it \
+             because the resolved-key lookup misses:\n{job}"
+        );
+    }
+
+    #[test]
+    fn job_group_shared_restricted_required_param_is_not_duplicated() {
+        // Code-review finding on #413: add_mandatory_params must not ALSO
+        // add a resolved-rename entry for a restricted param that
+        // resolve_shared_params already selected under its bare CLI name --
+        // that would triple-declare it (bare + two resolved renames) instead
+        // of leaving the pre-existing #422 gap exactly as it was.
+        use crate::orb_config::{JobGroup, OrbConfig};
+
+        let make_name_param = || Parameter {
+            long_name: "name".to_string(),
+            short: None,
+            param_type: ParamType::String,
+            default: None,
+            required: true,
+            description: "Name for the thing.".to_string(),
+            ..Default::default()
+        };
+        let subs = vec![
+            make_leaf("generate", vec![make_name_param()]),
+            make_leaf("release", vec![make_name_param()]),
+        ];
+        let cli = make_cli("mytool", subs);
+        let config = OrbConfig {
+            job_group: Some(vec![JobGroup {
+                name: "sync".to_string(),
+                description: None,
+                steps: vec!["generate".to_string(), "release".to_string()],
+                params: None,
+                ..Default::default()
+            }]),
+            ..OrbConfig::default()
+        };
+        let files = generate(&cli, &default_opts(), Some(&config));
+        let job = &files[&PathBuf::from("src/jobs/sync.yml")];
+        // "generate_name"/"release_name" legitimately appear in the invoke
+        // steps below (forwarding to each command's own resolved key) --
+        // the bug is a DUPLICATE job-level parameter DECLARATION (2-space
+        // indent), not their presence anywhere in the file.
+        assert!(
+            !job.contains("\n  generate_name:\n"),
+            "a shared restricted param already selected under its bare key \
+             must not ALSO get a resolved-rename duplicate DECLARED as a \
+             job parameter:\n{job}"
+        );
+        assert!(
+            !job.contains("\n  release_name:\n"),
+            "a shared restricted param already selected under its bare key \
+             must not ALSO get a resolved-rename duplicate DECLARED as a \
+             job parameter:\n{job}"
+        );
+        assert!(
+            job.contains("generate_name: << parameters.name >>"),
+            "the invoke step must still forward the shared job param to \
+             each command's own resolved key:\n{job}"
+        );
+        assert!(
+            job.contains("release_name: << parameters.name >>"),
+            "the invoke step must still forward the shared job param to \
+             each command's own resolved key:\n{job}"
         );
     }
 
