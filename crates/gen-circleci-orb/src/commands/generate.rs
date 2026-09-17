@@ -727,9 +727,19 @@ fn describe_job_group_step(step: &orb_config::JobGroupStep) -> String {
 /// here — some consumers keep an override for a param since removed from
 /// the CLI, and `render_job` already treats an unmatched name as a no-op;
 /// this check only judges overrides that will actually be applied.
+///
+/// `effective_names` (from `orb_generator::render::compute_effective_names`)
+/// resolves `sub_name` the same way a colliding leaf's own rendered files
+/// are named — a bare name unique in the tree keeps it, one used at more
+/// than one path is qualified everywhere. Looking a bare, now-qualified-away
+/// name up via `find_subcommand`'s old depth-first bare-name search would
+/// ambiguously match whichever occurrence is found first, exactly the #358
+/// class of bug this repeats for config values instead of file paths
+/// (gen-circleci-orb#418).
 pub(crate) fn validate_param_overrides(
     cli_def: &help_parser::types::CliDefinition,
     config: &orb_config::OrbConfig,
+    effective_names: &HashMap<String, String>,
 ) -> Result<()> {
     let Some(subcommands) = config.subcommand.as_ref() else {
         return Ok(());
@@ -739,7 +749,9 @@ pub(crate) fn validate_param_overrides(
         let Some(overrides) = sc_config.param.as_ref() else {
             continue;
         };
-        let Some(sub) = find_subcommand(&cli_def.subcommands, sub_name) else {
+        let Some(sub) =
+            find_subcommand_by_effective_name(&cli_def.subcommands, "", sub_name, effective_names)
+        else {
             continue;
         };
         for (param_name, override_) in overrides {
@@ -762,18 +774,43 @@ pub(crate) fn validate_param_overrides(
     Ok(())
 }
 
-/// Depth-first search for a subcommand by name — configs key overrides by
-/// bare subcommand name (not a nested path), matching every other lookup
-/// against `[subcommand.<name>]` elsewhere in this module.
-fn find_subcommand<'a>(
+/// Depth-first search for a LEAF subcommand by its effective (collision-
+/// qualified) name — configs key overrides by that same name, matching
+/// `is_job_suppressed`/`resolve_run_step_name`'s lookup pattern (#416) and
+/// the name `render_subcommand` actually renders that leaf's files under.
+/// A non-leaf group never appears in `effective_names` (it's never
+/// qualified, only leaves are), so it's matched by its own bare name — it
+/// carries no params in practice, but this keeps the search total rather
+/// than silently skipping a group entirely.
+///
+/// A leaf ABSENT from `effective_names` was excluded by
+/// `compute_effective_names`'s own traversal (an interactive/CLI-only
+/// subtree, via `is_interactive`) — it's never rendered, so it must never
+/// match `target`, not fall back to its bare name. Falling back would let an
+/// interactive leaf silently steal a bare-name match from the real, rendered
+/// leaf a collision qualified elsewhere (gen-circleci-orb#418 review).
+fn find_subcommand_by_effective_name<'a>(
     subs: &'a [help_parser::types::SubCommand],
-    name: &str,
+    prefix: &str,
+    target: &str,
+    effective_names: &HashMap<String, String>,
 ) -> Option<&'a help_parser::types::SubCommand> {
     for sub in subs {
-        if sub.name == name {
+        let path = if prefix.is_empty() {
+            sub.name.clone()
+        } else {
+            format!("{prefix}.{}", sub.name)
+        };
+        if sub.is_leaf {
+            if effective_names.get(&path).map(String::as_str) == Some(target) {
+                return Some(sub);
+            }
+        } else if sub.name == target {
             return Some(sub);
         }
-        if let Some(found) = find_subcommand(&sub.subcommands, name) {
+        if let Some(found) =
+            find_subcommand_by_effective_name(&sub.subcommands, &path, target, effective_names)
+        {
             return Some(found);
         }
     }
@@ -1098,7 +1135,7 @@ impl Generate {
             orb_config.job_group.as_deref().unwrap_or_default(),
             &git_push_subcommands,
         )?;
-        validate_param_overrides(&cli_def, &orb_config)?;
+        validate_param_overrides(&cli_def, &orb_config, &effective_names)?;
         validate_param_key_collisions(&cli_def, &orb_config)?;
 
         let opts = orb_generator::GenerateOpts {
@@ -2663,7 +2700,11 @@ mod tests {
     fn validate_param_overrides_accepts_a_valid_integer_default() {
         let cli = cli_with_params("release", vec![param("retries", ParamType::Integer)]);
         let config = config_with_override("release", "retries", "3");
-        let result = validate_param_overrides(&cli, &config);
+        let result = validate_param_overrides(
+            &cli,
+            &config,
+            &orb_generator::render::compute_effective_names(&cli, None),
+        );
         assert!(result.is_ok(), "expected Ok, got {result:?}");
     }
 
@@ -2671,7 +2712,11 @@ mod tests {
     fn validate_param_overrides_accepts_a_valid_boolean_default() {
         let cli = cli_with_params("wire_ci", vec![param("check", ParamType::Boolean)]);
         let config = config_with_override("wire_ci", "check", "true");
-        let result = validate_param_overrides(&cli, &config);
+        let result = validate_param_overrides(
+            &cli,
+            &config,
+            &orb_generator::render::compute_effective_names(&cli, None),
+        );
         assert!(result.is_ok(), "expected Ok, got {result:?}");
     }
 
@@ -2679,7 +2724,12 @@ mod tests {
     fn validate_param_overrides_rejects_an_unparseable_integer_default() {
         let cli = cli_with_params("release", vec![param("retries", ParamType::Integer)]);
         let config = config_with_override("release", "retries", "3.5");
-        let err = validate_param_overrides(&cli, &config).unwrap_err();
+        let err = validate_param_overrides(
+            &cli,
+            &config,
+            &orb_generator::render::compute_effective_names(&cli, None),
+        )
+        .unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("release"), "got: {msg}");
         assert!(msg.contains("retries"), "got: {msg}");
@@ -2690,7 +2740,12 @@ mod tests {
     fn validate_param_overrides_rejects_a_non_true_false_boolean_default() {
         let cli = cli_with_params("wire_ci", vec![param("check", ParamType::Boolean)]);
         let config = config_with_override("wire_ci", "check", "True");
-        let err = validate_param_overrides(&cli, &config).unwrap_err();
+        let err = validate_param_overrides(
+            &cli,
+            &config,
+            &orb_generator::render::compute_effective_names(&cli, None),
+        )
+        .unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("wire_ci"), "got: {msg}");
         assert!(msg.contains("check"), "got: {msg}");
@@ -2701,7 +2756,11 @@ mod tests {
         // No declared type to violate — any string is a valid string default.
         let cli = cli_with_params("generate", vec![param("orb_path", ParamType::String)]);
         let config = config_with_override("generate", "orb_path", "custom/@orb.yml");
-        let result = validate_param_overrides(&cli, &config);
+        let result = validate_param_overrides(
+            &cli,
+            &config,
+            &orb_generator::render::compute_effective_names(&cli, None),
+        );
         assert!(result.is_ok(), "expected Ok, got {result:?}");
     }
 
@@ -2715,7 +2774,11 @@ mod tests {
             )],
         );
         let config = config_with_override("release", "log_level", "verbose");
-        let result = validate_param_overrides(&cli, &config);
+        let result = validate_param_overrides(
+            &cli,
+            &config,
+            &orb_generator::render::compute_effective_names(&cli, None),
+        );
         assert!(result.is_ok(), "expected Ok, got {result:?}");
     }
 
@@ -2729,7 +2792,12 @@ mod tests {
             )],
         );
         let config = config_with_override("release", "log_level", "bogus");
-        let err = validate_param_overrides(&cli, &config).unwrap_err();
+        let err = validate_param_overrides(
+            &cli,
+            &config,
+            &orb_generator::render::compute_effective_names(&cli, None),
+        )
+        .unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("log_level"), "got: {msg}");
         assert!(msg.contains("bogus"), "got: {msg}");
@@ -2742,8 +2810,144 @@ mod tests {
         // unmatched override name as a no-op, unchanged by this check.
         let cli = cli_with_params("release", vec![param("retries", ParamType::Integer)]);
         let config = config_with_override("release", "does_not_exist", "3.5");
-        let result = validate_param_overrides(&cli, &config);
+        let result = validate_param_overrides(
+            &cli,
+            &config,
+            &orb_generator::render::compute_effective_names(&cli, None),
+        );
         assert!(result.is_ok(), "expected Ok, got {result:?}");
+    }
+
+    /// gen-circleci-orb#418: `a.release` and `b.release` collide on the bare
+    /// leaf name `release`, so `compute_effective_names` qualifies BOTH to
+    /// `a_release`/`b_release` — neither keeps the bare name. A
+    /// `[subcommand.release.param.retries]` override therefore names nothing
+    /// real and must be a no-op (same as an override for a since-removed
+    /// param), never ambiguously applied to whichever occurrence a bare-name
+    /// search happens to find first.
+    #[test]
+    fn validate_param_overrides_treats_a_qualified_away_bare_name_as_a_no_op() {
+        let leaf = |retries_type: ParamType| help_parser::types::SubCommand {
+            name: "release".to_string(),
+            description: String::new(),
+            short_about: String::new(),
+            is_leaf: true,
+            parameters: vec![param("retries", retries_type)],
+            subcommands: vec![],
+        };
+        let group = |name: &str, retries_type: ParamType| help_parser::types::SubCommand {
+            name: name.to_string(),
+            description: String::new(),
+            short_about: String::new(),
+            is_leaf: false,
+            parameters: vec![],
+            subcommands: vec![leaf(retries_type)],
+        };
+        let cli = help_parser::types::CliDefinition {
+            binary_name: "demo".to_string(),
+            description: String::new(),
+            subcommands: vec![
+                group("a", ParamType::Integer),
+                group("b", ParamType::String),
+            ],
+        };
+        let config = config_with_override("release", "retries", "abc");
+        let effective_names = orb_generator::render::compute_effective_names(&cli, None);
+        let result = validate_param_overrides(&cli, &config, &effective_names);
+        assert!(
+            result.is_ok(),
+            "bare 'release' no longer names either occurrence once both are \
+             qualified, so the override must no-op, not spuriously validate \
+             against a.release's Integer 'retries': {result:?}"
+        );
+    }
+
+    /// Code review on gen-circleci-orb#418's PR: `compute_effective_names`
+    /// skips a WHOLE interactive group's subtree (`collect_leaf_paths`
+    /// `continue`s before recursing), so a leaf nested under an interactive
+    /// group never gets an `effective_names` entry at all — even though it
+    /// shares a bare name with a real, rendered leaf elsewhere.
+    /// `find_subcommand_by_effective_name` must skip that leaf too (no entry
+    /// in the map = never matches), not fall back to matching it by its bare
+    /// name just because a depth-first search reaches it before the real
+    /// leaf sitting later in the tree.
+    #[test]
+    fn validate_param_overrides_skips_a_leaf_under_an_interactive_group() {
+        use crate::orb_config::{OrbConfig, ParamOverride, SubcommandConfig};
+
+        let excluded_nested = help_parser::types::SubCommand {
+            name: "release".to_string(),
+            description: String::new(),
+            short_about: String::new(),
+            is_leaf: true,
+            parameters: vec![param("retries", ParamType::Integer)],
+            subcommands: vec![],
+        };
+        let real_root = help_parser::types::SubCommand {
+            name: "release".to_string(),
+            description: String::new(),
+            short_about: String::new(),
+            is_leaf: true,
+            parameters: vec![param("retries", ParamType::String)],
+            subcommands: vec![],
+        };
+        let cli = help_parser::types::CliDefinition {
+            binary_name: "demo".to_string(),
+            description: String::new(),
+            subcommands: vec![
+                // The interactive group comes FIRST, so a depth-first search
+                // reaches its excluded nested "release" before the real root
+                // one — required to actually exercise the fallback bug
+                // rather than incidentally matching the real leaf first.
+                help_parser::types::SubCommand {
+                    name: "ci".to_string(),
+                    description: String::new(),
+                    short_about: String::new(),
+                    is_leaf: false,
+                    parameters: vec![],
+                    subcommands: vec![excluded_nested],
+                },
+                real_root,
+            ],
+        };
+
+        let mut overrides = IndexMap::new();
+        overrides.insert(
+            "retries".to_string(),
+            ParamOverride {
+                default: Some("abc".to_string()),
+                orb_name: None,
+            },
+        );
+        let mut subcommands = IndexMap::new();
+        subcommands.insert(
+            "ci".to_string(),
+            SubcommandConfig {
+                interactive: Some(true),
+                ..SubcommandConfig::default()
+            },
+        );
+        subcommands.insert(
+            "release".to_string(),
+            SubcommandConfig {
+                param: Some(overrides),
+                ..SubcommandConfig::default()
+            },
+        );
+        let config = OrbConfig {
+            subcommand: Some(subcommands),
+            ..OrbConfig::default()
+        };
+
+        let effective_names = orb_generator::render::compute_effective_names(&cli, Some(&config));
+        let result = validate_param_overrides(&cli, &config, &effective_names);
+        assert!(
+            result.is_ok(),
+            "'abc' is a valid String default for the real root release's \
+             'retries' — the override must resolve there, not spuriously \
+             fail against the excluded ci.release's Integer 'retries': \
+             {result:?}"
+        );
     }
 
     #[test]
@@ -2769,7 +2973,12 @@ mod tests {
             }],
         };
         let config = config_with_override("release", "retries", "not-a-number");
-        let err = validate_param_overrides(&cli, &config).unwrap_err();
+        let err = validate_param_overrides(
+            &cli,
+            &config,
+            &orb_generator::render::compute_effective_names(&cli, None),
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("retries"), "got: {err}");
     }
 

@@ -805,10 +805,15 @@ fn render_job(
 ) -> String {
     let mut parameters = build_orb_parameters(sub, RESERVED_JOB_PARAMS, config);
 
-    // Apply param default overrides from config
+    // Apply param default overrides from config. Keyed by `effective_name`,
+    // not `sub.name` — for a colliding leaf, that's the SAME qualified name
+    // its own files are rendered under (`is_job_suppressed`/
+    // `resolve_run_step_name`'s pattern, #416); looking this up by bare
+    // `sub.name` would apply one config section's override to every
+    // occurrence sharing that bare name (gen-circleci-orb#418).
     if let Some(param_overrides) = config
         .and_then(|c| c.subcommand.as_ref())
-        .and_then(|sc| sc.get(&sub.name))
+        .and_then(|sc| sc.get(effective_name))
         .and_then(|sc_config| sc_config.param.as_ref())
     {
         for (param_name, override_) in param_overrides {
