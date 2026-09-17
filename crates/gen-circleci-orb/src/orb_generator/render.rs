@@ -309,6 +309,28 @@ fn is_job_suppressed(config: Option<&OrbConfig>, name: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// The CLI flag name `[subcommand.<name>] hardcode_check = true` bakes in as
+/// a literal, unconditional flag instead of a forwarded parameter (#350).
+const HARDCODED_CHECK_PARAM: &str = "check";
+
+fn is_hardcode_check(config: Option<&OrbConfig>, name: &str) -> bool {
+    config
+        .and_then(|c| c.subcommand.as_ref())
+        .and_then(|sc| sc.get(name))
+        .and_then(|sc_config| sc_config.hardcode_check)
+        .unwrap_or(false)
+}
+
+/// Whether `p` is `sub`'s own `check` flag with `hardcode_check` set for
+/// `sub` — the one param that must never appear as a forwarded orb
+/// parameter (command or job), only as a literal baked into the generated
+/// script (gen-circleci-orb#350). Mirrors `check_ci_wiring`'s existing
+/// safety property (`build_check_ci_wiring_step`, orb-producing jobs only)
+/// for any subcommand with its own genuine `--check`-shaped flag.
+fn is_hardcoded_check_param(sub: &SubCommand, p: &Parameter, config: Option<&OrbConfig>) -> bool {
+    p.long_name == HARDCODED_CHECK_PARAM && is_hardcode_check(config, &sub.name)
+}
+
 /// Subcommands that are interactive (CLI-only) by default, unless the consumer
 /// opts them back in with `[subcommand.<name>] interactive = false`. `help` is
 /// not listed here — it is reserved earlier, at the `--help` parser.
@@ -606,6 +628,9 @@ fn build_boolean_flag_env_steps(
         if !matches!(p.param_type, ParamType::Boolean) {
             continue;
         }
+        if is_hardcoded_check_param(sub, p, config) {
+            continue;
+        }
         let orb_name = resolve_param_orb_name(&sub.name, &p.long_name, config);
         let env_var = env_var_name(&orb_name);
 
@@ -700,6 +725,9 @@ fn build_command_orb_parameters(
 ) -> IndexMap<String, OrbParameter> {
     let mut params = IndexMap::new();
     for p in &sub.parameters {
+        if is_hardcoded_check_param(sub, p, config) {
+            continue;
+        }
         let orb_name = resolve_param_orb_name(&sub.name, &p.long_name, config);
         let (type_str, enum_vals) = match &p.param_type {
             ParamType::String => ("string".to_string(), None),
@@ -747,6 +775,15 @@ fn render_command_script_content(
         .partition(|p| p.kind == ParamKind::Positional);
 
     for p in options.into_iter().chain(positionals) {
+        if is_hardcoded_check_param(sub, p, config) {
+            // Baked in as a literal, unconditional flag -- never read from a
+            // consumer-settable env var (gen-circleci-orb#350).
+            lines.push(format!(
+                r#"set -- "$@" --{}"#,
+                p.long_name.replace('_', "-")
+            ));
+            continue;
+        }
         let orb_name = resolve_param_orb_name(&sub.name, &p.long_name, config);
         let env_var = env_var_name(&orb_name);
         // A positional is passed bare; a short-only option by its short flag,
@@ -1303,6 +1340,9 @@ fn resolve_job_param_key(
     skip: &[&str],
     config: Option<&OrbConfig>,
 ) -> Option<String> {
+    if is_hardcoded_check_param(sub, p, config) {
+        return None;
+    }
     if skip.contains(&p.long_name.as_str()) {
         if RESTRICTED_COMMAND_PARAMS.contains(&p.long_name.as_str()) {
             Some(resolve_param_orb_name(&sub.name, &p.long_name, config))
@@ -6769,6 +6809,84 @@ mod tests {
         assert!(
             files.contains_key(&PathBuf::from("src/jobs/ensure-registered.yml")),
             "extra_job with hyphenated name must use hyphen in filename"
+        );
+    }
+
+    // ── hardcode_check: generalized check-only baked-in flag (#350) ──────────
+
+    fn check_param() -> Parameter {
+        Parameter {
+            long_name: "check".to_string(),
+            short: None,
+            param_type: ParamType::Boolean,
+            default: None,
+            required: false,
+            description: "Check only, do not write.".to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn hardcode_check_bakes_the_flag_in_and_drops_the_parameter() {
+        let sub = make_leaf("wire-ci", vec![check_param()]);
+        let cli = make_cli("mytool", vec![sub]);
+        let config = config_with_subcommand(
+            "wire-ci",
+            crate::orb_config::SubcommandConfig {
+                hardcode_check: Some(true),
+                ..crate::orb_config::SubcommandConfig::default()
+            },
+        );
+        let files = generate(&cli, &default_opts(), Some(&config));
+
+        let command = &files[&PathBuf::from("src/commands/wire_ci.yml")];
+        assert!(
+            !command.contains("check:"),
+            "hardcode_check must drop 'check' as a forwarded command \
+             parameter entirely:\n{command}"
+        );
+
+        let script = &files[&PathBuf::from("src/scripts/wire_ci.sh")];
+        assert!(
+            script.contains("set -- \"$@\" --check"),
+            "hardcode_check must bake '--check' into the script as a \
+             literal, unconditional flag:\n{script}"
+        );
+        assert!(
+            !script.contains("GCO_CHECK"),
+            "a baked-in flag must not also read an env var (that would \
+             make it consumer-controlled again):\n{script}"
+        );
+
+        let job = &files[&PathBuf::from("src/jobs/wire_ci.yml")];
+        assert!(
+            !job.contains("check:"),
+            "hardcode_check must drop 'check' as a forwarded job parameter \
+             too:\n{job}"
+        );
+    }
+
+    #[test]
+    fn hardcode_check_false_leaves_check_as_a_normal_forwarded_param() {
+        // Regression: without hardcode_check, a `check` flag behaves like any
+        // other boolean parameter — forwarded, consumer-settable, read via
+        // its own env var.
+        let sub = make_leaf("wire-ci", vec![check_param()]);
+        let cli = make_cli("mytool", vec![sub]);
+        let files = generate(&cli, &default_opts(), None);
+
+        let command = &files[&PathBuf::from("src/commands/wire_ci.yml")];
+        assert!(
+            command.contains("check:"),
+            "without hardcode_check, 'check' must remain a normal forwarded \
+             parameter:\n{command}"
+        );
+
+        let script = &files[&PathBuf::from("src/scripts/wire_ci.sh")];
+        assert!(
+            script.contains("GCO_CHECK"),
+            "without hardcode_check, 'check' must be read via its own env \
+             var like any other boolean flag:\n{script}"
         );
     }
 }

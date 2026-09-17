@@ -330,6 +330,15 @@ pub struct SubcommandConfig {
     /// heuristic — a CLI whose `--verbose`/`--quiet` mean something other
     /// than clap-verbosity-flag's linked counter pair can opt out here.
     pub merge_verbosity: Option<bool>,
+    /// When true, this subcommand's own `check` boolean flag is baked into
+    /// its generated script as a literal, unconditional `--check` — never
+    /// exposed as a forwarded orb parameter on either the command or the
+    /// job. Mirrors the safety property `check_ci_wiring`
+    /// (`build_check_ci_wiring_step`) already gives every orb-producing
+    /// job's own `update --check` invocation: a check-only flag baked in
+    /// this way can never be silently dropped or overridden by a consumer,
+    /// because it isn't consumer-controlled at all (gen-circleci-orb#350).
+    pub hardcode_check: Option<bool>,
 }
 
 #[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq)]

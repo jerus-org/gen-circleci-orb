@@ -421,6 +421,25 @@ $ PATH="$PWD/target/debug:$PATH" cargo run --bin gen-circleci-orb -- generate \
     --binary fixture-cli-param-collision --orb-namespace jerus-org
 ```
 
+### Bake in a check-only flag
+
+If a subcommand has its own genuine `--check` boolean flag (e.g. a `wire-ci` command that patches a
+consumer's CI config, gated behind a dry-run check), `hardcode_check = true` bakes `--check` into
+the generated script as a literal, unconditional flag — never a forwarded orb parameter on the
+command or the job:
+
+```toml
+[subcommand.wire-ci]
+hardcode_check = true
+```
+
+This mirrors the safety property every orb-producing job's own `check_ci_wiring` toggle already has
+for `gen-circleci-orb update --check` (a hardcoded step, not a consumer-forwardable one): the flag
+can never be silently dropped by a param-override bug, coerced to the wrong type, or left unset by a
+consumer who forgot to pass it — because it isn't consumer-controlled at all. Use this for a
+subcommand where accidentally running the write path in CI (instead of the intended check-only
+path) would be unsafe.
+
 ### Pin extra orbs
 
 ```toml
