@@ -787,38 +787,31 @@ fn find_subcommand<'a>(
 // rejected. See that function's doc comment for the rationale.
 
 /// Detects two of a subcommand's own parameters resolving to the same
-/// orb-facing key (`orb_generator::render::resolve_param_orb_name`) — e.g. a
-/// restricted `--name` (auto-renamed to `generate_name`) colliding with an
-/// unrelated, genuinely-named `--generate-name` flag on the same subcommand.
+/// orb-facing key (see `resolve_param_orb_name` in `orb_generator::render`).
 ///
-/// This is NOT two CLI options sharing one name — clap itself would never
-/// accept that on a single command, and this check doesn't need to guard
-/// against it. `--name` and `--generate-name` are two genuinely distinct,
-/// individually valid flags; the collision only exists because
-/// gen-circleci-orb's OWN restricted-param rename (`resolve_command_param_name`)
-/// happens to transform the first into the same string the second already
-/// is. Neither the CLI author nor clap ever sees this — it's purely an
-/// artifact of this generator's own naming scheme, introduced by the rename
-/// gen-circleci-orb#369 added to work around CircleCI's restricted-parameter
-/// rejection of a literal `name` key.
+/// ## Why this can happen
 ///
-/// Unlike #358 (colliding SUBCOMMAND names, fixed by automatic qualification
-/// by path), there's no automatic disambiguation for a param-key collision
-/// within a single subcommand — a `long_name`/`long_name` pair can't be
-/// distinguished by "path", both belong to the same subcommand. The error
-/// message points at the `orb_name` override
-/// (`[subcommand.<name>.param.<flag>] orb_name = "..."`) as the fix — always
-/// available via `gen-circleci-orb.toml`, even for a CLI the consumer
-/// doesn't control (gen-circleci-orb#412; see #358's reviewer pushback for
-/// why "force a CLI redesign" would be the wrong shape here). Since the
-/// rename that CREATES the collision is gen-circleci-orb's own
-/// restricted-param rename, not anything about the genuinely-named flag,
-/// prefer overriding the RESTRICTED param's own key (`param.name`) — that
-/// changes only the one thing that needed to change for CircleCI's sake, and
-/// leaves the genuinely-named flag's natural derived key untouched. See
-/// `docs/configuration-guide.md`'s "Rename a parameter's orb-facing key"
-/// section and the `fixture-cli-param-collision` integration test for a
-/// worked example.
+/// Not two CLI options sharing one name — clap would reject that outright.
+/// `--name` and `--generate-name` are both valid, individually distinct
+/// flags; the collision is an artifact of gen-circleci-orb's own
+/// restricted-param rename, which can transform `--name`'s orb key into a
+/// string `--generate-name`'s own normalized name already is. Neither clap
+/// nor the CLI author ever sees this.
+///
+/// ## Fix
+///
+/// Give the colliding param an explicit key:
+///
+/// ```toml
+/// [subcommand.<name>.param.<flag>]
+/// orb_name = "..."
+/// ```
+///
+/// Prefer overriding the RESTRICTED param (usually `name`) rather than the
+/// unrelated flag — it's the one whose rename created the collision, so
+/// that's the one change actually needed. See `docs/configuration-guide.md`'s
+/// "Rename a parameter's orb-facing key" and the `fixture-cli-param-collision`
+/// fixture for a worked example (gen-circleci-orb#412).
 pub(crate) fn validate_param_key_collisions(
     cli_def: &help_parser::types::CliDefinition,
     config: &orb_config::OrbConfig,
