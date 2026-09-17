@@ -95,8 +95,8 @@ Docker image:
           (repeatable).
           
           Combined with the baseline packages (ca-certificates, git) and
-          sorted alphanumerically. Example: --apt-packages libssl-dev
-          --apt-packages pkg-config
+          sorted alphanumerically. Pass the flag once per package to add
+          more than one.
 
       --cargo-tool <CARGO_TOOLS>
           Extra cargo tool(s) to install into the executor image
@@ -105,8 +105,8 @@ Docker image:
           Each is a crate name installed via cargo-binstall in the builder
           stage, with its binary copied into the runtime, or "crate:binary"
           when the installed binary name differs from the crate name.
-          Binstall install method only. Example: --cargo-tool cargo-audit
-          --cargo-tool rsign2:rsign
+          Binstall install method only. Pass the flag once per tool to add
+          more than one.
 
 Behavior:
       --git-push-subcommand <GIT_PUSH_SUBCOMMANDS>

@@ -142,7 +142,7 @@ pub struct Generate {
     /// Extra apt package(s) to install in the final Docker image stage (repeatable).
     ///
     /// Combined with the baseline packages (ca-certificates, git) and sorted
-    /// alphanumerically. Example: --apt-packages libssl-dev --apt-packages pkg-config
+    /// alphanumerically. Pass the flag once per package to add more than one.
     #[arg(long = "apt-packages", help_heading = "Docker image")]
     pub apt_packages: Vec<String>,
 
@@ -151,8 +151,7 @@ pub struct Generate {
     /// Each is a crate name installed via cargo-binstall in the builder stage,
     /// with its binary copied into the runtime, or "crate:binary" when the
     /// installed binary name differs from the crate name. Binstall install
-    /// method only.
-    /// Example: --cargo-tool cargo-audit --cargo-tool rsign2:rsign
+    /// method only. Pass the flag once per tool to add more than one.
     #[arg(long = "cargo-tool", help_heading = "Docker image")]
     pub cargo_tools: Vec<String>,
 
