@@ -18,7 +18,9 @@ Options:
           [default: .circleci]
 
       --check
-          Verify mode: write nothing and exit non-zero (with a diff and guidance) when the CI wiring is out of date. For use in CI
+          Verify mode: write nothing and exit non-zero when the CI wiring is out of date.
+          
+          Prints a diff and upgrade guidance. For use in CI.
 
   -h, --help
           Print help (see a summary with '-h')

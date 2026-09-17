@@ -24,8 +24,9 @@ pub struct Update {
     #[arg(long, default_value = ".circleci")]
     pub ci_dir: PathBuf,
 
-    /// Verify mode: write nothing and exit non-zero (with a diff and guidance)
-    /// when the CI wiring is out of date. For use in CI.
+    /// Verify mode: write nothing and exit non-zero when the CI wiring is out of date.
+    ///
+    /// Prints a diff and upgrade guidance. For use in CI.
     #[arg(long)]
     pub check: bool,
 }

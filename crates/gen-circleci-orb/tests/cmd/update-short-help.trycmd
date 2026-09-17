@@ -7,7 +7,7 @@ Usage: gen-circleci-orb update [OPTIONS]
 Options:
       --config <CONFIG>  Path to gen-circleci-orb.toml [default: gen-circleci-orb.toml]
       --ci-dir <CI_DIR>  Path to the .circleci/ directory [default: .circleci]
-      --check            Verify mode: write nothing and exit non-zero (with a diff and guidance) when the CI wiring is out of date. For use in CI
+      --check            Verify mode: write nothing and exit non-zero when the CI wiring is out of date
   -h, --help             Print help (see more with '--help')
 
 ```

@@ -132,4 +132,60 @@ mod tests {
             "top-level long_about must be set and differ from about (about: {about:?})"
         );
     }
+
+    /// gen-circleci-orb#410 (review): a flag's own `-h` text must be a real
+    /// single, short sentence — not the whole multi-sentence doc comment
+    /// merged into one paragraph. A doc comment split across consecutive
+    /// `///` lines with NO blank line between them is still ONE clap
+    /// paragraph: `get_help()` (short) returns the whole thing verbatim
+    /// (clap only re-wraps it for display), so checking for an embedded
+    /// `\n` catches nothing — the merge is invisible at the string level,
+    /// only visible as "too many sentences in one 'line'" once rendered.
+    /// Flags a short help containing a `. ` sentence boundary (a second
+    /// sentence that should have been split into `--help`-only long help),
+    /// excluding the abbreviations actually used in this codebase's doc
+    /// comments (`e.g.`, `i.e.`) which are not sentence boundaries.
+    #[test]
+    fn every_flags_short_help_is_one_sentence() {
+        let cmd = Cli::command();
+        let mut violations = Vec::new();
+        check_command_args(&cmd, "gen-circleci-orb", &mut violations);
+        assert!(
+            violations.is_empty(),
+            "flags whose short help ('-h') looks like more than one sentence \
+             merged together (move the rest into --help-only long help via a \
+             blank-line-separated second paragraph):\n{}",
+            violations.join("\n")
+        );
+    }
+
+    fn has_a_second_sentence(help: &str) -> bool {
+        const ABBREVIATIONS: &[&str] = &["e.g", "i.e", "etc"];
+        let mut rest = help;
+        while let Some(idx) = rest.find(". ") {
+            let before = &rest[..idx];
+            if !ABBREVIATIONS.iter().any(|a| before.ends_with(a)) {
+                return true;
+            }
+            rest = &rest[idx + 2..];
+        }
+        false
+    }
+
+    fn check_command_args(cmd: &clap::Command, path: &str, violations: &mut Vec<String>) {
+        for arg in cmd.get_arguments() {
+            if let Some(help) = arg.get_help() {
+                let help = help.to_string();
+                if has_a_second_sentence(&help) {
+                    violations.push(format!(
+                        "{path} --{}: {help:?}",
+                        arg.get_long().unwrap_or(arg.get_id().as_str())
+                    ));
+                }
+            }
+        }
+        for sub in cmd.get_subcommands() {
+            check_command_args(sub, &format!("{path} {}", sub.get_name()), violations);
+        }
+    }
 }
