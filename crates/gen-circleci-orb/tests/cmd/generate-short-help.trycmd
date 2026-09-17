@@ -1,0 +1,45 @@
+```
+$ gen-circleci-orb generate -h
+Generate orb source files from a CLI binary's --help output
+
+Usage: gen-circleci-orb generate [OPTIONS]
+
+Options:
+  -h, --help  Print help (see more with '--help')
+
+Source:
+      --binary <BINARY>  Name of the binary to introspect (must be on PATH). Falls back to `binary` in the `[orb]` section of gen-circleci-orb.toml
+      --config <CONFIG>  Path to gen-circleci-orb.toml config file. Defaults to `<output>/gen-circleci-orb.toml` when not specified
+
+Output:
+      --output <OUTPUT>             Project root directory (orb source is written to `<output>/<orb-dir>/`) [default: .]
+      --orb-dir <ORB_DIR>           Subdirectory within --output where orb source is written. Falls back to `orb_dir` in the `[orb]` section of gen-circleci-orb.toml, then "orb"
+      --orb-namespace <NAMESPACES>  CircleCI orb namespace(s) to publish the orb under (repeatable). Falls back to `namespaces` in the `[orb]` section of gen-circleci-orb.toml
+      --home-url <HOME_URL>         Home URL for the orb registry display section. Falls back to `home_url` in the `[orb]` section of gen-circleci-orb.toml
+      --source-url <SOURCE_URL>     Source URL for the orb registry display section. Falls back to `source_url` in the `[orb]` section of gen-circleci-orb.toml
+
+Docker image:
+      --install-method <INSTALL_METHOD>
+          How the binary is installed in the generated Docker image. Falls back to `install_method` in the `[orb]` section of gen-circleci-orb.toml, then "binstall" [possible values: binstall, apt, local]
+      --base-image <BASE_IMAGE>
+          Base Docker image for the generated executor. Falls back to `base_image` in the `[orb]` section of gen-circleci-orb.toml, then "debian:13-slim"
+      --circleci-cli-version <CIRCLECI_CLI_VERSION>
+          circleci-cli version to install in the generated Docker image executor (overrides `[orb].circleci_cli_version` and the built-in default)
+      --apt-packages <APT_PACKAGES>
+          Extra apt package(s) to install in the final Docker image stage (repeatable). Combined with the baseline packages (ca-certificates, git) and sorted alphanumerically. Example: --apt-packages libssl-dev --apt-packages pkg-config
+      --cargo-tool <CARGO_TOOLS>
+          Extra cargo tool(s) to install into the executor image (repeatable). Each is a crate name installed via cargo-binstall in the builder stage, with its binary copied into the runtime, or "crate:binary" when the installed binary name differs from the crate name. Binstall install method only. Example: --cargo-tool cargo-audit --cargo-tool rsign2:rsign
+
+Behavior:
+      --git-push-subcommand <GIT_PUSH_SUBCOMMANDS>
+          Subcommand name(s) whose generated jobs should include a set_https_remote step (repeatable). Use for subcommands that push to git, e.g. --git-push-subcommand save
+      --dry-run
+          Show planned output without writing any files
+      --no-record
+          Suppress auto-record for this run, even when `[record].enabled = true` in gen-circleci-orb.toml. Auto-record commits the regenerated orb source back to the current branch (GPG-signed) and pushes it, so the published orb always reflects the CLI. Whether to record, and the names of the env vars holding the signing material, are config-driven (the `[record]` section). Use this flag for local, test, and dry runs where no signing material is available
+      --check
+          Verify mode: regenerate the orb and compare it to the committed files, writing nothing and never recording. Exits non-zero if any file would be created, updated, or removed — i.e. the committed orb is out of sync with the CLI. Use this to gate packing/publishing so a drifted or hand-edited orb is never published
+      --allow-main-record
+          Allow auto-record to push to `main`. A narrow, explicit relaxation of the default main-exclusion (see `should_record_on_branch`) — only for the post-merge-regen chain (gen-circleci-orb#328), which has already switched CIRCLE_BRANCH onto `main` itself via `--target-branch`. Never set this for an ordinary `generate --record` run
+
+```
