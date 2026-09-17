@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - deps: update dependency gen-circleci-orb to v0.1.21(pr [#406])
 - deps: update dependency circleci-public/circleci-cli to v1.0.50624(pr [#420])
 - resolve renamed param-key collisions (#412)(pr [#421])
+- rename restricted params in job groups (#413)(pr [#424])
 
 ## [0.1.21] - 2026-09-16
 
@@ -1181,6 +1182,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#406]: https://github.com/jerus-org/gen-circleci-orb/pull/406
 [#420]: https://github.com/jerus-org/gen-circleci-orb/pull/420
 [#421]: https://github.com/jerus-org/gen-circleci-orb/pull/421
+[#424]: https://github.com/jerus-org/gen-circleci-orb/pull/424
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.21...HEAD
 [0.1.21]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.20...v0.1.21
 [0.1.20]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.19...v0.1.20
