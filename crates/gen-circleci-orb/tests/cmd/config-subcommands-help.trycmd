@@ -1,0 +1,73 @@
+```
+$ gen-circleci-orb config show --help
+Print the current configuration
+
+Usage: gen-circleci-orb config show
+
+Options:
+  -h, --help  Print help
+
+```
+
+```
+$ gen-circleci-orb config suppress --help
+Suppress job generation for a subcommand (generate_job = false)
+
+Usage: gen-circleci-orb config suppress <SUBCOMMAND>
+
+Arguments:
+  <SUBCOMMAND>  Subcommand name to suppress
+
+Options:
+  -h, --help  Print help
+
+```
+
+```
+$ gen-circleci-orb config unsuppress --help
+Re-enable job generation for a previously suppressed subcommand
+
+Usage: gen-circleci-orb config unsuppress <SUBCOMMAND>
+
+Arguments:
+  <SUBCOMMAND>  Subcommand name to unsuppress
+
+Options:
+  -h, --help  Print help
+
+```
+
+```
+$ gen-circleci-orb config add-job-group --help
+Append a composed job group
+
+Usage: gen-circleci-orb config add-job-group [OPTIONS] --name <NAME>
+
+Options:
+      --name <NAME>
+          Name of the new job group
+      --steps <STEPS>
+          Comma-separated list of subcommand step names
+      --description <DESCRIPTION>
+          Optional description for the job group
+      --params <PARAMS>
+          Comma-separated explicit parameter list (omit for auto-detected
+          shared params)
+  -h, --help
+          Print help
+
+```
+
+```
+$ gen-circleci-orb config set-default --help
+Set or update a parameter default override for a subcommand
+
+Usage: gen-circleci-orb config set-default --subcommand <SUBCOMMAND> --param <PARAM> --default <DEFAULT>
+
+Options:
+      --subcommand <SUBCOMMAND>  Subcommand name
+      --param <PARAM>            Parameter name
+      --default <DEFAULT>        New default value
+  -h, --help                     Print help
+
+```

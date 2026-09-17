@@ -290,178 +290,209 @@ pub(crate) fn detect_git_push_subcommands(cli: &CliDefinition) -> Vec<String> {
 #[derive(Debug, clap::Args)]
 pub struct Init {
     /// Name of the binary to introspect (must be on PATH).
+    ///
     /// Falls back to `[orb] binary` in the config; prompted for if neither is set.
-    #[arg(long)]
+    #[arg(long, help_heading = "Source")]
     pub binary: Option<String>,
 
     /// CircleCI namespace(s) to publish the orb under as a public orb (repeatable).
+    ///
     /// Must be set correctly on first init — visibility cannot be changed after the orb is created.
-    #[arg(long = "public-orb-namespace")]
+    #[arg(long = "public-orb-namespace", help_heading = "Orb publishing")]
     pub public_orb_namespaces: Vec<String>,
 
     /// CircleCI namespace(s) to publish the orb under as a private orb (repeatable).
+    ///
     /// Each listed namespace gets `--private` in its `circleci orb create` command.
     /// Must be set correctly on first init — visibility cannot be changed after the orb is created.
-    #[arg(long = "private-orb-namespace")]
+    #[arg(long = "private-orb-namespace", help_heading = "Orb publishing")]
     pub private_orb_namespaces: Vec<String>,
 
     /// Name of the build/validation workflow to patch.
+    ///
     /// Falls back to `[ci] build_workflow` in the config; prompted for if neither is set.
-    #[arg(long)]
+    #[arg(long, help_heading = "CI workflow wiring")]
     pub build_workflow: Option<String>,
 
     /// Name of the release workflow to patch.
+    ///
     /// Falls back to `[ci] release_workflow` in the config; prompted for if neither is set.
-    #[arg(long)]
+    #[arg(long, help_heading = "CI workflow wiring")]
     pub release_workflow: Option<String>,
 
     /// Job in the build workflow that regenerate-orb should require.
-    #[arg(long)]
+    #[arg(long, help_heading = "CI workflow wiring")]
     pub requires_job: Option<String>,
 
     /// Tag prefix used by `toolkit/release_crate` for the crate (e.g. `gen-orb-mcp-v`).
+    ///
     /// Used to filter the `orb-release:` workflow trigger in config.yml and to normalise
     /// `CIRCLE_TAG` for `orb-tools/publish`.
     /// Falls back to `[ci] crate_tag_prefix` in the config; prompted for if neither is set.
-    #[arg(long)]
+    #[arg(long, help_heading = "CI workflow wiring")]
     pub crate_tag_prefix: Option<String>,
 
-    /// Job in the release workflow after which the generated release jobs
+    /// Job in the release workflow after which the generated release jobs should be gated.
+    ///
     /// (build-binary-release, pack-orb-release, build-container, ensure-orb-registered)
-    /// should be gated. This is the sole mechanism for specifying where the generated
+    /// This is the sole mechanism for specifying where the generated
     /// jobs plug into the existing pipeline topology.
     /// Falls back to `[ci] release_after_job` in the config; prompted for if neither is set.
-    #[arg(long)]
+    #[arg(long, help_heading = "CI workflow wiring")]
     pub release_after_job: Option<String>,
 
     /// Output directory for the generated orb source (relative to repo root).
+    ///
     /// Falls back to `[orb] orb_dir` in the config; prompted for if neither is set.
     #[arg(long)]
     pub orb_dir: Option<String>,
 
     /// How the generated Dockerfile obtains the binary: `binstall`, `apt` or `local`.
+    ///
     /// Falls back to `[orb] install_method` in the config; prompted for if neither is set.
-    #[arg(long)]
+    #[arg(long, help_heading = "Docker image")]
     pub install_method: Option<String>,
 
     /// Runtime stage image for the generated Dockerfile.
+    ///
     /// Falls back to `[orb] base_image` in the config; prompted for if neither is set.
-    #[arg(long)]
+    #[arg(long, help_heading = "Docker image")]
     pub base_image: Option<String>,
 
     /// Image for the Rust `builder` stage that installs the binary.
+    ///
     /// Falls back to `[orb] builder_image` in the config; prompted for if neither is set.
-    #[arg(long)]
+    #[arg(long, help_heading = "Docker image")]
     pub builder_image: Option<String>,
 
-    /// circleci-cli version to bundle into the generated image. Only needed for a
+    /// circleci-cli version to bundle into the generated image.
+    ///
+    /// Only needed for a
     /// binary that shells out to `circleci`; empty records nothing and bundles no CLI.
     /// Falls back to `[orb] circleci_cli_version` in the config.
-    #[arg(long)]
+    #[arg(long, help_heading = "Docker image")]
     pub circleci_cli_version: Option<String>,
 
     /// Path to the .circleci/ directory.
-    #[arg(long, default_value = ".circleci")]
+    #[arg(long, default_value = ".circleci", help_heading = "CI workflow wiring")]
     pub ci_dir: PathBuf,
 
     /// circleci/orb-tools version to pin in generated CI.
-    #[arg(long, default_value = "12.3.3")]
+    #[arg(long, default_value = "12.3.3", help_heading = "Orb publishing")]
     pub orb_tools_version: String,
 
     /// circleci/docker orb version to pin in generated CI.
-    #[arg(long, default_value = DEFAULT_DOCKER_ORB_VERSION)]
+    #[arg(long, default_value = DEFAULT_DOCKER_ORB_VERSION, help_heading = "Docker image")]
     pub docker_orb_version: String,
 
     /// Docker Hub (or registry) namespace for the built container image.
+    ///
     /// Falls back to `[ci] docker_namespace` in the config; prompted for if neither is set.
-    #[arg(long)]
+    #[arg(long, help_heading = "Docker image")]
     pub docker_namespace: Option<String>,
 
     /// CircleCI context name holding Docker Hub credentials (DOCKER_LOGIN, DOCKER_PASSWORD).
+    ///
     /// Prompted interactively if not supplied.
-    #[arg(long)]
+    #[arg(long, help_heading = "Docker image")]
     pub docker_context: Option<String>,
 
     /// CircleCI context name holding orb publishing credentials (CIRCLE_TOKEN).
+    ///
     /// Prompted interactively if not supplied.
-    #[arg(long)]
+    #[arg(long, help_heading = "Orb publishing")]
     pub orb_context: Option<String>,
 
     /// Version of the jerus-org/gen-circleci-orb orb to pin in generated CI.
+    ///
     /// Defaults to the version of this binary (orb and crate are released together).
-    #[arg(long, default_value = env!("CARGO_PKG_VERSION"))]
+    #[arg(long, default_value = env!("CARGO_PKG_VERSION"), help_heading = "Orb publishing")]
     pub gen_circleci_orb_version: String,
 
     /// Wire in gen-orb-mcp MCP server generation + publish after orb publish.
-    #[arg(long)]
+    #[arg(long, help_heading = "MCP server")]
     pub mcp: bool,
 
     /// Earliest orb version to include when priming prior-version snapshots.
+    ///
     /// Passed to gen-circleci-orb/build_mcp_server as `earliest_version`.
     /// Only used when --mcp is enabled. Prompted interactively if not supplied.
-    #[arg(long)]
+    #[arg(long, help_heading = "MCP server")]
     pub mcp_earliest_version: Option<String>,
 
     /// CircleCI context name(s) for MCP server build + publish + save steps (repeatable or comma-separated).
+    ///
     /// Needs: GITHUB_TOKEN (GitHub App token, contents:write + bypass branch protection),
     /// BOT_GPG_KEY, BOT_TRUST, BOT_USER_NAME, BOT_USER_EMAIL, BOT_SIGN_KEY.
     /// Only used when --mcp is enabled. Prompted interactively if not supplied.
-    #[arg(long = "mcp-context", value_delimiter = ',')]
+    #[arg(
+        long = "mcp-context",
+        value_delimiter = ',',
+        help_heading = "MCP server"
+    )]
     pub mcp_context: Vec<String>,
 
-    /// Subcommand names whose generated jobs should include a `set_https_remote` step
-    /// (repeatable). Use for subcommands that push to git (e.g. `save`).
-    #[arg(long, value_delimiter = ',')]
+    /// Subcommand names whose generated jobs should include a `set_https_remote` step (repeatable).
+    ///
+    /// Use for subcommands that push to git (e.g. `save`).
+    #[arg(long, value_delimiter = ',', help_heading = "CI workflow wiring")]
     pub git_push_subcommands: Vec<String>,
 
     /// Home URL for the orb (shown in the CircleCI registry).
-    #[arg(long)]
+    #[arg(long, help_heading = "Orb publishing")]
     pub home_url: Option<String>,
 
     /// Source URL for the orb (shown in the CircleCI registry).
-    #[arg(long)]
+    #[arg(long, help_heading = "Orb publishing")]
     pub source_url: Option<String>,
 
-    /// Enable auto-record: after `generate`, the regenerate-orb CI job commits the
+    /// Enable auto-record: commit the regenerated orb source back after `generate`.
+    ///
+    /// The regenerate-orb CI job commits the
     /// regenerated orb source back (GPG-signed) and pushes it, so the published orb
     /// always reflects the CLI. When set, the `--record-*-env` flags name the
     /// environment variables that hold the GPG signing material at runtime (no
     /// defaults — they must be supplied). Prompted interactively if not set.
-    #[arg(long)]
+    #[arg(long, help_heading = "Auto-record")]
     pub record: bool,
 
     /// Name of the env var holding the base64-encoded GPG private key (auto-record).
-    #[arg(long)]
+    #[arg(long, help_heading = "Auto-record")]
     pub record_gpg_key_env: Option<String>,
 
     /// Name of the env var holding the GPG ownertrust export (auto-record).
-    #[arg(long)]
+    #[arg(long, help_heading = "Auto-record")]
     pub record_gpg_trust_env: Option<String>,
 
     /// Name of the env var holding the committer name (auto-record).
-    #[arg(long)]
+    #[arg(long, help_heading = "Auto-record")]
     pub record_user_name_env: Option<String>,
 
     /// Name of the env var holding the committer email (auto-record).
-    #[arg(long)]
+    #[arg(long, help_heading = "Auto-record")]
     pub record_user_email_env: Option<String>,
 
     /// Name of the env var holding the GPG signing key id (auto-record).
-    #[arg(long)]
+    #[arg(long, help_heading = "Auto-record")]
     pub record_signing_key_env: Option<String>,
 
-    /// SSH key fingerprint (a public-key hash, not a secret) for the
-    /// end-of-workflow push job (auto-record). Optional: when set, the push job
+    /// SSH key fingerprint (a public-key hash, not a secret) for the end-of-workflow push job (auto-record).
+    ///
+    /// Optional: when set, the push job
     /// loads this write key and drops the read-only checkout key; empty falls back
     /// to ambient credentials. A value, not an env-var name — add_ssh_keys resolves
     /// fingerprints at config-compile time and cannot read env vars.
-    #[arg(long)]
+    #[arg(long, help_heading = "Auto-record")]
     pub record_push_ssh_fingerprint: Option<String>,
 
-    /// CircleCI context(s) that supply the auto-record env-var values
-    /// (GPG signing material), repeatable or comma-separated.
+    /// CircleCI context(s) that supply the auto-record env-var values (GPG signing material), repeatable or comma-separated.
+    ///
     /// The record CI job attaches these.
-    #[arg(long = "record-context", value_delimiter = ',')]
+    #[arg(
+        long = "record-context",
+        value_delimiter = ',',
+        help_heading = "Auto-record"
+    )]
     pub record_contexts: Vec<String>,
 
     /// Show planned changes without modifying any files.

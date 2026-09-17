@@ -177,17 +177,31 @@ pub fn extract_subcommand_names(text: &str) -> Vec<String> {
 /// The `Commands:` block's entries, trimmed, in order. Empty when the help text
 /// has no such block.
 ///
-/// Membership is decided by indentation alone: clap indents every entry, while
-/// a following section header or after-help paragraph returns to column 0. The
+/// Membership is decided by indentation: clap indents every entry, while a
+/// following section header or after-help paragraph returns to column 0 (the
 /// test must therefore run on the *untrimmed* line — trimming first discards
-/// the only thing that separates an entry from what follows it.
+/// the only thing that separates an entry from what follows it). But a long
+/// entry's description can itself word-wrap onto a continuation line — clap's
+/// `wrap_help` feature does this for any description that doesn't fit the
+/// terminal width — and that continuation line is indented DEEPER than a
+/// genuine entry (aligned to the description column, not the name column),
+/// never the same depth. Every real entry shares one indent depth (the
+/// block's first line sets it), so only lines at exactly that depth are kept;
+/// a deeper one is a continuation, dropped rather than misread as a bogus new
+/// entry (gen-circleci-orb#410 review: a misread continuation line's first
+/// word became a fake subcommand name, and `run_help`-ing an unknown
+/// subcommand just re-prints the same `Commands:` block, so the same bogus
+/// name got extracted from it again — forever).
 ///
 /// The `Options:`/`Arguments:` parser deliberately does not use this rule: an
-/// option's description wraps across several indented lines, so it needs
-/// `collect_block`'s declaration-boundary test rather than indentation. Command
-/// entries never wrap, which is what makes the simpler rule sound here.
+/// option's description can ALSO start a new declaration at the same depth as
+/// a continuation (mixed-indent option blocks, #240), so it needs
+/// `collect_block`'s declaration-boundary test instead — a command entry's
+/// own name is never itself a valid declaration-boundary marker, so that test
+/// doesn't apply here.
 fn commands_block(text: &str) -> impl Iterator<Item = &str> {
-    text.lines()
+    let mut lines = text
+        .lines()
         // Everything up to and including the header is preamble. When the
         // header is absent this consumes the lot, which is the empty case.
         .skip_while(|line| line.trim() != COMMANDS_HEADING)
@@ -196,6 +210,10 @@ fn commands_block(text: &str) -> impl Iterator<Item = &str> {
         // terminator, which would otherwise stop on one.
         .filter(|line| !line.trim().is_empty())
         .take_while(|line| leading_spaces(line) > 0)
+        .peekable();
+    let entry_indent = lines.peek().map(|line| leading_spaces(line));
+    lines
+        .filter(move |line| Some(leading_spaces(line)) == entry_indent)
         .map(str::trim)
 }
 
@@ -1259,6 +1277,25 @@ Run `tool help <cmd>` for more information.
     fn a_block_running_to_end_of_input_is_read_whole() {
         let help = "Usage: tool <COMMAND>\n\nCommands:\n  run   Run it\n  stop  Stop it";
         assert_eq!(extract_subcommand_names(help), vec!["run", "stop"]);
+    }
+
+    /// A long entry description word-wraps onto a continuation line indented
+    /// to the DESCRIPTION column, not the entry column — clap's `wrap_help`
+    /// feature does this for any entry whose description doesn't fit the
+    /// terminal width. A continuation line is still MORE indented than a
+    /// genuine entry, so it must not be read as one: real gen-circleci-orb
+    /// output hit this (self-hosted `generate` against its own `--help`)
+    /// and `extract_subcommand_names` picked the continuation line's first
+    /// word ("if") as a bogus subcommand name, which then infinite-looped
+    /// `run_help` (an unknown subcommand re-prints the same Commands: block,
+    /// which "if" gets extracted from again, forever).
+    #[test]
+    fn a_wrapped_entry_description_continuation_is_not_a_new_entry() {
+        let help = "Usage: tool <COMMAND>\n\nCommands:\n  ensure-orb-registered  Ensure a CircleCI orb is registered, creating it\n                         if it does not exist\n  run                    Run the thing\n";
+        assert_eq!(
+            extract_subcommand_names(help),
+            vec!["ensure-orb-registered", "run"]
+        );
     }
 
     /// Everything before the header is skipped, even a line that looks like a

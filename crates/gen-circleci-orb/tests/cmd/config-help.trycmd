@@ -1,0 +1,32 @@
+```
+$ gen-circleci-orb config --help
+Manage the gen-circleci-orb.toml configuration file.
+
+Read, or make a small targeted edit to, the saved config without
+hand-editing TOML: suppress/unsuppress a subcommand's generated job, append
+a composed job group, or set a parameter default override. Each edit is a
+single command, safe to script.
+
+Usage: gen-circleci-orb config [OPTIONS] <COMMAND>
+
+Commands:
+  show           Print the current configuration
+  suppress       Suppress job generation for a subcommand (generate_job =
+                 false)
+  unsuppress     Re-enable job generation for a previously suppressed
+                 subcommand
+  add-job-group  Append a composed job group
+  set-default    Set or update a parameter default override for a
+                 subcommand
+  help           Print this message or the help of the given subcommand(s)
+
+Options:
+      --config <CONFIG>
+          Path to gen-circleci-orb.toml (default: ./gen-circleci-orb.toml)
+          
+          [default: gen-circleci-orb.toml]
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+```

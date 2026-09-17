@@ -1,6 +1,6 @@
 version: 2.1
 description: >
-  Generate a CircleCI orb to provide the facilities offered by a CLI program
+  Generate a CircleCI orb from a CLI program's --help output, and manage the generated orb and the CI wiring that publishes it. `init` scaffolds a new consumer (gen-circleci-orb.toml + CI wiring); `generate` (re)builds the orb source from the target binary's --help; `update` re-syncs an existing consumer's CI wiring to the current generator flow without touching gen-circleci-orb.toml; `config` edits the saved config directly; `ensure-orb-registered` is a small CI-internal helper used by the generated orb-release workflow.
 display:
   home_url: "https://github.com/jerus-org/gen-circleci-orb"
   source_url: "https://github.com/jerus-org/gen-circleci-orb"

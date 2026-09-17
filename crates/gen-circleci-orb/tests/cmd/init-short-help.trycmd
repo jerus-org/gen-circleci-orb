@@ -1,0 +1,109 @@
+```
+$ gen-circleci-orb init -h
+Wire orb generation into an existing repo's CI configuration
+
+Usage: gen-circleci-orb init [OPTIONS]
+
+Options:
+      --orb-dir <ORB_DIR>  Output directory for the generated orb source
+                           (relative to repo root)
+      --dry-run            Show planned changes without modifying any files
+  -h, --help               Print help (see more with '--help')
+
+Source:
+      --binary <BINARY>  Name of the binary to introspect (must be on PATH)
+
+Orb publishing:
+      --public-orb-namespace <PUBLIC_ORB_NAMESPACES>
+          CircleCI namespace(s) to publish the orb under as a public orb
+          (repeatable)
+      --private-orb-namespace <PRIVATE_ORB_NAMESPACES>
+          CircleCI namespace(s) to publish the orb under as a private orb
+          (repeatable)
+      --orb-tools-version <ORB_TOOLS_VERSION>
+          circleci/orb-tools version to pin in generated CI [default:
+          12.3.3]
+      --orb-context <ORB_CONTEXT>
+          CircleCI context name holding orb publishing credentials
+          (CIRCLE_TOKEN)
+      --gen-circleci-orb-version <GEN_CIRCLECI_ORB_VERSION>
+          Version of the jerus-org/gen-circleci-orb orb to pin in generated
+          CI [default: 0.1.21]
+      --home-url <HOME_URL>
+          Home URL for the orb (shown in the CircleCI registry)
+      --source-url <SOURCE_URL>
+          Source URL for the orb (shown in the CircleCI registry)
+
+CI workflow wiring:
+      --build-workflow <BUILD_WORKFLOW>
+          Name of the build/validation workflow to patch
+      --release-workflow <RELEASE_WORKFLOW>
+          Name of the release workflow to patch
+      --requires-job <REQUIRES_JOB>
+          Job in the build workflow that regenerate-orb should require
+      --crate-tag-prefix <CRATE_TAG_PREFIX>
+          Tag prefix used by `toolkit/release_crate` for the crate (e.g.
+          `gen-orb-mcp-v`)
+      --release-after-job <RELEASE_AFTER_JOB>
+          Job in the release workflow after which the generated release
+          jobs should be gated
+      --ci-dir <CI_DIR>
+          Path to the .circleci/ directory [default: .circleci]
+      --git-push-subcommands <GIT_PUSH_SUBCOMMANDS>
+          Subcommand names whose generated jobs should include a
+          `set_https_remote` step (repeatable)
+
+Docker image:
+      --install-method <INSTALL_METHOD>
+          How the generated Dockerfile obtains the binary: `binstall`,
+          `apt` or `local`
+      --base-image <BASE_IMAGE>
+          Runtime stage image for the generated Dockerfile
+      --builder-image <BUILDER_IMAGE>
+          Image for the Rust `builder` stage that installs the binary
+      --circleci-cli-version <CIRCLECI_CLI_VERSION>
+          circleci-cli version to bundle into the generated image
+      --docker-orb-version <DOCKER_ORB_VERSION>
+          circleci/docker orb version to pin in generated CI [default:
+          3.0.1]
+      --docker-namespace <DOCKER_NAMESPACE>
+          Docker Hub (or registry) namespace for the built container image
+      --docker-context <DOCKER_CONTEXT>
+          CircleCI context name holding Docker Hub credentials
+          (DOCKER_LOGIN, DOCKER_PASSWORD)
+
+MCP server:
+      --mcp
+          Wire in gen-orb-mcp MCP server generation + publish after orb
+          publish
+      --mcp-earliest-version <MCP_EARLIEST_VERSION>
+          Earliest orb version to include when priming prior-version
+          snapshots
+      --mcp-context <MCP_CONTEXT>
+          CircleCI context name(s) for MCP server build + publish + save
+          steps (repeatable or comma-separated)
+
+Auto-record:
+      --record
+          Enable auto-record: commit the regenerated orb source back after
+          `generate`
+      --record-gpg-key-env <RECORD_GPG_KEY_ENV>
+          Name of the env var holding the base64-encoded GPG private key
+          (auto-record)
+      --record-gpg-trust-env <RECORD_GPG_TRUST_ENV>
+          Name of the env var holding the GPG ownertrust export
+          (auto-record)
+      --record-user-name-env <RECORD_USER_NAME_ENV>
+          Name of the env var holding the committer name (auto-record)
+      --record-user-email-env <RECORD_USER_EMAIL_ENV>
+          Name of the env var holding the committer email (auto-record)
+      --record-signing-key-env <RECORD_SIGNING_KEY_ENV>
+          Name of the env var holding the GPG signing key id (auto-record)
+      --record-push-ssh-fingerprint <RECORD_PUSH_SSH_FINGERPRINT>
+          SSH key fingerprint (a public-key hash, not a secret) for the
+          end-of-workflow push job (auto-record)
+      --record-context <RECORD_CONTEXTS>
+          CircleCI context(s) that supply the auto-record env-var values
+          (GPG signing material), repeatable or comma-separated
+
+```

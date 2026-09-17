@@ -1,0 +1,33 @@
+```
+$ gen-circleci-orb update --help
+Re-sync an existing repo's orb-managed CI wiring to the current flow.
+
+Reads the committed gen-circleci-orb.toml (never overwrites it) and
+rewrites only the gen-circleci-orb-managed blocks in .circleci/config.yml,
+preserving the consumer's own jobs and customizations. Run with --check in
+CI to fail when the wiring is out of date relative to the pinned orb
+version.
+
+Usage: gen-circleci-orb update [OPTIONS]
+
+Options:
+      --config <CONFIG>
+          Path to gen-circleci-orb.toml
+          
+          [default: gen-circleci-orb.toml]
+
+      --ci-dir <CI_DIR>
+          Path to the .circleci/ directory
+          
+          [default: .circleci]
+
+      --check
+          Verify mode: write nothing and exit non-zero when the CI wiring
+          is out of date.
+          
+          Prints a diff and upgrade guidance. For use in CI.
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+```

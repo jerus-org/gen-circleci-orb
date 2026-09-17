@@ -1,4 +1,4 @@
-description: Ensure a CircleCI orb is registered, creating it if it does not exist
+description: 'Ensure a CircleCI orb is registered, creating it if it does not exist. A small CI-internal helper (not something a consumer normally runs by hand): the generated orb-release workflow calls this before `orb-tools/publish` so the very first publish of a brand-new orb namespace/name doesn''t fail on a missing orb. Idempotent — a no-op once the orb already exists.'
 parameters:
   orb_name:
     type: string
@@ -15,7 +15,7 @@ steps:
         name: Set GCO_PRIVATE flag
         command: echo 'export GCO_PRIVATE=true' >> "$BASH_ENV"
 - run:
-    name: Ensure a CircleCI orb is registered, creating it if it does not exist
+    name: Ensure a CircleCI orb is registered, creating it if it does not exist.
     command: <<include(scripts/ensure_orb_registered.sh)>>
     environment:
       GCO_ORB_NAME: << parameters.orb_name >>

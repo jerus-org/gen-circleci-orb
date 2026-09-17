@@ -1,0 +1,59 @@
+```
+$ gen-circleci-orb generate -h
+Generate orb source files from a CLI binary's --help output
+
+Usage: gen-circleci-orb generate [OPTIONS]
+
+Options:
+  -h, --help  Print help (see more with '--help')
+
+Source:
+      --binary <BINARY>  Name of the binary to introspect (must be on PATH)
+      --config <CONFIG>  Path to gen-circleci-orb.toml config file
+
+Output:
+      --output <OUTPUT>
+          Project root directory (orb source is written to
+          `<output>/<orb-dir>/`) [default: .]
+      --orb-dir <ORB_DIR>
+          Subdirectory within --output where orb source is written
+      --orb-namespace <NAMESPACES>
+          CircleCI orb namespace(s) to publish the orb under (repeatable)
+      --home-url <HOME_URL>
+          Home URL for the orb registry display section
+      --source-url <SOURCE_URL>
+          Source URL for the orb registry display section
+
+Docker image:
+      --install-method <INSTALL_METHOD>
+          How the binary is installed in the generated Docker image
+          [possible values: binstall, apt, local]
+      --base-image <BASE_IMAGE>
+          Base Docker image for the generated executor
+      --circleci-cli-version <CIRCLECI_CLI_VERSION>
+          circleci-cli version to install in the generated Docker image
+          executor (overrides `[orb].circleci_cli_version` and the built-in
+          default)
+      --apt-packages <APT_PACKAGES>
+          Extra apt package(s) to install in the final Docker image stage
+          (repeatable)
+      --cargo-tool <CARGO_TOOLS>
+          Extra cargo tool(s) to install into the executor image
+          (repeatable)
+
+Behavior:
+      --git-push-subcommand <GIT_PUSH_SUBCOMMANDS>
+          Subcommand name(s) whose generated jobs should include a
+          set_https_remote step (repeatable)
+      --dry-run
+          Show planned output without writing any files
+      --no-record
+          Suppress auto-record for this run, even when `[record].enabled =
+          true` in gen-circleci-orb.toml
+      --check
+          Verify mode: regenerate the orb and compare it to the committed
+          files, writing nothing and never recording
+      --allow-main-record
+          Allow auto-record to push to `main`
+
+```

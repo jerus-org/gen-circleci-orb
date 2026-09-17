@@ -70,27 +70,55 @@ pub enum InstallMethod {
 #[derive(Debug, clap::Args)]
 pub struct Generate {
     /// Name of the binary to introspect (must be on PATH).
+    ///
     /// Falls back to `binary` in the `[orb]` section of gen-circleci-orb.toml.
-    #[arg(long)]
+    #[arg(long, help_heading = "Source")]
     pub binary: Option<String>,
 
-    /// CircleCI orb namespace(s) to publish the orb under (repeatable).
-    /// Falls back to `namespaces` in the `[orb]` section of gen-circleci-orb.toml.
-    #[arg(long = "orb-namespace")]
-    pub namespaces: Vec<String>,
+    /// Path to gen-circleci-orb.toml config file.
+    ///
+    /// Defaults to `<output>/gen-circleci-orb.toml` when not specified.
+    #[arg(long, help_heading = "Source")]
+    pub config: Option<PathBuf>,
 
     /// Project root directory (orb source is written to `<output>/<orb-dir>/`).
-    #[arg(long, default_value = ".")]
+    #[arg(long, default_value = ".", help_heading = "Output")]
     pub output: PathBuf,
 
+    /// Subdirectory within --output where orb source is written.
+    ///
+    /// Falls back to `orb_dir` in the `[orb]` section of gen-circleci-orb.toml, then "orb".
+    #[arg(long, help_heading = "Output")]
+    pub orb_dir: Option<String>,
+
+    /// CircleCI orb namespace(s) to publish the orb under (repeatable).
+    ///
+    /// Falls back to `namespaces` in the `[orb]` section of gen-circleci-orb.toml.
+    #[arg(long = "orb-namespace", help_heading = "Output")]
+    pub namespaces: Vec<String>,
+
+    /// Home URL for the orb registry display section.
+    ///
+    /// Falls back to `home_url` in the `[orb]` section of gen-circleci-orb.toml.
+    #[arg(long, help_heading = "Output")]
+    pub home_url: Option<String>,
+
+    /// Source URL for the orb registry display section.
+    ///
+    /// Falls back to `source_url` in the `[orb]` section of gen-circleci-orb.toml.
+    #[arg(long, help_heading = "Output")]
+    pub source_url: Option<String>,
+
     /// How the binary is installed in the generated Docker image.
+    ///
     /// Falls back to `install_method` in the `[orb]` section of gen-circleci-orb.toml, then "binstall".
-    #[arg(long, value_enum)]
+    #[arg(long, value_enum, help_heading = "Docker image")]
     pub install_method: Option<InstallMethod>,
 
     /// Base Docker image for the generated executor.
+    ///
     /// Falls back to `base_image` in the `[orb]` section of gen-circleci-orb.toml, then "debian:13-slim".
-    #[arg(long)]
+    #[arg(long, help_heading = "Docker image")]
     pub base_image: Option<String>,
 
     /// Builder-stage image override. Deliberately not a CLI flag: it is a
@@ -100,26 +128,6 @@ pub struct Generate {
     #[arg(skip)]
     pub builder_image: Option<String>,
 
-    /// Home URL for the orb registry display section.
-    /// Falls back to `home_url` in the `[orb]` section of gen-circleci-orb.toml.
-    #[arg(long)]
-    pub home_url: Option<String>,
-
-    /// Source URL for the orb registry display section.
-    /// Falls back to `source_url` in the `[orb]` section of gen-circleci-orb.toml.
-    #[arg(long)]
-    pub source_url: Option<String>,
-
-    /// Subdirectory within --output where orb source is written.
-    /// Falls back to `orb_dir` in the `[orb]` section of gen-circleci-orb.toml, then "orb".
-    #[arg(long)]
-    pub orb_dir: Option<String>,
-
-    /// Subcommand name(s) whose generated jobs should include a set_https_remote step
-    /// (repeatable). Use for subcommands that push to git, e.g. --git-push-subcommand save.
-    #[arg(long = "git-push-subcommand")]
-    pub git_push_subcommands: Vec<String>,
-
     /// circleci-cli version to install in the generated Docker image executor
     /// (overrides `[orb].circleci_cli_version` and the built-in default).
     ///
@@ -128,57 +136,63 @@ pub struct Generate {
     /// binary exposes a circleci-using subcommand (e.g. `ensure-orb-registered`),
     /// at `DEFAULT_CIRCLECI_CLI_VERSION` when unset. Set this (or the config key)
     /// to pin a version, or to opt a binary in when auto-detection doesn't apply.
-    #[arg(long)]
+    #[arg(long, help_heading = "Docker image")]
     pub circleci_cli_version: Option<String>,
 
     /// Extra apt package(s) to install in the final Docker image stage (repeatable).
+    ///
     /// Combined with the baseline packages (ca-certificates, git) and sorted
-    /// alphanumerically. Example: --apt-packages libssl-dev --apt-packages pkg-config
-    #[arg(long = "apt-packages")]
+    /// alphanumerically. Pass the flag once per package to add more than one.
+    #[arg(long = "apt-packages", help_heading = "Docker image")]
     pub apt_packages: Vec<String>,
 
     /// Extra cargo tool(s) to install into the executor image (repeatable).
+    ///
     /// Each is a crate name installed via cargo-binstall in the builder stage,
     /// with its binary copied into the runtime, or "crate:binary" when the
     /// installed binary name differs from the crate name. Binstall install
-    /// method only.
-    /// Example: --cargo-tool cargo-audit --cargo-tool rsign2:rsign
-    #[arg(long = "cargo-tool")]
+    /// method only. Pass the flag once per tool to add more than one.
+    #[arg(long = "cargo-tool", help_heading = "Docker image")]
     pub cargo_tools: Vec<String>,
 
+    /// Subcommand name(s) whose generated jobs should include a set_https_remote step (repeatable).
+    ///
+    /// Use for subcommands that push to git, e.g. --git-push-subcommand save.
+    #[arg(long = "git-push-subcommand", help_heading = "Behavior")]
+    pub git_push_subcommands: Vec<String>,
+
     /// Show planned output without writing any files.
-    #[arg(long)]
+    #[arg(long, help_heading = "Behavior")]
     pub dry_run: bool,
 
-    /// Path to gen-circleci-orb.toml config file.
-    /// Defaults to `<output>/gen-circleci-orb.toml` when not specified.
-    #[arg(long)]
-    pub config: Option<PathBuf>,
-
-    /// Suppress auto-record for this run, even when `[record].enabled = true` in
-    /// gen-circleci-orb.toml. Auto-record commits the regenerated orb source back
+    /// Suppress auto-record for this run, even when `[record].enabled = true` in gen-circleci-orb.toml.
+    ///
+    /// Auto-record commits the regenerated orb source back
     /// to the current branch (GPG-signed) and pushes it, so the published orb
     /// always reflects the CLI. Whether to record, and the names of the env vars
     /// holding the signing material, are config-driven (the `[record]` section).
     /// Use this flag for local, test, and dry runs where no signing material is
     /// available.
-    #[arg(long)]
+    #[arg(long, help_heading = "Behavior")]
     pub no_record: bool,
 
-    /// Verify mode: regenerate the orb and compare it to the committed files,
-    /// writing nothing and never recording. Exits non-zero if any file would be
+    /// Verify mode: regenerate the orb and compare it to the committed files, writing nothing and never recording.
+    ///
+    /// Exits non-zero if any file would be
     /// created, updated, or removed — i.e. the committed orb is out of sync with
     /// the CLI. Use this to gate packing/publishing so a drifted or hand-edited
     /// orb is never published.
-    #[arg(long, conflicts_with = "dry_run")]
+    #[arg(long, conflicts_with = "dry_run", help_heading = "Behavior")]
     pub check: bool,
 
-    /// Allow auto-record to push to `main`. A narrow, explicit relaxation of
+    /// Allow auto-record to push to `main`.
+    ///
+    /// A narrow, explicit relaxation of
     /// the default main-exclusion (see `should_record_on_branch`) — only for
     /// the post-merge-regen chain (gen-circleci-orb#328), which has already
     /// switched CIRCLE_BRANCH onto `main` itself via `--target-branch`.
     /// Never set this for an ordinary `generate --record` run.
-    #[arg(long)]
+    #[arg(long, help_heading = "Behavior")]
     pub allow_main_record: bool,
 }
 
