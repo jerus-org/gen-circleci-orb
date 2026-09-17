@@ -1,6 +1,6 @@
 ```
 $ gen-circleci-orb --help
-Generate a CircleCI orb to provide the facilities offered by a CLI program
+Generate a CircleCI orb from a CLI program's --help output, and manage the generated orb and the CI wiring that publishes it. `init` scaffolds a new consumer (gen-circleci-orb.toml + CI wiring); `generate` (re)builds the orb source from the target binary's --help; `update` re-syncs an existing consumer's CI wiring to the current generator flow without touching gen-circleci-orb.toml; `config` edits the saved config directly; `ensure-orb-registered` is a small CI-internal helper used by the generated orb-release workflow.
 
 Usage: gen-circleci-orb <COMMAND>
 
@@ -13,7 +13,10 @@ Commands:
   help                   Print this message or the help of the given subcommand(s)
 
 Options:
-  -h, --help     Print help
-  -V, --version  Print version
+  -h, --help
+          Print help (see a summary with '-h')
+
+  -V, --version
+          Print version
 
 ```

@@ -15,7 +15,18 @@ pub mod output_writer;
 
 /// Command-line interface for gen-circleci-orb.
 #[derive(Debug, Parser)]
-#[command(author, version, about, long_about = None)]
+#[command(
+    author,
+    version,
+    about,
+    long_about = "Generate a CircleCI orb from a CLI program's --help output, and manage the \
+        generated orb and the CI wiring that publishes it. `init` scaffolds a new consumer \
+        (gen-circleci-orb.toml + CI wiring); `generate` (re)builds the orb source from the \
+        target binary's --help; `update` re-syncs an existing consumer's CI wiring to the \
+        current generator flow without touching gen-circleci-orb.toml; `config` edits the saved \
+        config directly; `ensure-orb-registered` is a small CI-internal helper used by the \
+        generated orb-release workflow."
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
@@ -25,14 +36,39 @@ pub struct Cli {
 #[derive(Debug, clap::Subcommand)]
 pub enum Commands {
     /// Manage the gen-circleci-orb.toml configuration file.
+    ///
+    /// Read, or make a small targeted edit to, the saved config without hand-editing TOML:
+    /// suppress/unsuppress a subcommand's generated job, append a composed job group, or set a
+    /// parameter default override. Each edit is a single command, safe to script.
     Config(commands::config::Config),
     /// Ensure a CircleCI orb is registered, creating it if it does not exist.
+    ///
+    /// A small CI-internal helper (not something a consumer normally runs by hand): the
+    /// generated orb-release workflow calls this before `orb-tools/publish` so the very first
+    /// publish of a brand-new orb namespace/name doesn't fail on a missing orb. Idempotent —
+    /// a no-op once the orb already exists.
     EnsureOrbRegistered(commands::ensure_orb_registered::EnsureOrbRegistered),
     /// Generate orb source files from a CLI binary's --help output.
+    ///
+    /// Introspects the target binary (named by --binary or `[orb] binary`) via its own --help
+    /// text, and (re)writes the full orb source tree (commands, jobs, scripts, executor,
+    /// Dockerfile) under --output/--orb-dir. Safe to re-run: identical output is left untouched.
+    /// Use --check in CI to gate on a drifted or hand-edited orb; --dry-run to preview with no
+    /// writes.
     Generate(Box<commands::generate::Generate>),
     /// Wire orb generation into an existing repo's CI configuration.
+    ///
+    /// One-time (or re-run-to-update) setup: writes gen-circleci-orb.toml from the flags/prompts
+    /// given, then patches .circleci/config.yml to add the generated-orb build/publish/release
+    /// jobs. Prompts interactively for anything not supplied on the command line. Re-running
+    /// against an existing config updates rather than duplicates the wiring.
     Init(Box<commands::init::Init>),
     /// Re-sync an existing repo's orb-managed CI wiring to the current flow.
+    ///
+    /// Reads the committed gen-circleci-orb.toml (never overwrites it) and rewrites only the
+    /// gen-circleci-orb-managed blocks in .circleci/config.yml, preserving the consumer's own
+    /// jobs and customizations. Run with --check in CI to fail when the wiring is out of date
+    /// relative to the pinned orb version.
     Update(commands::update::Update),
 }
 
@@ -46,5 +82,54 @@ impl Cli {
             Commands::Init(cmd) => cmd.run(),
             Commands::Update(cmd) => cmd.run(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    /// gen-circleci-orb#410: `--help` and `-h` were identical everywhere —
+    /// every subcommand's own doc comment provided only `about`, with
+    /// `long_about` left unset (or explicitly `None` at the top level). A
+    /// doc comment without a blank-line-separated second paragraph leaves
+    /// `long_about` unset, so clap falls back to `about` for `--help` too —
+    /// checking rendered `-h`/`--help` byte length is not a reliable proxy
+    /// (clap's own argument-table wrapping can make `--help` render longer
+    /// even when `about == long_about`), so this checks the parsed
+    /// long_about directly instead (mirrors jci-audit's own structural
+    /// test for the same pattern).
+    #[test]
+    fn every_subcommand_has_a_long_about_distinct_from_its_about() {
+        let cmd = Cli::command();
+        for name in [
+            "config",
+            "ensure-orb-registered",
+            "generate",
+            "init",
+            "update",
+        ] {
+            let sub = cmd
+                .find_subcommand(name)
+                .unwrap_or_else(|| panic!("no '{name}' subcommand"));
+            let about = sub.get_about().map(ToString::to_string);
+            let long_about = sub.get_long_about().map(ToString::to_string);
+            assert!(
+                long_about.is_some() && long_about != about,
+                "'{name}': long_about must be set and differ from about (about: {about:?})"
+            );
+        }
+    }
+
+    #[test]
+    fn top_level_has_a_long_about_distinct_from_its_about() {
+        let cmd = Cli::command();
+        let about = cmd.get_about().map(ToString::to_string);
+        let long_about = cmd.get_long_about().map(ToString::to_string);
+        assert!(
+            long_about.is_some() && long_about != about,
+            "top-level long_about must be set and differ from about (about: {about:?})"
+        );
     }
 }
