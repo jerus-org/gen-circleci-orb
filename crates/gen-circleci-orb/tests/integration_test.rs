@@ -250,3 +250,215 @@ fn generate_qualifies_a_real_ambiguous_subcommand_name() {
         "nested script must invoke the full nested path:\n{nested_script}"
     );
 }
+
+/// gen-circleci-orb#412: fixture-cli-param-collision's `generate` subcommand
+/// has a restricted `--name` (auto-renames to `generate_name`) and an
+/// unrelated, genuinely-named `--generate-name` flag whose own normalized
+/// name already equals that rename target — two individually valid clap
+/// flags that collide only because of gen-circleci-orb's own rename. With no
+/// config override, `generate` must fail loudly instead of silently letting
+/// one clobber the other.
+#[test]
+#[cfg(feature = "test-fixtures")]
+fn generate_rejects_a_real_param_key_collision() {
+    let out = TempDir::new().unwrap();
+    let binary = env!("CARGO_BIN_EXE_gen-circleci-orb");
+    let new_path = fixture_param_collision_path_env();
+
+    let output = Command::new(binary)
+        .args([
+            "generate",
+            "--binary",
+            "fixture-cli-param-collision",
+            "--orb-namespace",
+            "jerus-org",
+            "--output",
+            out.path().to_str().unwrap(),
+            "--no-record",
+        ])
+        .env("PATH", new_path)
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "generate must reject an unresolved param-key collision, not silently \
+         clobber one param with the other"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("generate_name"), "got: {stderr}");
+    assert!(stderr.contains("orb_name"), "got: {stderr}");
+}
+
+/// Same collision as above, resolved via an `orb_name` override on the
+/// RESTRICTED `name` param (the reviewer-preferred pattern for #412: the
+/// rename that CREATES the collision is `--name`'s own, so override ITS key
+/// rather than the unrelated `--generate-name` flag's — one change instead
+/// of two, and `--generate-name` keeps its own natural derived key).
+#[test]
+#[cfg(feature = "test-fixtures")]
+fn generate_resolves_a_real_param_key_collision_via_orb_name_override() {
+    let out = TempDir::new().unwrap();
+    let binary = env!("CARGO_BIN_EXE_gen-circleci-orb");
+    let new_path = fixture_param_collision_path_env();
+
+    std::fs::write(
+        out.path().join("gen-circleci-orb.toml"),
+        r#"
+[subcommand.generate.param.name]
+orb_name = "output_name"
+"#,
+    )
+    .unwrap();
+
+    let output = Command::new(binary)
+        .args([
+            "generate",
+            "--binary",
+            "fixture-cli-param-collision",
+            "--orb-namespace",
+            "jerus-org",
+            "--output",
+            out.path().to_str().unwrap(),
+            "--no-record",
+        ])
+        .env("PATH", new_path)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "generate must succeed once the collision is resolved via an \
+         orb_name override:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let command =
+        std::fs::read_to_string(out.path().join("orb/src/commands/generate.yml")).unwrap();
+    let job = std::fs::read_to_string(out.path().join("orb/src/jobs/generate.yml")).unwrap();
+    for rendered in [&command, &job] {
+        assert!(
+            rendered.contains("output_name:"),
+            "the restricted 'name' param must render under its 'orb_name' \
+             override 'output_name':\n{rendered}"
+        );
+        assert!(
+            rendered.contains("generate_name:"),
+            "the genuinely-named 'generate_name' flag must keep its own \
+             natural derived key, untouched by 'name''s override:\n{rendered}"
+        );
+    }
+}
+
+/// Prepends fixture-cli-param-collision's directory to `PATH` — the same
+/// PATH-injection gen-circleci-orb needs to invoke a fixture as a bare-name
+/// subprocess (see `generate_qualifies_a_real_ambiguous_subcommand_name`'s
+/// identical pattern for fixture-cli-collision above).
+#[cfg(feature = "test-fixtures")]
+fn fixture_param_collision_path_env() -> std::ffi::OsString {
+    let fixture_bin = std::path::Path::new(env!("CARGO_BIN_EXE_fixture-cli-param-collision"));
+    let fixture_dir = fixture_bin
+        .parent()
+        .expect("fixture-cli-param-collision binary path has a parent directory");
+    let existing_path = std::env::var_os("PATH").unwrap_or_default();
+    let mut paths: Vec<_> = std::env::split_paths(&existing_path).collect();
+    paths.insert(0, fixture_dir.to_path_buf());
+    std::env::join_paths(paths).expect("PATH entries are valid")
+}
+
+/// docs/configuration-guide.md's "Worked example" embeds the ACTUAL output of
+/// running `generate` against `fixture-cli-param-collision` with the
+/// documented `orb_name` override, not hand-copied YAML that can silently
+/// drift from what the generator really produces. This regenerates that
+/// exact scenario and asserts the doc's embedded blocks (delimited by
+/// `<!-- worked-example:* -->` / `<!-- /worked-example:* -->` markers) are
+/// byte-identical to the real output.
+#[test]
+#[cfg(feature = "test-fixtures")]
+fn configuration_guide_worked_example_matches_real_generated_output() {
+    let out = TempDir::new().unwrap();
+    let binary = env!("CARGO_BIN_EXE_gen-circleci-orb");
+    let new_path = fixture_param_collision_path_env();
+
+    std::fs::write(
+        out.path().join("gen-circleci-orb.toml"),
+        r#"
+[subcommand.generate.param.name]
+orb_name = "output_name"
+"#,
+    )
+    .unwrap();
+
+    let output = Command::new(binary)
+        .args([
+            "generate",
+            "--binary",
+            "fixture-cli-param-collision",
+            "--orb-namespace",
+            "jerus-org",
+            "--output",
+            out.path().to_str().unwrap(),
+            "--no-record",
+        ])
+        .env("PATH", new_path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "generate failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let command =
+        std::fs::read_to_string(out.path().join("orb/src/commands/generate.yml")).unwrap();
+    let job = std::fs::read_to_string(out.path().join("orb/src/jobs/generate.yml")).unwrap();
+    let job_invoke: String = job
+        .lines()
+        .skip_while(|l| !l.starts_with("- generate:"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let docs = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../docs/configuration-guide.md"
+    ))
+    .unwrap();
+
+    assert_eq!(
+        extract_marked_yaml_block(&docs, "worked-example:command").trim(),
+        command.trim(),
+        "docs/configuration-guide.md's embedded command YAML has drifted \
+         from what generate() actually produces — regenerate the fixture's \
+         output and paste it back into the docs"
+    );
+    assert_eq!(
+        extract_marked_yaml_block(&docs, "worked-example:job-invoke").trim(),
+        job_invoke.trim(),
+        "docs/configuration-guide.md's embedded job invoke-step YAML has \
+         drifted from what generate() actually produces — regenerate the \
+         fixture's output and paste it back into the docs"
+    );
+}
+
+/// Extracts and un-fences the YAML content between
+/// `<!-- <marker> -->` / `<!-- /<marker> -->` HTML-comment delimiters in a
+/// Markdown document.
+#[cfg(feature = "test-fixtures")]
+fn extract_marked_yaml_block(markdown: &str, marker: &str) -> String {
+    let start_marker = format!("<!-- {marker} -->");
+    let end_marker = format!("<!-- /{marker} -->");
+    let start = markdown
+        .find(&start_marker)
+        .unwrap_or_else(|| panic!("start marker {start_marker:?} not found in docs"))
+        + start_marker.len();
+    let end = markdown[start..]
+        .find(&end_marker)
+        .unwrap_or_else(|| panic!("end marker {end_marker:?} not found in docs"))
+        + start;
+    markdown[start..end]
+        .trim()
+        .trim_start_matches("```yaml")
+        .trim_end_matches("```")
+        .trim()
+        .to_string()
+}

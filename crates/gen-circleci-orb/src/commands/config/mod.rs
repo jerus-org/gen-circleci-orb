@@ -153,6 +153,7 @@ pub(crate) fn set_param_default(
         param.to_string(),
         ParamOverride {
             default: Some(default.to_string()),
+            orb_name: None,
         },
     );
 }

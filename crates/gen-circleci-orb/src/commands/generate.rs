@@ -786,6 +786,81 @@ fn find_subcommand<'a>(
 // below — an ambiguous name is now qualified by its full path, never
 // rejected. See that function's doc comment for the rationale.
 
+/// Detects two of a subcommand's own parameters resolving to the same
+/// orb-facing key (see `resolve_param_orb_name` in `orb_generator::render`).
+///
+/// ## Why this can happen
+///
+/// Not two CLI options sharing one name — clap would reject that outright.
+/// `--name` and `--generate-name` are both valid, individually distinct
+/// flags; the collision is an artifact of gen-circleci-orb's own
+/// restricted-param rename, which can transform `--name`'s orb key into a
+/// string `--generate-name`'s own normalized name already is. Neither clap
+/// nor the CLI author ever sees this.
+///
+/// ## Fix
+///
+/// Give the colliding param an explicit key:
+///
+/// ```toml
+/// [subcommand.<name>.param.<flag>]
+/// orb_name = "..."
+/// ```
+///
+/// Prefer overriding the RESTRICTED param (usually `name`) rather than the
+/// unrelated flag — it's the one whose rename created the collision, so
+/// that's the one change actually needed. See `docs/configuration-guide.md`'s
+/// "Rename a parameter's orb-facing key" and the `fixture-cli-param-collision`
+/// fixture for a worked example (gen-circleci-orb#412).
+pub(crate) fn validate_param_key_collisions(
+    cli_def: &help_parser::types::CliDefinition,
+    config: &orb_config::OrbConfig,
+) -> Result<()> {
+    let mut errors = Vec::new();
+    walk_subcommands(&cli_def.subcommands, &mut |sub| {
+        let mut seen: std::collections::HashMap<String, &str> = std::collections::HashMap::new();
+        for p in &sub.parameters {
+            let key = orb_generator::render::resolve_param_orb_name(
+                &sub.name,
+                &p.long_name,
+                Some(config),
+            );
+            if let Some(prev) = seen.insert(key.clone(), p.long_name.as_str()) {
+                errors.push(format!(
+                    "subcommand '{}': parameters '--{}' and '--{}' both resolve to orb parameter \
+                     '{key}' — set [subcommand.{}.param.<flag>] orb_name = \"...\" to disambiguate one of them",
+                    sub.name, prev, p.long_name, sub.name
+                ));
+            }
+            if orb_generator::render::SYNTHESIZED_JOB_PARAMS.contains(&key.as_str()) {
+                errors.push(format!(
+                    "subcommand '{}': parameter '--{}' resolves to orb parameter '{key}', which \
+                     the generator itself reserves for a synthesized job parameter — set \
+                     [subcommand.{}.param.<flag>] orb_name = \"...\" to give it a different key",
+                    sub.name, p.long_name, sub.name
+                ));
+            }
+        }
+    });
+    if !errors.is_empty() {
+        anyhow::bail!("param key collision(s):\n{}", errors.join("\n"));
+    }
+    Ok(())
+}
+
+/// Depth-first visit of every subcommand in the tree (leaf or not) — mirrors
+/// `find_subcommand`'s own traversal so a param-key collision is caught
+/// wherever a subcommand's parameters live.
+fn walk_subcommands<'a>(
+    subs: &'a [help_parser::types::SubCommand],
+    visit: &mut impl FnMut(&'a help_parser::types::SubCommand),
+) {
+    for sub in subs {
+        visit(sub);
+        walk_subcommands(&sub.subcommands, visit);
+    }
+}
+
 /// `Err` names why `raw` can't be coerced to `param_type` — mirrors the
 /// coercions `coerce_override_default` (orb_generator::render) actually
 /// performs, so this rejects exactly the inputs that function would
@@ -1024,6 +1099,7 @@ impl Generate {
             &git_push_subcommands,
         )?;
         validate_param_overrides(&cli_def, &orb_config)?;
+        validate_param_key_collisions(&cli_def, &orb_config)?;
 
         let opts = orb_generator::GenerateOpts {
             namespaces,
@@ -2566,6 +2642,7 @@ mod tests {
             param_name.to_string(),
             ParamOverride {
                 default: Some(default.to_string()),
+                orb_name: None,
             },
         );
         let mut subcommands = IndexMap::new();
@@ -2694,6 +2771,166 @@ mod tests {
         let config = config_with_override("release", "retries", "not-a-number");
         let err = validate_param_overrides(&cli, &config).unwrap_err();
         assert!(err.to_string().contains("retries"), "got: {err}");
+    }
+
+    // ── validate_param_key_collisions ───────────────────────────────────────
+
+    #[test]
+    fn validate_param_key_collisions_rejects_a_renamed_param_colliding_with_a_real_one() {
+        // Restricted `--name` on `generate` auto-renames to `generate_name`,
+        // which collides with an unrelated, genuinely-named `--generate-name`
+        // flag (long_name already normalized to `generate_name`) on the same
+        // subcommand.
+        let cli = cli_with_params(
+            "generate",
+            vec![
+                param("name", ParamType::String),
+                param("generate_name", ParamType::Boolean),
+            ],
+        );
+        let config = crate::orb_config::OrbConfig::default();
+        let err = validate_param_key_collisions(&cli, &config).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("generate_name"), "got: {msg}");
+        assert!(msg.contains("orb_name"), "got: {msg}");
+    }
+
+    #[test]
+    fn validate_param_key_collisions_accepts_an_orb_name_override_that_disambiguates() {
+        let cli = cli_with_params(
+            "generate",
+            vec![
+                param("name", ParamType::String),
+                param("generate_name", ParamType::Boolean),
+            ],
+        );
+        use crate::orb_config::{OrbConfig, ParamOverride, SubcommandConfig};
+        let mut overrides = IndexMap::new();
+        overrides.insert(
+            "generate_name".to_string(),
+            ParamOverride {
+                default: None,
+                orb_name: Some("generate_name_alt".to_string()),
+            },
+        );
+        let mut subcommands = IndexMap::new();
+        subcommands.insert(
+            "generate".to_string(),
+            SubcommandConfig {
+                param: Some(overrides),
+                ..Default::default()
+            },
+        );
+        let config = OrbConfig {
+            subcommand: Some(subcommands),
+            ..Default::default()
+        };
+        let result = validate_param_key_collisions(&cli, &config);
+        assert!(result.is_ok(), "expected Ok, got {result:?}");
+    }
+
+    #[test]
+    fn validate_param_key_collisions_rejects_a_no_op_orb_name_override() {
+        // Review follow-up on #421: an `orb_name` override that resolves to
+        // the SAME string the collision already produces (i.e. doesn't
+        // actually rename anything) must still be rejected -- the check
+        // isn't fooled by a no-op "rename to itself" that leaves the
+        // collision unresolved.
+        let cli = cli_with_params(
+            "generate",
+            vec![
+                param("name", ParamType::String),
+                param("generate_name", ParamType::Boolean),
+            ],
+        );
+        use crate::orb_config::{OrbConfig, ParamOverride, SubcommandConfig};
+        let mut overrides = IndexMap::new();
+        overrides.insert(
+            "name".to_string(),
+            ParamOverride {
+                default: None,
+                // Same string the automatic restricted-name rename already
+                // produces -- a genuinely no-op override.
+                orb_name: Some("generate_name".to_string()),
+            },
+        );
+        let mut subcommands = IndexMap::new();
+        subcommands.insert(
+            "generate".to_string(),
+            SubcommandConfig {
+                param: Some(overrides),
+                ..Default::default()
+            },
+        );
+        let config = OrbConfig {
+            subcommand: Some(subcommands),
+            ..Default::default()
+        };
+        let err = validate_param_key_collisions(&cli, &config).unwrap_err();
+        assert!(err.to_string().contains("generate_name"), "got: {err}");
+    }
+
+    #[test]
+    fn validate_param_key_collisions_accepts_non_colliding_params() {
+        let cli = cli_with_params(
+            "generate",
+            vec![
+                param("name", ParamType::String),
+                param("output", ParamType::String),
+            ],
+        );
+        let config = crate::orb_config::OrbConfig::default();
+        let result = validate_param_key_collisions(&cli, &config);
+        assert!(result.is_ok(), "expected Ok, got {result:?}");
+    }
+
+    #[test]
+    fn validate_param_key_collisions_rejects_a_param_resolving_to_a_synthesized_job_key() {
+        // `render_job` inserts attach_workspace/workspace_root (and, for an
+        // orb-producing subcommand, persist_orb_workspace/ssh_fingerprint/
+        // check_ci_wiring/target_branch) AFTER build_orb_parameters,
+        // unconditionally overwriting any CLI-derived entry at that key
+        // (gen-circleci-orb#412 code review finding) -- a param whose
+        // resolved orb name lands on one of these must be rejected the same
+        // way a sibling-param collision is, since the consumer has no way to
+        // know to avoid a name they didn't choose.
+        let cli = cli_with_params(
+            "release",
+            vec![param("attach_workspace", ParamType::String)],
+        );
+        let config = crate::orb_config::OrbConfig::default();
+        let err = validate_param_key_collisions(&cli, &config).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("attach_workspace"), "got: {msg}");
+    }
+
+    #[test]
+    fn validate_param_key_collisions_rejects_an_orb_name_override_landing_on_a_synthesized_key() {
+        use crate::orb_config::{OrbConfig, ParamOverride, SubcommandConfig};
+        let cli = cli_with_params("release", vec![param("output", ParamType::String)]);
+        let mut overrides = IndexMap::new();
+        overrides.insert(
+            "output".to_string(),
+            ParamOverride {
+                default: None,
+                orb_name: Some("target_branch".to_string()),
+            },
+        );
+        let mut subcommands = IndexMap::new();
+        subcommands.insert(
+            "release".to_string(),
+            SubcommandConfig {
+                param: Some(overrides),
+                ..Default::default()
+            },
+        );
+        let config = OrbConfig {
+            subcommand: Some(subcommands),
+            ..Default::default()
+        };
+        let err = validate_param_key_collisions(&cli, &config).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("target_branch"), "got: {msg}");
     }
 
     // ── validate_job_group_step_order ───────────────────────────────────────
