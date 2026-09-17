@@ -360,9 +360,66 @@ orb_name = "output_name"
 
 This works even when you don't control the underlying CLI (so renaming the flag itself isn't an
 option) — `orb_name` always wins over both the bare CLI flag name and the automatic restricted-name
-rename. See the `fixture-cli-param-collision` fixture and its integration test
-(`crates/gen-circleci-orb/tests/integration_test.rs`) for this scenario exercised end to end through
-the real `--help`-parsing pipeline.
+rename.
+
+#### Worked example
+
+`fixture-cli-param-collision` (`crates/gen-circleci-orb/src/bin/fixture-cli-param-collision.rs`) is
+a small clap CLI built exactly for this scenario: its `generate` subcommand has both a restricted
+`--name` and a genuinely distinct `--generate-name` flag. Running `gen-circleci-orb generate`
+against it with the `orb_name` override above produces this real, unmodified output (kept in sync
+with the actual generator by an integration test — see
+`configuration_guide_worked_example_matches_real_generated_output` in
+`crates/gen-circleci-orb/tests/integration_test.rs`, which fails if this ever drifts from what
+`generate` really produces):
+
+<!-- worked-example:command -->
+```yaml
+description: Generate the output
+parameters:
+  output_name:
+    type: string
+    description: Name for the output
+    default: ''
+  generate_name:
+    type: boolean
+    description: Whether to generate a name
+    default: false
+steps:
+- when:
+    condition: << parameters.generate_name >>
+    steps:
+    - run:
+        name: Set GCO_GENERATE_NAME flag
+        command: echo 'export GCO_GENERATE_NAME=true' >> "$BASH_ENV"
+- run:
+    name: Generate the output
+    command: <<include(scripts/generate.sh)>>
+    environment:
+      GCO_OUTPUT_NAME: << parameters.output_name >>
+```
+<!-- /worked-example:command -->
+
+Note `output_name` (the restricted `--name`, under its override) and `generate_name` (the
+genuinely-named `--generate-name` flag, at its own natural key) coexist cleanly — neither clobbers
+the other. The job invoking this command forwards the same two keys:
+
+<!-- worked-example:job-invoke -->
+```yaml
+- generate:
+    output_name: << parameters.output_name >>
+    generate_name: << parameters.generate_name >>
+```
+<!-- /worked-example:job-invoke -->
+
+Try it yourself:
+
+```console
+$ cargo build --features test-fixtures --bin fixture-cli-param-collision
+$ echo -e '[subcommand.generate.param.name]\norb_name = "output_name"' > gen-circleci-orb.toml
+$ PATH="$PWD/target/debug:$PATH" cargo run --bin gen-circleci-orb -- generate \
+    --binary fixture-cli-param-collision --orb-namespace jerus-org
+```
 
 ### Pin extra orbs
 

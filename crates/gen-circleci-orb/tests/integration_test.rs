@@ -365,3 +365,100 @@ fn fixture_param_collision_path_env() -> std::ffi::OsString {
     paths.insert(0, fixture_dir.to_path_buf());
     std::env::join_paths(paths).expect("PATH entries are valid")
 }
+
+/// docs/configuration-guide.md's "Worked example" embeds the ACTUAL output of
+/// running `generate` against `fixture-cli-param-collision` with the
+/// documented `orb_name` override, not hand-copied YAML that can silently
+/// drift from what the generator really produces. This regenerates that
+/// exact scenario and asserts the doc's embedded blocks (delimited by
+/// `<!-- worked-example:* -->` / `<!-- /worked-example:* -->` markers) are
+/// byte-identical to the real output.
+#[test]
+#[cfg(feature = "test-fixtures")]
+fn configuration_guide_worked_example_matches_real_generated_output() {
+    let out = TempDir::new().unwrap();
+    let binary = env!("CARGO_BIN_EXE_gen-circleci-orb");
+    let new_path = fixture_param_collision_path_env();
+
+    std::fs::write(
+        out.path().join("gen-circleci-orb.toml"),
+        r#"
+[subcommand.generate.param.name]
+orb_name = "output_name"
+"#,
+    )
+    .unwrap();
+
+    let output = Command::new(binary)
+        .args([
+            "generate",
+            "--binary",
+            "fixture-cli-param-collision",
+            "--orb-namespace",
+            "jerus-org",
+            "--output",
+            out.path().to_str().unwrap(),
+            "--no-record",
+        ])
+        .env("PATH", new_path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "generate failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let command =
+        std::fs::read_to_string(out.path().join("orb/src/commands/generate.yml")).unwrap();
+    let job = std::fs::read_to_string(out.path().join("orb/src/jobs/generate.yml")).unwrap();
+    let job_invoke: String = job
+        .lines()
+        .skip_while(|l| !l.starts_with("- generate:"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let docs = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../docs/configuration-guide.md"
+    ))
+    .unwrap();
+
+    assert_eq!(
+        extract_marked_yaml_block(&docs, "worked-example:command").trim(),
+        command.trim(),
+        "docs/configuration-guide.md's embedded command YAML has drifted \
+         from what generate() actually produces — regenerate the fixture's \
+         output and paste it back into the docs"
+    );
+    assert_eq!(
+        extract_marked_yaml_block(&docs, "worked-example:job-invoke").trim(),
+        job_invoke.trim(),
+        "docs/configuration-guide.md's embedded job invoke-step YAML has \
+         drifted from what generate() actually produces — regenerate the \
+         fixture's output and paste it back into the docs"
+    );
+}
+
+/// Extracts and un-fences the YAML content between
+/// `<!-- <marker> -->` / `<!-- /<marker> -->` HTML-comment delimiters in a
+/// Markdown document.
+#[cfg(feature = "test-fixtures")]
+fn extract_marked_yaml_block(markdown: &str, marker: &str) -> String {
+    let start_marker = format!("<!-- {marker} -->");
+    let end_marker = format!("<!-- /{marker} -->");
+    let start = markdown
+        .find(&start_marker)
+        .unwrap_or_else(|| panic!("start marker {start_marker:?} not found in docs"))
+        + start_marker.len();
+    let end = markdown[start..]
+        .find(&end_marker)
+        .unwrap_or_else(|| panic!("end marker {end_marker:?} not found in docs"))
+        + start;
+    markdown[start..end]
+        .trim()
+        .trim_start_matches("```yaml")
+        .trim_end_matches("```")
+        .trim()
+        .to_string()
+}
