@@ -11,7 +11,7 @@ parameters:
     default: .circleci
   check:
     type: boolean
-    description: 'Verify mode: write nothing and exit non-zero (with a diff and guidance) when the CI wiring is out of date. For use in CI'
+    description: 'Verify mode: write nothing and exit non-zero when the CI wiring is out of date. Prints a diff and upgrade guidance. For use in CI.'
     default: false
   attach_workspace:
     type: boolean
