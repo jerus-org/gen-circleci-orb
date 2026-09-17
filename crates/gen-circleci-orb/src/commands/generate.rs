@@ -782,6 +782,13 @@ pub(crate) fn validate_param_overrides(
 /// qualified, only leaves are), so it's matched by its own bare name — it
 /// carries no params in practice, but this keeps the search total rather
 /// than silently skipping a group entirely.
+///
+/// A leaf ABSENT from `effective_names` was excluded by
+/// `compute_effective_names`'s own traversal (an interactive/CLI-only
+/// subtree, via `is_interactive`) — it's never rendered, so it must never
+/// match `target`, not fall back to its bare name. Falling back would let an
+/// interactive leaf silently steal a bare-name match from the real, rendered
+/// leaf a collision qualified elsewhere (gen-circleci-orb#418 review).
 fn find_subcommand_by_effective_name<'a>(
     subs: &'a [help_parser::types::SubCommand],
     prefix: &str,
@@ -795,11 +802,7 @@ fn find_subcommand_by_effective_name<'a>(
             format!("{prefix}.{}", sub.name)
         };
         if sub.is_leaf {
-            let effective = effective_names
-                .get(&path)
-                .map(String::as_str)
-                .unwrap_or(sub.name.as_str());
-            if effective == target {
+            if effective_names.get(&path).map(String::as_str) == Some(target) {
                 return Some(sub);
             }
         } else if sub.name == target {
@@ -2856,6 +2859,94 @@ mod tests {
             "bare 'release' no longer names either occurrence once both are \
              qualified, so the override must no-op, not spuriously validate \
              against a.release's Integer 'retries': {result:?}"
+        );
+    }
+
+    /// Code review on gen-circleci-orb#418's PR: `compute_effective_names`
+    /// skips a WHOLE interactive group's subtree (`collect_leaf_paths`
+    /// `continue`s before recursing), so a leaf nested under an interactive
+    /// group never gets an `effective_names` entry at all — even though it
+    /// shares a bare name with a real, rendered leaf elsewhere.
+    /// `find_subcommand_by_effective_name` must skip that leaf too (no entry
+    /// in the map = never matches), not fall back to matching it by its bare
+    /// name just because a depth-first search reaches it before the real
+    /// leaf sitting later in the tree.
+    #[test]
+    fn validate_param_overrides_skips_a_leaf_under_an_interactive_group() {
+        use crate::orb_config::{OrbConfig, ParamOverride, SubcommandConfig};
+
+        let excluded_nested = help_parser::types::SubCommand {
+            name: "release".to_string(),
+            description: String::new(),
+            short_about: String::new(),
+            is_leaf: true,
+            parameters: vec![param("retries", ParamType::Integer)],
+            subcommands: vec![],
+        };
+        let real_root = help_parser::types::SubCommand {
+            name: "release".to_string(),
+            description: String::new(),
+            short_about: String::new(),
+            is_leaf: true,
+            parameters: vec![param("retries", ParamType::String)],
+            subcommands: vec![],
+        };
+        let cli = help_parser::types::CliDefinition {
+            binary_name: "demo".to_string(),
+            description: String::new(),
+            subcommands: vec![
+                // The interactive group comes FIRST, so a depth-first search
+                // reaches its excluded nested "release" before the real root
+                // one — required to actually exercise the fallback bug
+                // rather than incidentally matching the real leaf first.
+                help_parser::types::SubCommand {
+                    name: "ci".to_string(),
+                    description: String::new(),
+                    short_about: String::new(),
+                    is_leaf: false,
+                    parameters: vec![],
+                    subcommands: vec![excluded_nested],
+                },
+                real_root,
+            ],
+        };
+
+        let mut overrides = IndexMap::new();
+        overrides.insert(
+            "retries".to_string(),
+            ParamOverride {
+                default: Some("abc".to_string()),
+                orb_name: None,
+            },
+        );
+        let mut subcommands = IndexMap::new();
+        subcommands.insert(
+            "ci".to_string(),
+            SubcommandConfig {
+                interactive: Some(true),
+                ..SubcommandConfig::default()
+            },
+        );
+        subcommands.insert(
+            "release".to_string(),
+            SubcommandConfig {
+                param: Some(overrides),
+                ..SubcommandConfig::default()
+            },
+        );
+        let config = OrbConfig {
+            subcommand: Some(subcommands),
+            ..OrbConfig::default()
+        };
+
+        let effective_names = orb_generator::render::compute_effective_names(&cli, Some(&config));
+        let result = validate_param_overrides(&cli, &config, &effective_names);
+        assert!(
+            result.is_ok(),
+            "'abc' is a valid String default for the real root release's \
+             'retries' — the override must resolve there, not spuriously \
+             fail against the excluded ci.release's Integer 'retries': \
+             {result:?}"
         );
     }
 
