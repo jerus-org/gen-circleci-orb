@@ -313,22 +313,33 @@ fn is_job_suppressed(config: Option<&OrbConfig>, name: &str) -> bool {
 /// a literal, unconditional flag instead of a forwarded parameter (#350).
 const HARDCODED_CHECK_PARAM: &str = "check";
 
-fn is_hardcode_check(config: Option<&OrbConfig>, name: &str) -> bool {
+fn is_hardcode_check(config: Option<&OrbConfig>, effective_name: &str) -> bool {
     config
         .and_then(|c| c.subcommand.as_ref())
-        .and_then(|sc| sc.get(name))
+        .and_then(|sc| sc.get(effective_name))
         .and_then(|sc_config| sc_config.hardcode_check)
         .unwrap_or(false)
 }
 
-/// Whether `p` is `sub`'s own `check` flag with `hardcode_check` set for
-/// `sub` — the one param that must never appear as a forwarded orb
-/// parameter (command or job), only as a literal baked into the generated
-/// script (gen-circleci-orb#350). Mirrors `check_ci_wiring`'s existing
-/// safety property (`build_check_ci_wiring_step`, orb-producing jobs only)
-/// for any subcommand with its own genuine `--check`-shaped flag.
-fn is_hardcoded_check_param(sub: &SubCommand, p: &Parameter, config: Option<&OrbConfig>) -> bool {
-    p.long_name == HARDCODED_CHECK_PARAM && is_hardcode_check(config, &sub.name)
+/// Whether `p` is the `check` flag of the leaf rendered under
+/// `effective_name`, with `hardcode_check` set for THAT leaf — the one
+/// param that must never appear as a forwarded orb parameter (command or
+/// job), only as a literal baked into the generated script
+/// (gen-circleci-orb#350). Mirrors `check_ci_wiring`'s existing safety
+/// property (`build_check_ci_wiring_step`, orb-producing jobs only) for any
+/// subcommand with its own genuine `--check`-shaped flag.
+///
+/// Keyed by `effective_name`, not a bare subcommand name — two leaves
+/// sharing a bare name (one qualified by `compute_effective_names`) must
+/// each be addressable by their own config section, not have one leaf's
+/// `[subcommand.<bare-name>] hardcode_check` bleed into the other's
+/// rendering just because they share that bare name (#418/#425 class).
+fn is_hardcoded_check_param(
+    effective_name: &str,
+    p: &Parameter,
+    config: Option<&OrbConfig>,
+) -> bool {
+    p.long_name == HARDCODED_CHECK_PARAM && is_hardcode_check(config, effective_name)
 }
 
 /// Subcommands that are interactive (CLI-only) by default, unless the consumer
@@ -460,7 +471,7 @@ fn render_subcommand(
         }
         files.insert(
             PathBuf::from(format!("src/scripts/{snake}.sh")),
-            render_command_script_content(sub, path, binary, config),
+            render_command_script_content(sub, &effective_name, path, binary, config),
         );
     }
     for child in &sub.subcommands {
@@ -596,10 +607,10 @@ fn resolve_run_step_name(sub: &SubCommand, config: Option<&OrbConfig>) -> String
 }
 
 fn render_command(sub: &SubCommand, effective_name: &str, config: Option<&OrbConfig>) -> String {
-    let parameters = build_command_orb_parameters(sub, config);
+    let parameters = build_command_orb_parameters(sub, effective_name, config);
     // Boolean flags are set as string env vars via `when` steps (reliable),
     // ahead of the run step that consumes them via BASH_ENV.
-    let mut steps = build_boolean_flag_env_steps(sub, config);
+    let mut steps = build_boolean_flag_env_steps(sub, effective_name, config);
     steps.push(build_run_step(
         sub,
         effective_name,
@@ -621,6 +632,7 @@ fn render_command(sub: &SubCommand, effective_name: &str, config: Option<&OrbCon
 /// to the shell as "true", so the flag would silently never be passed.
 fn build_boolean_flag_env_steps(
     sub: &SubCommand,
+    effective_name: &str,
     config: Option<&OrbConfig>,
 ) -> Vec<serde_yaml::Value> {
     let mut steps = Vec::new();
@@ -628,7 +640,7 @@ fn build_boolean_flag_env_steps(
         if !matches!(p.param_type, ParamType::Boolean) {
             continue;
         }
-        if is_hardcoded_check_param(sub, p, config) {
+        if is_hardcoded_check_param(effective_name, p, config) {
             continue;
         }
         let orb_name = resolve_param_orb_name(&sub.name, &p.long_name, config);
@@ -721,11 +733,12 @@ fn coerce_override_default(raw: &str, param_type: &str) -> serde_yaml::Value {
 
 fn build_command_orb_parameters(
     sub: &SubCommand,
+    effective_name: &str,
     config: Option<&OrbConfig>,
 ) -> IndexMap<String, OrbParameter> {
     let mut params = IndexMap::new();
     for p in &sub.parameters {
-        if is_hardcoded_check_param(sub, p, config) {
+        if is_hardcoded_check_param(effective_name, p, config) {
             continue;
         }
         let orb_name = resolve_param_orb_name(&sub.name, &p.long_name, config);
@@ -757,6 +770,7 @@ fn build_command_orb_parameters(
 /// value.
 fn render_command_script_content(
     sub: &SubCommand,
+    effective_name: &str,
     path: &[String],
     binary: &str,
     config: Option<&OrbConfig>,
@@ -775,7 +789,7 @@ fn render_command_script_content(
         .partition(|p| p.kind == ParamKind::Positional);
 
     for p in options.into_iter().chain(positionals) {
-        if is_hardcoded_check_param(sub, p, config) {
+        if is_hardcoded_check_param(effective_name, p, config) {
             // Baked in as a literal, unconditional flag -- never read from a
             // consumer-settable env var (gen-circleci-orb#350).
             lines.push(format!(
@@ -840,7 +854,7 @@ fn render_job(
     opts: &GenerateOpts,
     config: Option<&OrbConfig>,
 ) -> String {
-    let mut parameters = build_orb_parameters(sub, RESERVED_JOB_PARAMS, config);
+    let mut parameters = build_orb_parameters(sub, effective_name, RESERVED_JOB_PARAMS, config);
 
     // Apply param default overrides from config. Keyed by `effective_name`,
     // not `sub.name` — for a colliding leaf, that's the SAME qualified name
@@ -1336,11 +1350,12 @@ fn render_example(cli: &CliDefinition, opts: &GenerateOpts, config: Option<&OrbC
 /// apart (a fix landing in only one would reintroduce #369 in the other).
 fn resolve_job_param_key(
     sub: &SubCommand,
+    effective_name: &str,
     p: &Parameter,
     skip: &[&str],
     config: Option<&OrbConfig>,
 ) -> Option<String> {
-    if is_hardcoded_check_param(sub, p, config) {
+    if is_hardcoded_check_param(effective_name, p, config) {
         return None;
     }
     if skip.contains(&p.long_name.as_str()) {
@@ -1356,12 +1371,13 @@ fn resolve_job_param_key(
 
 fn build_orb_parameters(
     sub: &SubCommand,
+    effective_name: &str,
     skip: &[&str],
     config: Option<&OrbConfig>,
 ) -> IndexMap<String, OrbParameter> {
     let mut params = IndexMap::new();
     for p in &sub.parameters {
-        let Some(key) = resolve_job_param_key(sub, p, skip, config) else {
+        let Some(key) = resolve_job_param_key(sub, effective_name, p, skip, config) else {
             continue;
         };
         let (type_str, enum_vals) = match &p.param_type {
@@ -1450,7 +1466,7 @@ fn build_invoke_step(
 ) -> serde_yaml::Value {
     let mut invoke_map = serde_yaml::Mapping::new();
     for p in &sub.parameters {
-        let Some(key) = resolve_job_param_key(sub, p, skip, config) else {
+        let Some(key) = resolve_job_param_key(sub, effective_name, p, skip, config) else {
             continue;
         };
         let value = format!("<< parameters.{key} >>");
@@ -2311,11 +2327,11 @@ mod tests {
         );
         let want = Some(serde_yaml::Value::String("binstall".to_string()));
         assert_eq!(
-            build_orb_parameters(&sub, &[], None)["method"].default,
+            build_orb_parameters(&sub, "demo", &[], None)["method"].default,
             want
         );
         assert_eq!(
-            build_command_orb_parameters(&sub, None)["method"].default,
+            build_command_orb_parameters(&sub, "demo", None)["method"].default,
             want
         );
     }
@@ -6887,6 +6903,50 @@ mod tests {
             script.contains("GCO_CHECK"),
             "without hardcode_check, 'check' must be read via its own env \
              var like any other boolean flag:\n{script}"
+        );
+    }
+
+    /// Code review on gen-circleci-orb#350's PR: two leaves share a bare
+    /// name (root `release` and nested `ci.release`), so `hardcode_check`
+    /// keyed off the bare name would bleed a config section meant only for
+    /// the root onto the nested leaf too, even though `compute_effective_names`
+    /// qualifies the nested one to `ci_release` — the same collision class
+    /// #418/#425 already fixed for other `[subcommand.<name>]` lookups.
+    #[test]
+    fn hardcode_check_is_scoped_to_the_intended_occurrence_only() {
+        let root = make_leaf("release", vec![check_param()]);
+        let nested = make_leaf("release", vec![check_param()]);
+        let group = SubCommand {
+            name: "ci".to_string(),
+            description: "CI commands.".to_string(),
+            short_about: "CI commands.".to_string(),
+            is_leaf: false,
+            parameters: vec![],
+            subcommands: vec![nested],
+        };
+        let cli = make_cli("mytool", vec![root, group]);
+        let config = config_with_subcommand(
+            "release",
+            crate::orb_config::SubcommandConfig {
+                hardcode_check: Some(true),
+                ..crate::orb_config::SubcommandConfig::default()
+            },
+        );
+        let files = generate(&cli, &default_opts(), Some(&config));
+
+        let root_command = &files[&PathBuf::from("src/commands/release.yml")];
+        assert!(
+            !root_command.contains("check:"),
+            "root 'release' IS named by the config, so its 'check' param \
+             must be baked in and dropped:\n{root_command}"
+        );
+
+        let nested_command = &files[&PathBuf::from("src/commands/ci_release.yml")];
+        assert!(
+            nested_command.contains("check:"),
+            "nested 'ci_release' is a DIFFERENT effective name, never \
+             targeted by '[subcommand.release] hardcode_check', so its own \
+             'check' param must stay a normal forwarded parameter:\n{nested_command}"
         );
     }
 }
