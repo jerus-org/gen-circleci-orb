@@ -790,6 +790,18 @@ fn find_subcommand<'a>(
 /// orb-facing key (`orb_generator::render::resolve_param_orb_name`) — e.g. a
 /// restricted `--name` (auto-renamed to `generate_name`) colliding with an
 /// unrelated, genuinely-named `--generate-name` flag on the same subcommand.
+///
+/// This is NOT two CLI options sharing one name — clap itself would never
+/// accept that on a single command, and this check doesn't need to guard
+/// against it. `--name` and `--generate-name` are two genuinely distinct,
+/// individually valid flags; the collision only exists because
+/// gen-circleci-orb's OWN restricted-param rename (`resolve_command_param_name`)
+/// happens to transform the first into the same string the second already
+/// is. Neither the CLI author nor clap ever sees this — it's purely an
+/// artifact of this generator's own naming scheme, introduced by the rename
+/// gen-circleci-orb#369 added to work around CircleCI's restricted-parameter
+/// rejection of a literal `name` key.
+///
 /// Unlike #358 (colliding SUBCOMMAND names, fixed by automatic qualification
 /// by path), there's no automatic disambiguation for a param-key collision
 /// within a single subcommand — a `long_name`/`long_name` pair can't be
@@ -798,7 +810,15 @@ fn find_subcommand<'a>(
 /// (`[subcommand.<name>.param.<flag>] orb_name = "..."`) as the fix — always
 /// available via `gen-circleci-orb.toml`, even for a CLI the consumer
 /// doesn't control (gen-circleci-orb#412; see #358's reviewer pushback for
-/// why "force a CLI redesign" would be the wrong shape here).
+/// why "force a CLI redesign" would be the wrong shape here). Since the
+/// rename that CREATES the collision is gen-circleci-orb's own
+/// restricted-param rename, not anything about the genuinely-named flag,
+/// prefer overriding the RESTRICTED param's own key (`param.name`) — that
+/// changes only the one thing that needed to change for CircleCI's sake, and
+/// leaves the genuinely-named flag's natural derived key untouched. See
+/// `docs/configuration-guide.md`'s "Rename a parameter's orb-facing key"
+/// section and the `fixture-cli-param-collision` integration test for a
+/// worked example.
 pub(crate) fn validate_param_key_collisions(
     cli_def: &help_parser::types::CliDefinition,
     config: &orb_config::OrbConfig,

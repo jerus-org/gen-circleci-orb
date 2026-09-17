@@ -341,22 +341,28 @@ an error; it's simply not applied.
 
 A restricted CLI flag name (currently just `name`) is automatically renamed to
 `{subcommand}_{param}` (e.g. `generate` + `--name` → `generate_name`) so it survives CircleCI's own
-restricted-parameter-name rejection. If that automatic rename happens to collide with a genuinely
-different, unrelated parameter on the same subcommand (e.g. a real `--generate-name` flag whose
-normalized name is already `generate_name`), generation fails loudly rather than letting one
-silently clobber the other. Set `orb_name` to give the colliding parameter an explicit key instead —
-keyed the same way `param.<name>` overrides always are, by the CLI's own flag name with hyphens
-normalized to underscores (`--generate-name` → `generate_name`), the same normalized form the
-collision itself is named after:
+restricted-parameter-name rejection. This is not a conflict clap or the CLI author would ever see —
+`--name` and, say, a genuinely distinct `--generate-name` flag on the same subcommand are two
+perfectly valid, individually-unambiguous options. The collision is purely an artifact of
+gen-circleci-orb's own rename: if the subcommand happens to also have a flag whose own normalized
+name (`--generate-name` → `generate_name`) already equals what `--name` gets renamed TO, generation
+fails loudly rather than letting one silently clobber the other.
+
+Since `--name`'s rename is what introduced the conflict, resolve it by giving the RESTRICTED
+parameter an explicit key instead of touching the unrelated flag — that changes only the one thing
+CircleCI actually forced to change, and leaves `--generate-name`'s own natural derived key
+(`generate_name`) alone:
 
 ```toml
-[subcommand.generate.param.generate_name]
-orb_name = "generate_name_alt"
+[subcommand.generate.param.name]
+orb_name = "output_name"
 ```
 
 This works even when you don't control the underlying CLI (so renaming the flag itself isn't an
 option) — `orb_name` always wins over both the bare CLI flag name and the automatic restricted-name
-rename.
+rename. See the `fixture-cli-param-collision` fixture and its integration test
+(`crates/gen-circleci-orb/tests/integration_test.rs`) for this scenario exercised end to end through
+the real `--help`-parsing pipeline.
 
 ### Pin extra orbs
 

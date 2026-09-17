@@ -4019,6 +4019,73 @@ mod tests {
     }
 
     #[test]
+    fn orb_name_override_on_the_restricted_param_preserves_the_real_flags_own_name() {
+        // Review preference on #412: since `--name`'s own automatic rename is
+        // what CREATES the collision, override the RESTRICTED param's key
+        // instead of the unrelated real flag's -- one change instead of two,
+        // and `--generate-name` keeps its own natural derived key untouched.
+        let params = vec![
+            Parameter {
+                long_name: "name".to_string(),
+                short: Some('n'),
+                param_type: ParamType::String,
+                default: Some(String::new()),
+                required: false,
+                description: "Name for the output.".to_string(),
+                ..Default::default()
+            },
+            Parameter {
+                long_name: "generate_name".to_string(),
+                short: None,
+                param_type: ParamType::Boolean,
+                default: Some("false".to_string()),
+                required: false,
+                description: "Whether to generate a name.".to_string(),
+                ..Default::default()
+            },
+        ];
+        let sub = make_leaf("generate", params);
+        let cli = make_cli("mytool", vec![sub]);
+
+        let mut param_overrides = IndexMap::new();
+        param_overrides.insert(
+            "name".to_string(),
+            crate::orb_config::ParamOverride {
+                default: None,
+                orb_name: Some("output_name".to_string()),
+            },
+        );
+        let mut subcommands = IndexMap::new();
+        subcommands.insert(
+            "generate".to_string(),
+            crate::orb_config::SubcommandConfig {
+                param: Some(param_overrides),
+                ..Default::default()
+            },
+        );
+        let config = OrbConfig {
+            subcommand: Some(subcommands),
+            ..Default::default()
+        };
+
+        let files = generate(&cli, &default_opts(), Some(&config));
+        let command = &files[&PathBuf::from("src/commands/generate.yml")];
+        let job = &files[&PathBuf::from("src/jobs/generate.yml")];
+        for rendered in [command, job] {
+            assert!(
+                rendered.contains("output_name:"),
+                "the restricted 'name' param must render under its 'orb_name' \
+                 override 'output_name':\n{rendered}"
+            );
+            assert!(
+                rendered.contains("generate_name:"),
+                "the genuinely-named 'generate_name' flag must keep its OWN \
+                 natural derived key, untouched by 'name''s override:\n{rendered}"
+            );
+        }
+    }
+
+    #[test]
     fn orb_producing_job_gains_persist_orb_workspace() {
         // A job for an orb-producing command (one with an `orb_dir` param) must
         // gain a `persist_orb_workspace` toggle (default false) and a conditional
