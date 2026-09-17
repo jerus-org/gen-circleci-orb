@@ -5,9 +5,12 @@ Re-sync an existing repo's orb-managed CI wiring to the current flow
 Usage: gen-circleci-orb update [OPTIONS]
 
 Options:
-      --config <CONFIG>  Path to gen-circleci-orb.toml [default: gen-circleci-orb.toml]
-      --ci-dir <CI_DIR>  Path to the .circleci/ directory [default: .circleci]
-      --check            Verify mode: write nothing and exit non-zero when the CI wiring is out of date
+      --config <CONFIG>  Path to gen-circleci-orb.toml [default:
+                         gen-circleci-orb.toml]
+      --ci-dir <CI_DIR>  Path to the .circleci/ directory [default:
+                         .circleci]
+      --check            Verify mode: write nothing and exit non-zero when
+                         the CI wiring is out of date
   -h, --help             Print help (see more with '--help')
 
 ```

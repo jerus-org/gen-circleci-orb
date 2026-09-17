@@ -44,11 +44,17 @@ Append a composed job group
 Usage: gen-circleci-orb config add-job-group [OPTIONS] --name <NAME>
 
 Options:
-      --name <NAME>                Name of the new job group
-      --steps <STEPS>              Comma-separated list of subcommand step names
-      --description <DESCRIPTION>  Optional description for the job group
-      --params <PARAMS>            Comma-separated explicit parameter list (omit for auto-detected shared params)
-  -h, --help                       Print help
+      --name <NAME>
+          Name of the new job group
+      --steps <STEPS>
+          Comma-separated list of subcommand step names
+      --description <DESCRIPTION>
+          Optional description for the job group
+      --params <PARAMS>
+          Comma-separated explicit parameter list (omit for auto-detected
+          shared params)
+  -h, --help
+          Print help
 
 ```
 

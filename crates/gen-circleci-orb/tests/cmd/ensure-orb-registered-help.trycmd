@@ -2,7 +2,11 @@
 $ gen-circleci-orb ensure-orb-registered --help
 Ensure a CircleCI orb is registered, creating it if it does not exist.
 
-A small CI-internal helper (not something a consumer normally runs by hand): the generated orb-release workflow calls this before `orb-tools/publish` so the very first publish of a brand-new orb namespace/name doesn't fail on a missing orb. Idempotent — a no-op once the orb already exists.
+A small CI-internal helper (not something a consumer normally runs by
+hand): the generated orb-release workflow calls this before
+`orb-tools/publish` so the very first publish of a brand-new orb
+namespace/name doesn't fail on a missing orb. Idempotent — a no-op once the
+orb already exists.
 
 Usage: gen-circleci-orb ensure-orb-registered [OPTIONS] --orb-name <ORB_NAME>
 
@@ -13,7 +17,8 @@ Options:
       --private
           Register the orb as private when creating it.
           
-          Must be set correctly on first creation — orb visibility cannot be changed after the orb is created.
+          Must be set correctly on first creation — orb visibility cannot
+          be changed after the orb is created.
 
   -h, --help
           Print help (see a summary with '-h')
