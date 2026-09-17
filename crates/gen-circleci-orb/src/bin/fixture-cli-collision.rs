@@ -26,9 +26,9 @@ enum Commands {
 
 #[derive(clap::Args)]
 struct ReleaseArgs {
-    /// Version to release
+    /// Tag to release
     #[arg(long)]
-    version: Option<String>,
+    tag: Option<String>,
 }
 
 #[derive(clap::Args)]

@@ -251,6 +251,75 @@ fn generate_qualifies_a_real_ambiguous_subcommand_name() {
     );
 }
 
+/// gen-circleci-orb#418: `[subcommand.release.param.version]` is scoped to
+/// the ROOT `release` — the only occurrence that keeps the bare name
+/// `release` once fixture-cli-collision's colliding `ci release` is
+/// qualified to `ci_release`. Before the fix, `render_job`'s override lookup
+/// keyed by `sub.name` (always the bare CLI name, for BOTH occurrences)
+/// applied this override to the nested job too, even though its own file is
+/// rendered as `ci_release.yml` — the config and the render output
+/// disagreed about which name `release` refers to.
+#[test]
+#[cfg(feature = "test-fixtures")]
+fn generate_scopes_a_param_override_to_the_bare_named_occurrence_only() {
+    let out = TempDir::new().unwrap();
+    let binary = env!("CARGO_BIN_EXE_gen-circleci-orb");
+
+    let fixture_bin = std::path::Path::new(env!("CARGO_BIN_EXE_fixture-cli-collision"));
+    let fixture_dir = fixture_bin
+        .parent()
+        .expect("fixture-cli-collision binary path has a parent directory");
+    let existing_path = std::env::var_os("PATH").unwrap_or_default();
+    let mut paths: Vec<_> = std::env::split_paths(&existing_path).collect();
+    paths.insert(0, fixture_dir.to_path_buf());
+    let new_path = std::env::join_paths(paths).expect("PATH entries are valid");
+
+    std::fs::write(
+        out.path().join("gen-circleci-orb.toml"),
+        r#"
+[subcommand.release.param.tag]
+default = "9.9.9"
+"#,
+    )
+    .unwrap();
+
+    let output = Command::new(binary)
+        .args([
+            "generate",
+            "--binary",
+            "fixture-cli-collision",
+            "--orb-namespace",
+            "jerus-org",
+            "--output",
+            out.path().to_str().unwrap(),
+            "--no-record",
+        ])
+        .env("PATH", new_path)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "generate failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let src = out.path().join("orb").join("src");
+    let root_job = std::fs::read_to_string(src.join("jobs/release.yml")).unwrap();
+    let nested_job = std::fs::read_to_string(src.join("jobs/ci_release.yml")).unwrap();
+
+    assert!(
+        root_job.contains("9.9.9"),
+        "root job (bare name 'release', matching the config key) must get \
+         the override:\n{root_job}"
+    );
+    assert!(
+        !nested_job.contains("9.9.9"),
+        "nested job (qualified to 'ci_release', NOT the config key \
+         'release') must NOT get an override scoped to a different name:\n{nested_job}"
+    );
+}
+
 /// gen-circleci-orb#412: fixture-cli-param-collision's `generate` subcommand
 /// has a restricted `--name` (auto-renames to `generate_name`) and an
 /// unrelated, genuinely-named `--generate-name` flag whose own normalized
