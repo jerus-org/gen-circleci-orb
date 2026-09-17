@@ -5,14 +5,30 @@ parameters:
     type: string
     description: Name of the binary to introspect (must be on PATH). Falls back to `binary` in the `[orb]` section of gen-circleci-orb.toml
     default: ''
-  orb_namespace:
+  config:
     type: string
-    description: CircleCI orb namespace(s) to publish the orb under (repeatable). Falls back to `namespaces` in the `[orb]` section of gen-circleci-orb.toml
+    description: Path to gen-circleci-orb.toml config file. Defaults to `<output>/gen-circleci-orb.toml` when not specified
     default: ''
   output:
     type: string
     description: Project root directory (orb source is written to `<output>/<orb-dir>/`)
     default: .
+  orb_dir:
+    type: string
+    description: Subdirectory within --output where orb source is written. Falls back to `orb_dir` in the `[orb]` section of gen-circleci-orb.toml, then "orb"
+    default: ''
+  orb_namespace:
+    type: string
+    description: CircleCI orb namespace(s) to publish the orb under (repeatable). Falls back to `namespaces` in the `[orb]` section of gen-circleci-orb.toml
+    default: ''
+  home_url:
+    type: string
+    description: Home URL for the orb registry display section. Falls back to `home_url` in the `[orb]` section of gen-circleci-orb.toml
+    default: ''
+  source_url:
+    type: string
+    description: Source URL for the orb registry display section. Falls back to `source_url` in the `[orb]` section of gen-circleci-orb.toml
+    default: ''
   install_method:
     type: enum
     description: How the binary is installed in the generated Docker image. Falls back to `install_method` in the `[orb]` section of gen-circleci-orb.toml, then "binstall"
@@ -24,22 +40,6 @@ parameters:
   base_image:
     type: string
     description: Base Docker image for the generated executor. Falls back to `base_image` in the `[orb]` section of gen-circleci-orb.toml, then "debian:13-slim"
-    default: ''
-  home_url:
-    type: string
-    description: Home URL for the orb registry display section. Falls back to `home_url` in the `[orb]` section of gen-circleci-orb.toml
-    default: ''
-  source_url:
-    type: string
-    description: Source URL for the orb registry display section. Falls back to `source_url` in the `[orb]` section of gen-circleci-orb.toml
-    default: ''
-  orb_dir:
-    type: string
-    description: Subdirectory within --output where orb source is written. Falls back to `orb_dir` in the `[orb]` section of gen-circleci-orb.toml, then "orb"
-    default: ''
-  git_push_subcommand:
-    type: string
-    description: Subcommand name(s) whose generated jobs should include a set_https_remote step (repeatable). Use for subcommands that push to git, e.g. --git-push-subcommand save
     default: ''
   circleci_cli_version:
     type: string
@@ -53,14 +53,14 @@ parameters:
     type: string
     description: 'Extra cargo tool(s) to install into the executor image (repeatable). Each is a crate name installed via cargo-binstall in the builder stage, with its binary copied into the runtime, or "crate:binary" when the installed binary name differs from the crate name. Binstall install method only. Example: --cargo-tool cargo-audit --cargo-tool rsign2:rsign'
     default: ''
+  git_push_subcommand:
+    type: string
+    description: Subcommand name(s) whose generated jobs should include a set_https_remote step (repeatable). Use for subcommands that push to git, e.g. --git-push-subcommand save
+    default: ''
   dry_run:
     type: boolean
     description: Show planned output without writing any files
     default: false
-  config:
-    type: string
-    description: Path to gen-circleci-orb.toml config file. Defaults to `<output>/gen-circleci-orb.toml` when not specified
-    default: ''
   no_record:
     type: boolean
     description: Suppress auto-record for this run, even when `[record].enabled = true` in gen-circleci-orb.toml. Auto-record commits the regenerated orb source back to the current branch (GPG-signed) and pushes it, so the published orb always reflects the CLI. Whether to record, and the names of the env vars holding the signing material, are config-driven (the `[record]` section). Use this flag for local, test, and dry runs where no signing material is available
@@ -129,19 +129,19 @@ steps:
         command: ssh-add -d ~/.ssh/id_rsa.pub || true
 - generate:
     binary: << parameters.binary >>
-    orb_namespace: << parameters.orb_namespace >>
+    config: << parameters.config >>
     output: << parameters.output >>
-    install_method: << parameters.install_method >>
-    base_image: << parameters.base_image >>
+    orb_dir: << parameters.orb_dir >>
+    orb_namespace: << parameters.orb_namespace >>
     home_url: << parameters.home_url >>
     source_url: << parameters.source_url >>
-    orb_dir: << parameters.orb_dir >>
-    git_push_subcommand: << parameters.git_push_subcommand >>
+    install_method: << parameters.install_method >>
+    base_image: << parameters.base_image >>
     circleci_cli_version: << parameters.circleci_cli_version >>
     apt_packages: << parameters.apt_packages >>
     cargo_tool: << parameters.cargo_tool >>
+    git_push_subcommand: << parameters.git_push_subcommand >>
     dry_run: << parameters.dry_run >>
-    config: << parameters.config >>
     no_record: << parameters.no_record >>
     check: << parameters.check >>
     allow_main_record: << parameters.allow_main_record >>

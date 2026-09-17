@@ -1,4 +1,4 @@
-description: Re-sync an existing repo's orb-managed CI wiring to the current flow
+description: Re-sync an existing repo's orb-managed CI wiring to the current flow. Reads the committed gen-circleci-orb.toml (never overwrites it) and rewrites only the gen-circleci-orb-managed blocks in .circleci/config.yml, preserving the consumer's own jobs and customizations. Run with --check in CI to fail when the wiring is out of date relative to the pinned orb version.
 parameters:
   config:
     type: string
@@ -20,7 +20,7 @@ steps:
         name: Set GCO_CHECK flag
         command: echo 'export GCO_CHECK=true' >> "$BASH_ENV"
 - run:
-    name: Re-sync an existing repo's orb-managed CI wiring to the current flow
+    name: Re-sync an existing repo's orb-managed CI wiring to the current flow.
     command: <<include(scripts/update.sh)>>
     environment:
       GCO_CONFIG: << parameters.config >>
