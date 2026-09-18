@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - resolve renamed param-key collisions (#412)(pr [#421])
 - rename restricted params in job groups (#413)(pr [#424])
 - qualify param-override lookups for colliding subcommands(pr [#426])
+- deps: update dependency toolkit to v8(pr [#429])
 
 ## [0.1.21] - 2026-09-16
 
@@ -1192,6 +1193,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#426]: https://github.com/jerus-org/gen-circleci-orb/pull/426
 [#427]: https://github.com/jerus-org/gen-circleci-orb/pull/427
 [#428]: https://github.com/jerus-org/gen-circleci-orb/pull/428
+[#429]: https://github.com/jerus-org/gen-circleci-orb/pull/429
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.21...HEAD
 [0.1.21]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.20...v0.1.21
 [0.1.20]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.19...v0.1.20
