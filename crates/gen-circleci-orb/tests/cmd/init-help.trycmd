@@ -229,4 +229,30 @@ Auto-record:
           
           The record CI job attaches these.
 
+Post-merge regen:
+      --post-merge-regen
+          Relocate regen+record for a qualifying bot-authored PR to a
+          CI-managed post-merge workflow.
+          
+          Requires `--record` (or an existing `[record].enabled = true`) —
+          the feature has nothing to relocate otherwise. See
+          docs/post-merge-regeneration.md. Prompted interactively if not
+          set.
+
+      --post-merge-regen-branch-pattern <PATTERN>
+          Bash-glob branch-name pattern(s) identifying a qualifying PR
+          (repeatable or comma-separated)
+
+      --post-merge-regen-workflow <WORKFLOW>
+          Name of the workflow the relocated jobs are added to
+          (post-merge-regen)
+
+      --post-merge-regen-file <FILE>
+          CI file containing that workflow (post-merge-regen).
+          
+          Defaults to `config.yml`; set this only when the target workflow
+          lives in a separate file, such as a dedicated "pull_request
+          merged"-triggered pipeline — the setup this feature recommends
+          (see docs/post-merge-regeneration.md).
+
 ```
