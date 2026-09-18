@@ -1,7 +1,7 @@
 version: 2.1
 
 orbs:
-  toolkit: jerus-org/circleci-toolkit@7.4.0
+  toolkit: jerus-org/circleci-toolkit@8.0.1
   orb-tools: circleci/orb-tools@12.5.0
 
   # >>> gen-circleci-orb (managed — edits overwritten by 'gen-circleci-orb update')
