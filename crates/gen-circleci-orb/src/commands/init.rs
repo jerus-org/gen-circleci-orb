@@ -6,8 +6,8 @@ use crate::{
     commands::generate::Generate,
     help_parser::types::CliDefinition,
     orb_config::{
-        non_empty, CiSection, OrbConfig, OrbSection, RecordConfig, DEFAULT_CRATE_WAIT_ATTEMPTS,
-        DEFAULT_CRATE_WAIT_SECONDS,
+        non_empty, CiSection, OrbConfig, OrbSection, PostMergeRegenConfig, RecordConfig,
+        DEFAULT_CRATE_WAIT_ATTEMPTS, DEFAULT_CRATE_WAIT_SECONDS,
     },
     output_writer,
 };
@@ -69,6 +69,7 @@ pub(crate) struct GatheredExtras {
     pub mcp_context: Vec<String>,
     pub mcp_earliest_version: String,
     pub record: Option<RecordConfig>,
+    pub post_merge_regen: Option<PostMergeRegenConfig>,
 }
 
 /// True when there is nobody to ask: no terminal, or a CI run.
@@ -134,6 +135,63 @@ pub(crate) fn build_record_config(
             .unwrap_or("")
             .to_string(),
         contexts,
+    }))
+}
+
+/// Assemble the `[post_merge_regen]` config. Returns `Ok(None)` when the
+/// feature is not enabled (including when `[record]` itself is not enabled —
+/// the caller is responsible for that gate, see [`Init::gather_post_merge_regen`]).
+/// When enabled, at least one branch pattern and a workflow name are required;
+/// `file` falls back to `config.yml` when blank, matching
+/// [`PostMergeRegenConfig`]'s own default.
+pub(crate) fn build_post_merge_regen_config(
+    enabled: bool,
+    branch_patterns: &[String],
+    workflow: Option<&str>,
+    file: Option<&str>,
+    requires: &[String],
+) -> Result<Option<PostMergeRegenConfig>> {
+    if !enabled {
+        return Ok(None);
+    }
+    let branch_patterns: Vec<String> = branch_patterns
+        .iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if branch_patterns.is_empty() {
+        anyhow::bail!(
+            "post-merge-regen is enabled but no --post-merge-regen-branch-pattern \
+             was provided (no default — supply at least one branch-name pattern, \
+             e.g. \"renovate/*\")"
+        );
+    }
+    let workflow = workflow
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "post-merge-regen is enabled but --post-merge-regen-workflow \
+                 was not provided (no default — name the workflow the \
+                 relocated jobs should be added to)"
+            )
+        })?;
+    let file = file
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| "config.yml".to_string());
+    let requires: Vec<String> = requires
+        .iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    Ok(Some(PostMergeRegenConfig {
+        branch_patterns,
+        workflow,
+        file,
+        requires,
     }))
 }
 
@@ -495,6 +553,34 @@ pub struct Init {
     )]
     pub record_contexts: Vec<String>,
 
+    /// Relocate regen+record for a qualifying bot-authored PR to a CI-managed post-merge workflow.
+    ///
+    /// Requires `--record` (or an existing `[record].enabled = true`) — the feature has nothing
+    /// to relocate otherwise. See docs/post-merge-regeneration.md. Prompted interactively if not set.
+    #[arg(long, help_heading = "Post-merge regen")]
+    pub post_merge_regen: bool,
+
+    /// Bash-glob branch-name pattern(s) identifying a qualifying PR (repeatable or comma-separated).
+    #[arg(
+        long = "post-merge-regen-branch-pattern",
+        value_name = "PATTERN",
+        value_delimiter = ',',
+        help_heading = "Post-merge regen"
+    )]
+    pub post_merge_regen_branch_patterns: Vec<String>,
+
+    /// Name of the workflow the relocated jobs are added to (post-merge-regen).
+    #[arg(long, value_name = "WORKFLOW", help_heading = "Post-merge regen")]
+    pub post_merge_regen_workflow: Option<String>,
+
+    /// CI file containing that workflow (post-merge-regen).
+    ///
+    /// Defaults to `config.yml`; set this only when the target workflow lives in a separate
+    /// file, such as a dedicated "pull_request merged"-triggered pipeline — the setup this
+    /// feature recommends (see docs/post-merge-regeneration.md).
+    #[arg(long, value_name = "FILE", help_heading = "Post-merge regen")]
+    pub post_merge_regen_file: Option<String>,
+
     /// Show planned changes without modifying any files.
     #[arg(long)]
     pub dry_run: bool,
@@ -587,7 +673,7 @@ pub(crate) fn build_bootstrap_config(
         job_group: existing.job_group.clone(),
         extra_job: existing.extra_job.clone(),
         record: None, // populated by run() after gathering extras
-        post_merge_regen: existing.post_merge_regen.clone(),
+        post_merge_regen: extras.post_merge_regen.clone(),
     }
 }
 
@@ -705,6 +791,103 @@ impl Init {
             Some(&sign_key),
             Some(&push_fingerprint),
             &contexts,
+        )
+    }
+
+    /// Gather the `[post_merge_regen]` config, mirroring `gather_record`. Only
+    /// offered/enabled when `[record]` is enabled in the same run — the feature
+    /// has nothing to relocate otherwise (#391). `requires` is not gathered
+    /// here (no dialogue prompt); an existing value is simply carried forward.
+    fn gather_post_merge_regen(
+        &self,
+        existing: &OrbConfig,
+        record_enabled: bool,
+        interactive: bool,
+    ) -> Result<Option<PostMergeRegenConfig>> {
+        if !record_enabled {
+            return Ok(None);
+        }
+        let ex = existing.post_merge_regen.as_ref();
+        let requires = ex.map(|p| p.requires.clone()).unwrap_or_default();
+
+        let branch_patterns: Vec<String> = if !self.post_merge_regen_branch_patterns.is_empty() {
+            self.post_merge_regen_branch_patterns.clone()
+        } else {
+            ex.map(|p| p.branch_patterns.clone()).unwrap_or_default()
+        };
+        let workflow = self
+            .post_merge_regen_workflow
+            .clone()
+            .filter(|s| !s.is_empty())
+            .or_else(|| ex.map(|p| p.workflow.clone()));
+        let file = self
+            .post_merge_regen_file
+            .clone()
+            .filter(|s| !s.is_empty())
+            .or_else(|| ex.map(|p| p.file.clone()));
+
+        if !interactive {
+            let enabled = self.post_merge_regen || ex.is_some();
+            return build_post_merge_regen_config(
+                enabled,
+                &branch_patterns,
+                workflow.as_deref(),
+                file.as_deref(),
+                &requires,
+            );
+        }
+
+        let enabled = if self.post_merge_regen {
+            true
+        } else {
+            dialoguer::Confirm::new()
+                .with_prompt(
+                    "Relocate regen+record for a qualifying bot-authored PR (e.g. Renovate) \
+                     to a CI-managed post-merge workflow?",
+                )
+                .default(ex.is_some())
+                .interact()?
+        };
+        if !enabled {
+            return Ok(None);
+        }
+
+        use dialoguer::Input;
+        let prompt = |label: &str, current: Option<String>| -> Result<String> {
+            let mut input = Input::<String>::new().with_prompt(label);
+            if let Some(c) = current.filter(|s| !s.is_empty()) {
+                input = input.default(c);
+            }
+            Ok(input.interact_text()?)
+        };
+        let patterns_default = if branch_patterns.is_empty() {
+            "renovate/*".to_string()
+        } else {
+            branch_patterns.join(",")
+        };
+        let patterns_raw = prompt(
+            "Branch pattern(s) identifying a qualifying PR, comma-separated",
+            Some(patterns_default),
+        )?;
+        let branch_patterns: Vec<String> = patterns_raw
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect();
+        let workflow = prompt("Workflow the relocated jobs are added to", workflow)?;
+        let file = prompt(
+            "CI file containing that workflow (recommended: a dedicated file for a \
+             \"PR merged\" trigger, e.g. update_prlog.yml — see docs/post-merge-regeneration.md)",
+            Some(file.unwrap_or_else(|| "config.yml".to_string())),
+        )?;
+
+        build_post_merge_regen_config(
+            true,
+            &branch_patterns,
+            Some(&workflow),
+            Some(&file),
+            &requires,
         )
     }
 
@@ -949,6 +1132,11 @@ impl Init {
         let ci = existing.ci.as_ref();
         let orb = existing.orb.as_ref();
         let record = self.gather_record(existing, interactive)?;
+        let post_merge_regen = self.gather_post_merge_regen(
+            existing,
+            record.as_ref().is_some_and(|r| r.enabled),
+            interactive,
+        )?;
 
         // Seed both from the repo's own remote (#269). `generate` detects it
         // anyway and puts it in the orb, so offering nothing here made Enter
@@ -1035,6 +1223,7 @@ impl Init {
             mcp_context,
             mcp_earliest_version,
             record,
+            post_merge_regen,
         })
     }
 
@@ -1192,13 +1381,26 @@ impl Init {
             // default; opt out later via `[ci] test_generation = false` in the
             // toml when ready.
             test_generation: true,
-            // Not gathered at init — an advanced knob configured later via
-            // `[post_merge_regen]` in the toml, once the consumer has set up
-            // the CircleCI "PR merged" trigger this feature depends on.
-            post_merge_branch_patterns: vec![],
-            post_merge_workflow: String::new(),
-            post_merge_ci_file: String::new(),
-            post_merge_requires: vec![],
+            post_merge_branch_patterns: extras
+                .post_merge_regen
+                .as_ref()
+                .map(|p| p.branch_patterns.clone())
+                .unwrap_or_default(),
+            post_merge_workflow: extras
+                .post_merge_regen
+                .as_ref()
+                .map(|p| p.workflow.clone())
+                .unwrap_or_default(),
+            post_merge_ci_file: extras
+                .post_merge_regen
+                .as_ref()
+                .map(|p| p.file.clone())
+                .unwrap_or_default(),
+            post_merge_requires: extras
+                .post_merge_regen
+                .as_ref()
+                .map(|p| p.requires.clone())
+                .unwrap_or_default(),
         };
 
         let mode = if self.dry_run {
@@ -1309,6 +1511,7 @@ mod tests {
             mcp_context: vec![],
             mcp_earliest_version: DEFAULT_MCP_EARLIEST_VERSION.to_string(),
             record: None,
+            post_merge_regen: None,
         }
     }
 
@@ -1464,6 +1667,10 @@ mod tests {
             record_signing_key_env: None,
             record_push_ssh_fingerprint: None,
             record_contexts: vec![],
+            post_merge_regen: false,
+            post_merge_regen_branch_patterns: vec![],
+            post_merge_regen_workflow: None,
+            post_merge_regen_file: None,
         };
         assert_eq!(
             init.git_push_subcommands,
@@ -1487,6 +1694,47 @@ mod tests {
         assert_eq!(
             config.orb.as_ref().unwrap().git_push_subcommands.as_deref(),
             Some(&["save".to_string()][..])
+        );
+    }
+
+    #[test]
+    fn bootstrap_config_includes_post_merge_regen_from_extras() {
+        let config = bootstrap_with(
+            "mytool",
+            &["my-org".to_string()],
+            gathered_orb(),
+            GatheredExtras {
+                post_merge_regen: Some(PostMergeRegenConfig {
+                    branch_patterns: vec!["renovate/*".to_string()],
+                    workflow: "update_prlog".to_string(),
+                    file: "update_prlog.yml".to_string(),
+                    requires: vec![],
+                }),
+                ..gathered_extras()
+            },
+            &[],
+        );
+        let pmr = config
+            .post_merge_regen
+            .expect("[post_merge_regen] gathered by extras must reach the written config");
+        assert_eq!(pmr.branch_patterns, vec!["renovate/*"]);
+        assert_eq!(pmr.workflow, "update_prlog");
+    }
+
+    #[test]
+    fn bootstrap_config_post_merge_regen_none_when_not_gathered() {
+        let config = bootstrap_with(
+            "mytool",
+            &["my-org".to_string()],
+            gathered_orb(),
+            gathered_extras(),
+            &[],
+        );
+        assert_eq!(
+            config.post_merge_regen, None,
+            "no [post_merge_regen] gathered must produce no section, even if an \
+             unrelated existing config had one (build_bootstrap_config takes it \
+             from extras, not from `existing`, now that init gathers it)"
         );
     }
 
@@ -1822,6 +2070,10 @@ mod tests {
             record_signing_key_env: None,
             record_push_ssh_fingerprint: None,
             record_contexts: vec![],
+            post_merge_regen: false,
+            post_merge_regen_branch_patterns: vec![],
+            post_merge_regen_workflow: None,
+            post_merge_regen_file: None,
         }
     }
 
@@ -2100,6 +2352,149 @@ mod tests {
         .unwrap_err()
         .to_string();
         assert!(err.contains("--record-context"), "unexpected: {err}");
+    }
+
+    // ── build_post_merge_regen_config ───────────────────────────────────────
+
+    #[test]
+    fn build_post_merge_regen_config_disabled_returns_none() {
+        let cfg =
+            build_post_merge_regen_config(false, &[], None, None, &[]).expect("disabled is ok");
+        assert!(
+            cfg.is_none(),
+            "disabled must yield no [post_merge_regen] section"
+        );
+    }
+
+    #[test]
+    fn build_post_merge_regen_config_collects_patterns_workflow_and_file() {
+        let cfg = build_post_merge_regen_config(
+            true,
+            &["renovate/*".to_string()],
+            Some("update_prlog"),
+            Some("update_prlog.yml"),
+            &["some-job".to_string()],
+        )
+        .expect("all values present")
+        .expect("enabled yields Some");
+        assert_eq!(cfg.branch_patterns, vec!["renovate/*"]);
+        assert_eq!(cfg.workflow, "update_prlog");
+        assert_eq!(cfg.file, "update_prlog.yml");
+        assert_eq!(cfg.requires, vec!["some-job"]);
+    }
+
+    #[test]
+    fn build_post_merge_regen_config_defaults_file_to_config_yml() {
+        let cfg = build_post_merge_regen_config(
+            true,
+            &["renovate/*".to_string()],
+            Some("update_prlog"),
+            None,
+            &[],
+        )
+        .expect("all values present")
+        .expect("enabled yields Some");
+        assert_eq!(cfg.file, "config.yml");
+    }
+
+    #[test]
+    fn build_post_merge_regen_config_errors_when_enabled_without_branch_pattern() {
+        let err = build_post_merge_regen_config(true, &[], Some("update_prlog"), None, &[])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("--post-merge-regen-branch-pattern"),
+            "unexpected: {err}"
+        );
+    }
+
+    #[test]
+    fn build_post_merge_regen_config_errors_when_enabled_without_workflow() {
+        let err = build_post_merge_regen_config(true, &["renovate/*".to_string()], None, None, &[])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("--post-merge-regen-workflow"),
+            "unexpected: {err}"
+        );
+    }
+
+    // ── gather_post_merge_regen (via gather_extras) ─────────────────────────
+
+    #[test]
+    fn gather_post_merge_regen_none_when_record_not_enabled() {
+        // Flags supplied, but [record] is never enabled — the feature has
+        // nothing to relocate, so it must stay off regardless of the flags.
+        let init = Init {
+            post_merge_regen_branch_patterns: vec!["renovate/*".to_string()],
+            post_merge_regen_workflow: Some("update_prlog".to_string()),
+            dry_run: true,
+            ..make_init(true)
+        };
+        let extras = init
+            .gather_extras(&[], None, &OrbConfig::default(), false)
+            .unwrap();
+        assert!(extras.post_merge_regen.is_none());
+    }
+
+    #[test]
+    fn gather_post_merge_regen_non_interactive_builds_from_flags() {
+        let init = Init {
+            record: true,
+            record_gpg_key_env: Some("G_KEY".to_string()),
+            record_gpg_trust_env: Some("G_TRUST".to_string()),
+            record_user_name_env: Some("G_NAME".to_string()),
+            record_user_email_env: Some("G_EMAIL".to_string()),
+            record_signing_key_env: Some("G_SIGN".to_string()),
+            record_contexts: vec!["release".to_string()],
+            post_merge_regen: true,
+            post_merge_regen_branch_patterns: vec!["renovate/*".to_string()],
+            post_merge_regen_workflow: Some("update_prlog".to_string()),
+            post_merge_regen_file: Some("update_prlog.yml".to_string()),
+            dry_run: true,
+            ..make_init(true)
+        };
+        let extras = init
+            .gather_extras(&[], None, &OrbConfig::default(), false)
+            .unwrap();
+        let pmr = extras
+            .post_merge_regen
+            .expect("record enabled + flags set must produce [post_merge_regen]");
+        assert_eq!(pmr.branch_patterns, vec!["renovate/*"]);
+        assert_eq!(pmr.workflow, "update_prlog");
+        assert_eq!(pmr.file, "update_prlog.yml");
+    }
+
+    #[test]
+    fn gather_post_merge_regen_non_interactive_carries_forward_existing() {
+        let existing = OrbConfig {
+            record: Some(RecordConfig {
+                enabled: true,
+                gpg_key_env: "G_KEY".to_string(),
+                gpg_trust_env: "G_TRUST".to_string(),
+                user_name_env: "G_NAME".to_string(),
+                user_email_env: "G_EMAIL".to_string(),
+                signing_key_env: "G_SIGN".to_string(),
+                push_ssh_fingerprint: String::new(),
+                contexts: vec!["release".to_string()],
+            }),
+            post_merge_regen: Some(PostMergeRegenConfig {
+                branch_patterns: vec!["renovate/*".to_string()],
+                workflow: "update_prlog".to_string(),
+                file: "update_prlog.yml".to_string(),
+                requires: vec![],
+            }),
+            ..OrbConfig::default()
+        };
+        // No new post-merge-regen flags on this run — a re-run must not drop
+        // the already-configured section.
+        let init = make_init(true);
+        let extras = init.gather_extras(&[], None, &existing, false).unwrap();
+        let pmr = extras
+            .post_merge_regen
+            .expect("existing [post_merge_regen] must be carried forward");
+        assert_eq!(pmr.branch_patterns, vec!["renovate/*"]);
+        assert_eq!(pmr.workflow, "update_prlog");
     }
 
     #[test]
