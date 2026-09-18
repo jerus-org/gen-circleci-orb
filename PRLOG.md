@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - generalize the hardcoded check-only step pattern(pr [#427])
 - differentiate short/long CLI help(pr [#428])
+- init interactively sets up [post_merge_regen](pr [#430])
 
 ### Fixed
 
@@ -1194,6 +1195,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#427]: https://github.com/jerus-org/gen-circleci-orb/pull/427
 [#428]: https://github.com/jerus-org/gen-circleci-orb/pull/428
 [#429]: https://github.com/jerus-org/gen-circleci-orb/pull/429
+[#430]: https://github.com/jerus-org/gen-circleci-orb/pull/430
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.21...HEAD
 [0.1.21]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.20...v0.1.21
 [0.1.20]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.19...v0.1.20
