@@ -866,29 +866,39 @@ fn find_subcommand_by_effective_name<'a>(
 pub(crate) fn validate_param_key_collisions(
     cli_def: &help_parser::types::CliDefinition,
     config: &orb_config::OrbConfig,
+    effective_names: &std::collections::HashMap<String, String>,
 ) -> Result<()> {
     let mut errors = Vec::new();
-    walk_subcommands(&cli_def.subcommands, &mut |sub| {
+    walk_subcommands(&cli_def.subcommands, "", &mut |sub, path| {
+        // The config section a leaf's overrides live under: its qualified
+        // effective name when it collides with another leaf, else its bare
+        // name (#425) — also what the suggested `[subcommand.<name>...]` fix
+        // must name, or the advice would point at the wrong section.
+        let section = effective_names
+            .get(path)
+            .map(String::as_str)
+            .unwrap_or(&sub.name);
         let mut seen: std::collections::HashMap<String, &str> = std::collections::HashMap::new();
         for p in &sub.parameters {
             let key = orb_generator::render::resolve_param_orb_name(
                 &sub.name,
+                section,
                 &p.long_name,
                 Some(config),
             );
             if let Some(prev) = seen.insert(key.clone(), p.long_name.as_str()) {
                 errors.push(format!(
-                    "subcommand '{}': parameters '--{}' and '--{}' both resolve to orb parameter \
-                     '{key}' — set [subcommand.{}.param.<flag>] orb_name = \"...\" to disambiguate one of them",
-                    sub.name, prev, p.long_name, sub.name
+                    "subcommand '{section}': parameters '--{prev}' and '--{}' both resolve to orb parameter \
+                     '{key}' — set [subcommand.{section}.param.<flag>] orb_name = \"...\" to disambiguate one of them",
+                    p.long_name
                 ));
             }
             if orb_generator::render::SYNTHESIZED_JOB_PARAMS.contains(&key.as_str()) {
                 errors.push(format!(
-                    "subcommand '{}': parameter '--{}' resolves to orb parameter '{key}', which \
+                    "subcommand '{section}': parameter '--{}' resolves to orb parameter '{key}', which \
                      the generator itself reserves for a synthesized job parameter — set \
-                     [subcommand.{}.param.<flag>] orb_name = \"...\" to give it a different key",
-                    sub.name, p.long_name, sub.name
+                     [subcommand.{section}.param.<flag>] orb_name = \"...\" to give it a different key",
+                    p.long_name
                 ));
             }
         }
@@ -904,11 +914,17 @@ pub(crate) fn validate_param_key_collisions(
 /// wherever a subcommand's parameters live.
 fn walk_subcommands<'a>(
     subs: &'a [help_parser::types::SubCommand],
-    visit: &mut impl FnMut(&'a help_parser::types::SubCommand),
+    prefix: &str,
+    visit: &mut impl FnMut(&'a help_parser::types::SubCommand, &str),
 ) {
     for sub in subs {
-        visit(sub);
-        walk_subcommands(&sub.subcommands, visit);
+        let path = if prefix.is_empty() {
+            sub.name.clone()
+        } else {
+            format!("{prefix}.{}", sub.name)
+        };
+        visit(sub, &path);
+        walk_subcommands(&sub.subcommands, &path, visit);
     }
 }
 
@@ -1150,7 +1166,7 @@ impl Generate {
             &git_push_subcommands,
         )?;
         validate_param_overrides(&cli_def, &orb_config, &effective_names)?;
-        validate_param_key_collisions(&cli_def, &orb_config)?;
+        validate_param_key_collisions(&cli_def, &orb_config, &effective_names)?;
 
         let opts = orb_generator::GenerateOpts {
             namespaces,
@@ -3012,7 +3028,12 @@ mod tests {
             ],
         );
         let config = crate::orb_config::OrbConfig::default();
-        let err = validate_param_key_collisions(&cli, &config).unwrap_err();
+        let err = validate_param_key_collisions(
+            &cli,
+            &config,
+            &orb_generator::render::compute_effective_names(&cli, None),
+        )
+        .unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("generate_name"), "got: {msg}");
         assert!(msg.contains("orb_name"), "got: {msg}");
@@ -3048,7 +3069,11 @@ mod tests {
             subcommand: Some(subcommands),
             ..Default::default()
         };
-        let result = validate_param_key_collisions(&cli, &config);
+        let result = validate_param_key_collisions(
+            &cli,
+            &config,
+            &orb_generator::render::compute_effective_names(&cli, None),
+        );
         assert!(result.is_ok(), "expected Ok, got {result:?}");
     }
 
@@ -3089,7 +3114,12 @@ mod tests {
             subcommand: Some(subcommands),
             ..Default::default()
         };
-        let err = validate_param_key_collisions(&cli, &config).unwrap_err();
+        let err = validate_param_key_collisions(
+            &cli,
+            &config,
+            &orb_generator::render::compute_effective_names(&cli, None),
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("generate_name"), "got: {err}");
     }
 
@@ -3103,7 +3133,11 @@ mod tests {
             ],
         );
         let config = crate::orb_config::OrbConfig::default();
-        let result = validate_param_key_collisions(&cli, &config);
+        let result = validate_param_key_collisions(
+            &cli,
+            &config,
+            &orb_generator::render::compute_effective_names(&cli, None),
+        );
         assert!(result.is_ok(), "expected Ok, got {result:?}");
     }
 
@@ -3122,7 +3156,12 @@ mod tests {
             vec![param("attach_workspace", ParamType::String)],
         );
         let config = crate::orb_config::OrbConfig::default();
-        let err = validate_param_key_collisions(&cli, &config).unwrap_err();
+        let err = validate_param_key_collisions(
+            &cli,
+            &config,
+            &orb_generator::render::compute_effective_names(&cli, None),
+        )
+        .unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("attach_workspace"), "got: {msg}");
     }
@@ -3151,9 +3190,118 @@ mod tests {
             subcommand: Some(subcommands),
             ..Default::default()
         };
-        let err = validate_param_key_collisions(&cli, &config).unwrap_err();
+        let err = validate_param_key_collisions(
+            &cli,
+            &config,
+            &orb_generator::render::compute_effective_names(&cli, None),
+        )
+        .unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("target_branch"), "got: {msg}");
+    }
+
+    /// gen-circleci-orb#425: root `release` and nested `a release` share a bare
+    /// name, so `compute_effective_names` keeps the root as `release` and
+    /// qualifies the nested one to `a_release`. Each carries a `--name` whose
+    /// automatic rename (`release_name`) collides with a real `--release-name`.
+    fn colliding_release_cli() -> help_parser::types::CliDefinition {
+        let leaf = || help_parser::types::SubCommand {
+            name: "release".to_string(),
+            description: String::new(),
+            short_about: String::new(),
+            is_leaf: true,
+            parameters: vec![
+                param("name", ParamType::String),
+                param("release_name", ParamType::Boolean),
+            ],
+            subcommands: vec![],
+        };
+        help_parser::types::CliDefinition {
+            binary_name: "demo".to_string(),
+            description: String::new(),
+            subcommands: vec![
+                leaf(),
+                help_parser::types::SubCommand {
+                    name: "a".to_string(),
+                    description: String::new(),
+                    short_about: String::new(),
+                    is_leaf: false,
+                    parameters: vec![],
+                    subcommands: vec![leaf()],
+                },
+            ],
+        }
+    }
+
+    fn config_with_orb_name(
+        section: &str,
+        param_name: &str,
+        orb_name: &str,
+    ) -> crate::orb_config::OrbConfig {
+        use crate::orb_config::{ParamOverride, SubcommandConfig};
+        let mut overrides = IndexMap::new();
+        overrides.insert(
+            param_name.to_string(),
+            ParamOverride {
+                default: None,
+                orb_name: Some(orb_name.to_string()),
+            },
+        );
+        let mut subcommands = IndexMap::new();
+        subcommands.insert(
+            section.to_string(),
+            SubcommandConfig {
+                param: Some(overrides),
+                ..Default::default()
+            },
+        );
+        crate::orb_config::OrbConfig {
+            subcommand: Some(subcommands),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn validate_param_key_collisions_override_keyed_by_the_qualified_name_resolves_only_that_leaf()
+    {
+        let cli = colliding_release_cli();
+        let config = config_with_orb_name("a_release", "name", "release_name_alt");
+        let err = validate_param_key_collisions(
+            &cli,
+            &config,
+            &orb_generator::render::compute_effective_names(&cli, None),
+        )
+        .unwrap_err()
+        .to_string();
+        assert_eq!(
+            err.matches("both resolve").count(),
+            1,
+            "the `a_release` override must resolve only the nested leaf; the \
+             root `release` still collides: {err}"
+        );
+        assert!(err.contains("subcommand 'release'"), "got: {err}");
+        assert!(!err.contains("a_release"), "got: {err}");
+    }
+
+    #[test]
+    fn validate_param_key_collisions_override_keyed_by_the_bare_name_does_not_leak_to_the_nested_leaf(
+    ) {
+        let cli = colliding_release_cli();
+        let config = config_with_orb_name("release", "name", "release_name_alt");
+        let err = validate_param_key_collisions(
+            &cli,
+            &config,
+            &orb_generator::render::compute_effective_names(&cli, None),
+        )
+        .unwrap_err()
+        .to_string();
+        assert_eq!(err.matches("both resolve").count(), 1, "got: {err}");
+        assert!(
+            err.contains("subcommand 'a_release'")
+                && err.contains("[subcommand.a_release.param.<flag>]"),
+            "the nested leaf still collides and the suggested fix must name \
+             its qualified section: {err}"
+        );
     }
 
     // ── validate_job_group_step_order ───────────────────────────────────────
