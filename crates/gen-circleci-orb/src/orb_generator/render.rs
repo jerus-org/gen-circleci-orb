@@ -128,7 +128,7 @@ pub fn generate(
         for group in groups {
             let snake = group.name.replace('-', "_");
             // render_job_group may also emit run-step scripts into `files`.
-            let job_yaml = render_job_group(group, cli, config, &mut files);
+            let job_yaml = render_job_group(group, cli, config, &effective_names, &mut files);
             files.insert(PathBuf::from(format!("src/jobs/{snake}.yml")), job_yaml);
         }
     }
@@ -519,14 +519,26 @@ fn resolve_command_param_name(subcommand: &str, param: &str) -> String {
 /// same-named flag (gen-circleci-orb#412; see #358 for why "force the
 /// consumer to redesign a CLI they may not control" is the wrong shape for
 /// this kind of fix).
+///
+/// `subcommand` (bare) and `effective_name` (bare, or collision-qualified —
+/// `compute_effective_names`'s output) are deliberately separate: `subcommand`
+/// only feeds the automatic restricted-rename prefix (`resolve_command_param_name`,
+/// which stays tied to the CLI's own bare name — that's what a consumer sees
+/// on the command line), while `effective_name` is the CONFIG SECTION lookup
+/// key — the same qualified name a colliding leaf's own files are rendered
+/// under (`is_job_suppressed`/`resolve_run_step_name`/#418's pattern). Looking
+/// the config section up by the bare `subcommand` instead ambiguously applies
+/// one `[subcommand.<name>]` override to every leaf sharing that bare name
+/// (gen-circleci-orb#425).
 pub(crate) fn resolve_param_orb_name(
     subcommand: &str,
+    effective_name: &str,
     param: &str,
     config: Option<&OrbConfig>,
 ) -> String {
     if let Some(name) = config
         .and_then(|c| c.subcommand.as_ref())
-        .and_then(|m| m.get(subcommand))
+        .and_then(|m| m.get(effective_name))
         .and_then(|sc| sc.param.as_ref())
         .and_then(|p| p.get(param))
         .and_then(|po| po.orb_name.as_deref())
@@ -643,7 +655,7 @@ fn build_boolean_flag_env_steps(
         if is_hardcoded_check_param(effective_name, p, config) {
             continue;
         }
-        let orb_name = resolve_param_orb_name(&sub.name, &p.long_name, config);
+        let orb_name = resolve_param_orb_name(&sub.name, effective_name, &p.long_name, config);
         let env_var = env_var_name(&orb_name);
 
         let mut run_map = serde_yaml::Mapping::new();
@@ -741,7 +753,7 @@ fn build_command_orb_parameters(
         if is_hardcoded_check_param(effective_name, p, config) {
             continue;
         }
-        let orb_name = resolve_param_orb_name(&sub.name, &p.long_name, config);
+        let orb_name = resolve_param_orb_name(&sub.name, effective_name, &p.long_name, config);
         let (type_str, enum_vals) = match &p.param_type {
             ParamType::String => ("string".to_string(), None),
             ParamType::Boolean => ("boolean".to_string(), None),
@@ -798,7 +810,7 @@ fn render_command_script_content(
             ));
             continue;
         }
-        let orb_name = resolve_param_orb_name(&sub.name, &p.long_name, config);
+        let orb_name = resolve_param_orb_name(&sub.name, effective_name, &p.long_name, config);
         let env_var = env_var_name(&orb_name);
         // A positional is passed bare; a short-only option by its short flag,
         // which is the only form the CLI accepts.
@@ -875,7 +887,8 @@ fn render_job(
             // "generate_name") — so the default lookup must resolve the same
             // way, or it silently no-ops (#369 follow-up, generalized by
             // #412's orb_name override).
-            let resolved_key = resolve_param_orb_name(&sub.name, param_name, config);
+            let resolved_key =
+                resolve_param_orb_name(&sub.name, effective_name, param_name, config);
             if let Some(param) = parameters.get_mut(&resolved_key) {
                 if let Some(new_default) = &override_.default {
                     param.default = Some(coerce_override_default(new_default, &param.param_type));
@@ -1360,12 +1373,22 @@ fn resolve_job_param_key(
     }
     if skip.contains(&p.long_name.as_str()) {
         if RESTRICTED_COMMAND_PARAMS.contains(&p.long_name.as_str()) {
-            Some(resolve_param_orb_name(&sub.name, &p.long_name, config))
+            Some(resolve_param_orb_name(
+                &sub.name,
+                effective_name,
+                &p.long_name,
+                config,
+            ))
         } else {
             None
         }
     } else {
-        Some(resolve_param_orb_name(&sub.name, &p.long_name, config))
+        Some(resolve_param_orb_name(
+            &sub.name,
+            effective_name,
+            &p.long_name,
+            config,
+        ))
     }
 }
 
@@ -1433,7 +1456,7 @@ fn build_run_step(
             if matches!(p.param_type, ParamType::Boolean) {
                 continue;
             }
-            let orb_name = resolve_param_orb_name(&sub.name, &p.long_name, config);
+            let orb_name = resolve_param_orb_name(&sub.name, effective_name, &p.long_name, config);
             let env_var = env_var_name(&orb_name);
             env_map.insert(
                 serde_yaml::Value::String(env_var),
@@ -1800,19 +1823,44 @@ fn cli_param_to_orb_param(p: &crate::help_parser::types::Parameter) -> OrbParame
     }
 }
 
-fn find_leaf_subcommand<'a>(cli: &'a CliDefinition, name: &str) -> Option<&'a SubCommand> {
-    fn search<'a>(subs: &'a [SubCommand], name: &str) -> Option<&'a SubCommand> {
+/// A job-group step: the leaf plus the effective name (bare, or
+/// collision-qualified) its own command/job/script are rendered under — the
+/// config-section key for its param overrides (gen-circleci-orb#425).
+type ResolvedStep<'a> = (&'a SubCommand, String);
+
+/// Finds the first leaf named `name` (depth-first; job groups select steps by
+/// bare name) together with its effective name from `effective_names`.
+fn find_leaf_subcommand<'a>(
+    cli: &'a CliDefinition,
+    name: &str,
+    effective_names: &HashMap<String, String>,
+) -> Option<ResolvedStep<'a>> {
+    fn search<'a>(
+        subs: &'a [SubCommand],
+        prefix: &str,
+        name: &str,
+        effective_names: &HashMap<String, String>,
+    ) -> Option<ResolvedStep<'a>> {
         for sub in subs {
+            let path = if prefix.is_empty() {
+                sub.name.clone()
+            } else {
+                format!("{prefix}.{}", sub.name)
+            };
             if sub.is_leaf && sub.name == name {
-                return Some(sub);
+                let effective = effective_names
+                    .get(&path)
+                    .cloned()
+                    .unwrap_or_else(|| sub.name.clone());
+                return Some((sub, effective));
             }
-            if let Some(found) = search(&sub.subcommands, name) {
+            if let Some(found) = search(&sub.subcommands, &path, name, effective_names) {
                 return Some(found);
             }
         }
         None
     }
-    search(&cli.subcommands, name)
+    search(&cli.subcommands, "", name, effective_names)
 }
 
 /// Resolve the JOB-level parameter key for a param shared or explicitly
@@ -1897,11 +1945,11 @@ fn resolve_shared_params(
 fn add_mandatory_params(
     params: &mut IndexMap<String, OrbParameter>,
     group_name: &str,
-    step_subs: &[&SubCommand],
+    steps: &[ResolvedStep],
     config: Option<&OrbConfig>,
 ) {
     let mut present: std::collections::HashSet<String> = params.keys().cloned().collect();
-    for sub in step_subs {
+    for (sub, effective_name) in steps {
         for p in &sub.parameters {
             if !p.required || matches!(p.param_type, ParamType::Boolean) {
                 continue;
@@ -1916,14 +1964,15 @@ fn add_mandatory_params(
             if present.contains(&resolve_job_group_param_name(group_name, &p.long_name)) {
                 continue;
             }
-            let resolved = resolve_param_orb_name(&sub.name, &p.long_name, config);
+            let resolved = resolve_param_orb_name(&sub.name, effective_name, &p.long_name, config);
             if present.contains(&resolved) {
                 continue;
             }
-            let collides = step_subs.iter().any(|other| {
+            let collides = steps.iter().any(|(other, other_effective)| {
                 other.name != sub.name
                     && other.parameters.iter().any(|op| {
-                        resolve_param_orb_name(&other.name, &op.long_name, config) == resolved
+                        resolve_param_orb_name(&other.name, other_effective, &op.long_name, config)
+                            == resolved
                     })
             });
             // `resolved` is the command-level key -- only renamed away from
@@ -1948,15 +1997,16 @@ fn add_mandatory_params(
 
 fn build_job_group_params(
     group: &crate::orb_config::JobGroup,
-    step_subs: &[&SubCommand],
+    steps: &[ResolvedStep],
     config: Option<&OrbConfig>,
 ) -> IndexMap<String, OrbParameter> {
+    let step_subs: Vec<&SubCommand> = steps.iter().map(|(sub, _)| *sub).collect();
     let mut params = if let Some(explicit) = &group.params {
-        resolve_explicit_params(&group.name, explicit, step_subs)
+        resolve_explicit_params(&group.name, explicit, &step_subs)
     } else {
-        resolve_shared_params(&group.name, step_subs)
+        resolve_shared_params(&group.name, &step_subs)
     };
-    add_mandatory_params(&mut params, &group.name, step_subs, config);
+    add_mandatory_params(&mut params, &group.name, steps, config);
     params
 }
 
@@ -1966,14 +2016,14 @@ fn build_job_group_params(
 /// bare name broke for any restricted/`orb_name`-overridden param once #412
 /// started renaming the command's own declared key).
 fn build_job_group_invoke_step(
-    sub: &SubCommand,
+    (sub, effective_name): &ResolvedStep,
     group_name: &str,
     job_params: &IndexMap<String, OrbParameter>,
     config: Option<&OrbConfig>,
 ) -> serde_yaml::Value {
     let mut invoke_map = serde_yaml::Mapping::new();
     for p in &sub.parameters {
-        let command_key = resolve_param_orb_name(&sub.name, &p.long_name, config);
+        let command_key = resolve_param_orb_name(&sub.name, effective_name, &p.long_name, config);
         // Find the name this param has in the merged job parameter set:
         // the resolved key first (add_mandatory_params' own scheme), then
         // the sub-prefixed resolved form (cross-subcommand collision
@@ -2005,7 +2055,7 @@ fn build_job_group_invoke_step(
     serde_yaml::Value::Mapping({
         let mut m = serde_yaml::Mapping::new();
         m.insert(
-            serde_yaml::Value::String(sub.name.replace('-', "_")),
+            serde_yaml::Value::String(effective_name.replace('-', "_")),
             serde_yaml::Value::Mapping(invoke_map),
         );
         m
@@ -2197,19 +2247,20 @@ fn render_job_group(
     group: &crate::orb_config::JobGroup,
     cli: &CliDefinition,
     config: Option<&OrbConfig>,
+    effective_names: &HashMap<String, String>,
     files: &mut HashMap<PathBuf, String>,
 ) -> String {
     // Rich mode (explicit `step` list) takes precedence over the simple `steps` list.
     if group.step.is_some() {
         return render_rich_job_group(group, files);
     }
-    let step_subs: Vec<&SubCommand> = group
+    let steps_resolved: Vec<ResolvedStep> = group
         .steps
         .iter()
-        .filter_map(|name| find_leaf_subcommand(cli, name))
+        .filter_map(|name| find_leaf_subcommand(cli, name, effective_names))
         .collect();
 
-    let mut parameters = build_job_group_params(group, &step_subs, config);
+    let mut parameters = build_job_group_params(group, &steps_resolved, config);
 
     let (attach_param, root_param) = build_workspace_params();
     parameters.insert("attach_workspace".to_string(), attach_param);
@@ -2219,9 +2270,9 @@ fn render_job_group(
         serde_yaml::Value::String("checkout".to_string()),
         build_attach_workspace_step(),
     ];
-    for sub in &step_subs {
+    for step in &steps_resolved {
         steps.push(build_job_group_invoke_step(
-            sub,
+            step,
             &group.name,
             &parameters,
             config,
@@ -2273,10 +2324,53 @@ mod tests {
         // No config at all, or no matching override: behaves exactly like
         // resolve_command_param_name (gen-circleci-orb#412's fallback path).
         assert_eq!(
-            resolve_param_orb_name("generate", "name", None),
+            resolve_param_orb_name("generate", "generate", "name", None),
             "generate_name"
         );
-        assert_eq!(resolve_param_orb_name("generate", "steps", None), "steps");
+        assert_eq!(
+            resolve_param_orb_name("generate", "generate", "steps", None),
+            "steps"
+        );
+    }
+
+    #[test]
+    fn param_orb_name_config_lookup_uses_the_effective_name_not_the_bare_one() {
+        // gen-circleci-orb#425: a colliding leaf (bare `release`, effective
+        // `ci_release`) must find ITS override under the qualified section,
+        // and must NOT pick up a section keyed by the bare name. The
+        // automatic restricted rename still uses the bare name (what the
+        // consumer sees on the command line).
+        let mk = |section: &str| {
+            let mut overrides = IndexMap::new();
+            overrides.insert(
+                "name".to_string(),
+                crate::orb_config::ParamOverride {
+                    default: None,
+                    orb_name: Some("custom_name".to_string()),
+                },
+            );
+            let mut subcommands = IndexMap::new();
+            subcommands.insert(
+                section.to_string(),
+                crate::orb_config::SubcommandConfig {
+                    param: Some(overrides),
+                    ..Default::default()
+                },
+            );
+            OrbConfig {
+                subcommand: Some(subcommands),
+                ..Default::default()
+            }
+        };
+        assert_eq!(
+            resolve_param_orb_name("release", "ci_release", "name", Some(&mk("ci_release"))),
+            "custom_name"
+        );
+        assert_eq!(
+            resolve_param_orb_name("release", "ci_release", "name", Some(&mk("release"))),
+            "release_name",
+            "a section keyed by the bare name must not apply to the qualified leaf"
+        );
     }
 
     #[test]
@@ -2306,13 +2400,13 @@ mod tests {
         };
 
         assert_eq!(
-            resolve_param_orb_name("generate", "generate_name", Some(&config)),
+            resolve_param_orb_name("generate", "generate", "generate_name", Some(&config)),
             "generate_name_alt"
         );
         // A restricted param under the same subcommand, with no override of
         // its own, still falls back to automatic renaming untouched.
         assert_eq!(
-            resolve_param_orb_name("generate", "name", Some(&config)),
+            resolve_param_orb_name("generate", "generate", "name", Some(&config)),
             "generate_name"
         );
     }
@@ -5841,6 +5935,151 @@ mod tests {
         assert!(
             !files.contains_key(&PathBuf::from("src/commands/setup.yml")),
             "and no command either"
+        );
+    }
+
+    #[test]
+    fn orb_name_override_keyed_by_the_qualified_name_applies_to_that_leaf_only() {
+        // gen-circleci-orb#425: root `release` and nested `ci release` both
+        // have `--name`. An override under `[subcommand.ci_release]` must
+        // rename only the nested leaf's key (command, script env var and job
+        // alike); the root keeps its automatic `release_name`.
+        let name_param = || {
+            let mut p = make_param("name", None, false);
+            p.description = "Name.".to_string();
+            p
+        };
+        let nested = make_leaf("release", vec![name_param()]);
+        let cli = CliDefinition {
+            binary_name: "demo".to_string(),
+            description: String::new(),
+            subcommands: vec![
+                make_leaf("release", vec![name_param()]),
+                SubCommand {
+                    name: "ci".to_string(),
+                    description: String::new(),
+                    short_about: String::new(),
+                    is_leaf: false,
+                    parameters: vec![],
+                    subcommands: vec![nested],
+                },
+            ],
+        };
+        let mut overrides = IndexMap::new();
+        overrides.insert(
+            "name".to_string(),
+            crate::orb_config::ParamOverride {
+                default: None,
+                orb_name: Some("custom_name".to_string()),
+            },
+        );
+        let mut subcommands = IndexMap::new();
+        subcommands.insert(
+            "ci_release".to_string(),
+            crate::orb_config::SubcommandConfig {
+                param: Some(overrides),
+                ..Default::default()
+            },
+        );
+        let config = OrbConfig {
+            subcommand: Some(subcommands),
+            ..Default::default()
+        };
+        let files = generate(&cli, &default_opts(), Some(&config));
+        let file = |p: &str| files[&PathBuf::from(p)].as_str();
+
+        for path in [
+            "src/commands/ci_release.yml",
+            "src/jobs/ci_release.yml",
+            "src/scripts/ci_release.sh",
+        ] {
+            assert!(
+                file(path).contains("custom_name") || file(path).contains("CUSTOM_NAME"),
+                "{path} must use the overridden key:\n{}",
+                file(path)
+            );
+        }
+        for path in [
+            "src/commands/release.yml",
+            "src/jobs/release.yml",
+            "src/scripts/release.sh",
+        ] {
+            assert!(
+                !file(path).contains("custom_name") && !file(path).contains("CUSTOM_NAME"),
+                "{path} must not pick up the nested leaf's override:\n{}",
+                file(path)
+            );
+            assert!(
+                file(path).contains("release_name") || file(path).contains("RELEASE_NAME"),
+                "{path} must keep the automatic restricted rename:\n{}",
+                file(path)
+            );
+        }
+    }
+
+    #[test]
+    fn job_group_uses_the_effective_name_for_a_colliding_step() {
+        // gen-circleci-orb#425 review: `ci` is listed first, so the group's
+        // bare step "release" resolves to `ci release` (effective name
+        // `ci_release`; the root `release` keeps the bare name). Its
+        // override lives under `[subcommand.ci_release]`, and the invoke
+        // step must call the `ci_release` command declaring that same key.
+        let name_param = || {
+            let mut p = make_param("name", None, true);
+            p.description = "Name.".to_string();
+            p
+        };
+        let cli = CliDefinition {
+            binary_name: "demo".to_string(),
+            description: String::new(),
+            subcommands: vec![
+                SubCommand {
+                    name: "ci".to_string(),
+                    description: String::new(),
+                    short_about: String::new(),
+                    is_leaf: false,
+                    parameters: vec![],
+                    subcommands: vec![make_leaf("release", vec![name_param()])],
+                },
+                make_leaf("release", vec![name_param()]),
+            ],
+        };
+        let mut overrides = IndexMap::new();
+        overrides.insert(
+            "name".to_string(),
+            crate::orb_config::ParamOverride {
+                default: None,
+                orb_name: Some("custom_name".to_string()),
+            },
+        );
+        let mut subcommands = IndexMap::new();
+        subcommands.insert(
+            "ci_release".to_string(),
+            crate::orb_config::SubcommandConfig {
+                param: Some(overrides),
+                ..Default::default()
+            },
+        );
+        let config = OrbConfig {
+            subcommand: Some(subcommands),
+            job_group: Some(vec![crate::orb_config::JobGroup {
+                name: "sync".to_string(),
+                description: None,
+                steps: vec!["release".to_string()],
+                params: None,
+                ..Default::default()
+            }]),
+            ..Default::default()
+        };
+        let files = generate(&cli, &default_opts(), Some(&config));
+        let job = &files[&PathBuf::from("src/jobs/sync.yml")];
+        // A one-step group treats every param as shared, so the job-level
+        // key is the group-scoped `sync_name` (#422); what matters here is
+        // the command called and the key it is forwarded to.
+        assert!(
+            job.contains("ci_release:\n    custom_name: << parameters.sync_name >>"),
+            "the invoke step must call the `ci_release` command with its \
+             declared (overridden) key:\n{job}"
         );
     }
 
