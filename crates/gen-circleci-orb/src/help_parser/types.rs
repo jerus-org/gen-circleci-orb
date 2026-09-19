@@ -41,6 +41,12 @@ pub struct Parameter {
     /// keeps `param_type: ParamType::String`/whatever its value type is;
     /// this only ever applies to `ParamType::Boolean` (#348).
     pub repeatable: bool,
+    /// True when an ancestor command (the root or a parent group) declares an
+    /// option of the same name — a clap `global = true` argument, genuinely
+    /// the same input in every subcommand below it. Two subcommands each
+    /// declaring their own same-named option are NOT this: those are
+    /// independent inputs that merely share a name (gen-circleci-orb#423).
+    pub inherited: bool,
 }
 
 /// How an input is written on the command line.

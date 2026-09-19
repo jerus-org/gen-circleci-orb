@@ -264,6 +264,7 @@ fn merge_verbosity_pair(parameters: &[Parameter]) -> Vec<Parameter> {
                        steps louder)."
             .to_string(),
         repeatable: false,
+        inherited: parameters[verbose_idx].inherited && parameters[quiet_idx].inherited,
     };
 
     let mut merged: Vec<Parameter> = parameters
@@ -1884,54 +1885,98 @@ fn resolve_job_group_param_name(group_name: &str, param_name: &str) -> String {
     }
 }
 
+/// Only an `inherited` option (declared by an ancestor command, so genuinely
+/// the same input in every step) is unified into one job parameter. A name
+/// that merely two steps each declare for themselves is NOT shared — the
+/// options may mean different things (`generate --output` vs `release
+/// --output`), so unifying them would force one value on both
+/// (gen-circleci-orb#423).
 fn resolve_explicit_params(
     group_name: &str,
     explicit: &[String],
-    step_subs: &[&SubCommand],
+    steps: &[ResolvedStep],
+    config: Option<&OrbConfig>,
 ) -> IndexMap<String, OrbParameter> {
     let mut result = IndexMap::new();
     for param_name in explicit {
-        for sub in step_subs.iter() {
-            if let Some(p) = sub.parameters.iter().find(|p| &p.long_name == param_name) {
-                let job_key = resolve_job_group_param_name(group_name, param_name);
-                result.insert(job_key, cli_param_to_orb_param(p));
-                break;
-            }
+        let declaring: Vec<(&ResolvedStep, &Parameter)> = steps
+            .iter()
+            .filter_map(|step| {
+                step.0
+                    .parameters
+                    .iter()
+                    .find(|p| &p.long_name == param_name)
+                    .map(|p| (step, p))
+            })
+            .collect();
+        // Each declaring step is judged on its own: an inherited declaration
+        // is the same input everywhere and shares one job key; a step's own
+        // independent declaration gets its own key, even when another step's
+        // same-named option happens to be inherited.
+        if let Some((_, first)) = declaring.iter().find(|(_, p)| p.inherited) {
+            let job_key = resolve_job_group_param_name(group_name, param_name);
+            result.insert(job_key, cli_param_to_orb_param(first));
+        }
+        for ((sub, effective_name), p) in declaring.iter().filter(|(_, p)| !p.inherited) {
+            let key = per_step_job_key(sub, effective_name, p, steps, config);
+            result.insert(key, cli_param_to_orb_param(p));
         }
     }
     result
 }
 
+/// Default mode: the unified set is the inherited options present on every
+/// step — never a same-named option the steps each declared independently.
 fn resolve_shared_params(
     group_name: &str,
-    step_subs: &[&SubCommand],
+    steps: &[ResolvedStep],
 ) -> IndexMap<String, OrbParameter> {
     let mut result = IndexMap::new();
-    let Some(first) = step_subs.first() else {
+    let Some(((first, _), rest)) = steps.split_first() else {
         return result;
     };
-    let shared_names: std::collections::HashSet<&str> = step_subs[1..].iter().fold(
-        first
-            .parameters
-            .iter()
-            .map(|p| p.long_name.as_str())
-            .collect(),
-        |acc: std::collections::HashSet<&str>, sub| {
-            let sub_names: std::collections::HashSet<&str> = sub
-                .parameters
+    for p in first.parameters.iter().filter(|p| p.inherited) {
+        let on_every_step = rest.iter().all(|(sub, _)| {
+            sub.parameters
                 .iter()
-                .map(|p| p.long_name.as_str())
-                .collect();
-            acc.intersection(&sub_names).copied().collect()
-        },
-    );
-    for p in &first.parameters {
-        if shared_names.contains(p.long_name.as_str()) {
+                .any(|op| op.inherited && op.long_name == p.long_name)
+        });
+        if on_every_step {
             let job_key = resolve_job_group_param_name(group_name, &p.long_name);
             result.insert(job_key, cli_param_to_orb_param(p));
         }
     }
     result
+}
+
+/// The job-level key for one step's own parameter: its resolved command-level
+/// key (`resolve_param_orb_name`), prefixed `{sub}_` when another step
+/// declares the same key or the key is one a JOB parameter may not use.
+fn per_step_job_key(
+    sub: &SubCommand,
+    effective_name: &str,
+    p: &Parameter,
+    steps: &[ResolvedStep],
+    config: Option<&OrbConfig>,
+) -> String {
+    let resolved = resolve_param_orb_name(&sub.name, effective_name, &p.long_name, config);
+    let collides = steps.iter().any(|(other, other_effective)| {
+        other.name != sub.name
+            && other.parameters.iter().any(|op| {
+                resolve_param_orb_name(&other.name, other_effective, &op.long_name, config)
+                    == resolved
+            })
+    });
+    // `resolved` is only renamed away from the bare CLI name when
+    // RESTRICTED_COMMAND_PARAMS (just "name") applies. A JOB parameter has a
+    // broader reserved set (RESERVED_JOB_PARAMS: type/filters/matrix/
+    // requires/context/pre_steps/post_steps too), so a param like "type"
+    // passes through unrenamed yet is still invalid as a bare job key.
+    if collides || RESERVED_JOB_PARAMS.contains(&resolved.as_str()) {
+        format!("{}_{resolved}", sub.name)
+    } else {
+        resolved
+    }
 }
 
 /// A required, non-boolean param not already in the job's shared/explicit
@@ -1961,34 +2006,15 @@ fn add_mandatory_params(
             // both triple-declare the param and reintroduce a second,
             // sub-scoped key for something already declared under the
             // group-scoped one.
-            if present.contains(&resolve_job_group_param_name(group_name, &p.long_name)) {
+            if p.inherited
+                && present.contains(&resolve_job_group_param_name(group_name, &p.long_name))
+            {
                 continue;
             }
-            let resolved = resolve_param_orb_name(&sub.name, effective_name, &p.long_name, config);
-            if present.contains(&resolved) {
+            let job_name = per_step_job_key(sub, effective_name, p, steps, config);
+            if present.contains(&job_name) {
                 continue;
             }
-            let collides = steps.iter().any(|(other, other_effective)| {
-                other.name != sub.name
-                    && other.parameters.iter().any(|op| {
-                        resolve_param_orb_name(&other.name, other_effective, &op.long_name, config)
-                            == resolved
-                    })
-            });
-            // `resolved` is the command-level key -- only renamed away from
-            // the bare CLI name when RESTRICTED_COMMAND_PARAMS (just "name")
-            // applies. A JOB parameter has a broader reserved set
-            // (RESERVED_JOB_PARAMS: type/filters/matrix/requires/context/
-            // pre_steps/post_steps too), so a param like "type" passes
-            // through `resolved` unrenamed yet is still invalid as a bare
-            // job key -- needs the same `{sub}_` prefix `collides` already
-            // uses, even with no actual cross-subcommand collision.
-            let needs_rename = collides || RESERVED_JOB_PARAMS.contains(&resolved.as_str());
-            let job_name = if needs_rename {
-                format!("{}_{resolved}", sub.name)
-            } else {
-                resolved
-            };
             params.insert(job_name.clone(), cli_param_to_orb_param(p));
             present.insert(job_name);
         }
@@ -2000,11 +2026,10 @@ fn build_job_group_params(
     steps: &[ResolvedStep],
     config: Option<&OrbConfig>,
 ) -> IndexMap<String, OrbParameter> {
-    let step_subs: Vec<&SubCommand> = steps.iter().map(|(sub, _)| *sub).collect();
     let mut params = if let Some(explicit) = &group.params {
-        resolve_explicit_params(&group.name, explicit, &step_subs)
+        resolve_explicit_params(&group.name, explicit, steps, config)
     } else {
-        resolve_shared_params(&group.name, &step_subs)
+        resolve_shared_params(&group.name, steps)
     };
     add_mandatory_params(&mut params, &group.name, steps, config);
     params
@@ -2024,26 +2049,24 @@ fn build_job_group_invoke_step(
     let mut invoke_map = serde_yaml::Mapping::new();
     for p in &sub.parameters {
         let command_key = resolve_param_orb_name(&sub.name, effective_name, &p.long_name, config);
-        // Find the name this param has in the merged job parameter set:
-        // the resolved key first (add_mandatory_params' own scheme), then
-        // the sub-prefixed resolved form (cross-subcommand collision
-        // disambiguation), then finally the group-scoped key
-        // `resolve_job_group_param_name` produces for a shared/explicit
-        // selection (gen-circleci-orb#422) -- a param they selected can only
-        // be found there. Whichever key is found, the invoke step's own key
-        // (left side) is always `command_key` -- the invoked command's real
-        // declared parameter name, independent of what the job happens to
-        // expose it as.
-        let job_param_name = if job_params.contains_key(&command_key) {
+        // Find the name this param has in the job's parameter set. An
+        // inherited param is the one job value shared by every step
+        // (`resolve_job_group_param_name`, #422). Anything else is this
+        // step's OWN parameter (`per_step_job_key`, #423): the `{sub}_`
+        // form is tried before the bare key so a same-named inherited
+        // param's shared key is never mistaken for it. The invoke step's own
+        // key (left side) is always `command_key` -- the invoked command's
+        // real declared parameter name, whatever the job exposes it as.
+        let group_key = resolve_job_group_param_name(group_name, &p.long_name);
+        let prefixed = format!("{}_{command_key}", sub.name);
+        let job_param_name = if p.inherited && job_params.contains_key(&group_key) {
+            Some(group_key)
+        } else if job_params.contains_key(&prefixed) {
+            Some(prefixed)
+        } else if job_params.contains_key(&command_key) {
             Some(command_key.clone())
         } else {
-            let prefixed = format!("{}_{command_key}", sub.name);
-            if job_params.contains_key(&prefixed) {
-                Some(prefixed)
-            } else {
-                let group_key = resolve_job_group_param_name(group_name, &p.long_name);
-                job_params.contains_key(&group_key).then_some(group_key)
-            }
+            None
         };
         if let Some(job_name) = job_param_name {
             invoke_map.insert(
@@ -6073,11 +6096,10 @@ mod tests {
         };
         let files = generate(&cli, &default_opts(), Some(&config));
         let job = &files[&PathBuf::from("src/jobs/sync.yml")];
-        // A one-step group treats every param as shared, so the job-level
-        // key is the group-scoped `sync_name` (#422); what matters here is
-        // the command called and the key it is forwarded to.
+        // The step's own parameter, under the overridden key its command
+        // declares.
         assert!(
-            job.contains("ci_release:\n    custom_name: << parameters.sync_name >>"),
+            job.contains("ci_release:\n    custom_name: << parameters.custom_name >>"),
             "the invoke step must call the `ci_release` command with its \
              declared (overridden) key:\n{job}"
         );
@@ -6575,7 +6597,10 @@ mod tests {
     fn job_group_shared_param_appears_in_merged_job() {
         use crate::orb_config::{JobGroup, OrbConfig};
 
-        let shared_param = make_param("orb_path", Some("src/@orb.yml"), false);
+        // gen-circleci-orb#423: only an INHERITED option (declared by an
+        // ancestor, so the same input in every step) is unified.
+        let mut shared_param = make_param("orb_path", Some("src/@orb.yml"), false);
+        shared_param.inherited = true;
         let subs = vec![
             make_leaf("generate", vec![shared_param.clone()]),
             make_leaf("validate", vec![shared_param]),
@@ -6594,9 +6619,124 @@ mod tests {
         let files = generate(&cli, &default_opts(), Some(&config));
         let job = &files[&PathBuf::from("src/jobs/sync.yml")];
         assert!(
-            job.contains("orb_path:"),
-            "shared param orb_path must appear in merged job:\n{job}"
+            job.contains("\n  orb_path:\n"),
+            "an inherited param must appear once, under its own name:\n{job}"
         );
+        assert!(
+            job.contains("generate:\n    orb_path: << parameters.orb_path >>")
+                && job.contains("validate:\n    orb_path: << parameters.orb_path >>"),
+            "the single job value must be forwarded to every step:\n{job}"
+        );
+    }
+
+    #[test]
+    fn job_group_explicit_param_inherited_in_one_step_only_is_split_per_declaration() {
+        // gen-circleci-orb#423 review: each declaring step is judged on its
+        // own. `x` is inherited in `generate` but independently declared by
+        // `release`, so it must NOT be tied into one shared job value.
+        use crate::orb_config::{JobGroup, OrbConfig};
+
+        for inherited_first in [true, false] {
+            let mut a = make_param("x", None, false);
+            a.description = "Inherited x.".to_string();
+            a.inherited = true;
+            let mut b = make_param("x", None, false);
+            b.description = "Release's own x.".to_string();
+            let steps = if inherited_first {
+                vec![("generate", a.clone()), ("release", b.clone())]
+            } else {
+                vec![("release", b), ("generate", a)]
+            };
+            let cli = make_cli(
+                "mytool",
+                steps
+                    .iter()
+                    .map(|(n, p)| make_leaf(n, vec![p.clone()]))
+                    .collect(),
+            );
+            let config = OrbConfig {
+                job_group: Some(vec![JobGroup {
+                    name: "sync".to_string(),
+                    description: None,
+                    steps: steps.iter().map(|(n, _)| n.to_string()).collect(),
+                    params: Some(vec!["x".to_string()]),
+                    ..Default::default()
+                }]),
+                ..OrbConfig::default()
+            };
+            let files = generate(&cli, &default_opts(), Some(&config));
+            let job = &files[&PathBuf::from("src/jobs/sync.yml")];
+            assert!(
+                job.contains("release:\n    x: << parameters.release_x >>")
+                    && job.contains("Release's own x."),
+                "release's independent option keeps its own parameter \
+                 (inherited_first={inherited_first}):\n{job}"
+            );
+            assert!(
+                job.contains("generate:\n    x: << parameters.x >>"),
+                "the inherited declaration is still wired through \
+                 (inherited_first={inherited_first}):\n{job}"
+            );
+            assert!(
+                !job.contains("release:\n    x: << parameters.x >>"),
+                "release must never be tied to the inherited job value \
+                 (inherited_first={inherited_first}):\n{job}"
+            );
+        }
+    }
+
+    #[test]
+    fn job_group_never_unifies_same_named_params_the_steps_each_declare() {
+        // gen-circleci-orb#423: `generate --output` and `release --output`
+        // share only a name -- each subcommand declared its own, and they may
+        // mean different things (two different files). Listing `output` in
+        // `params` must expose one INDEPENDENT job parameter per step, never
+        // a single one forwarded to both.
+        use crate::orb_config::{JobGroup, OrbConfig};
+
+        let mut generate_output = make_param("output", None, false);
+        generate_output.description = "Where generate writes its report.".to_string();
+        let mut release_output = make_param("output", None, false);
+        release_output.description = "Where release writes its archive.".to_string();
+        let cli = make_cli(
+            "mytool",
+            vec![
+                make_leaf("generate", vec![generate_output]),
+                make_leaf("release", vec![release_output]),
+            ],
+        );
+        for params in [Some(vec!["output".to_string()]), None] {
+            let explicit = params.is_some();
+            let config = OrbConfig {
+                job_group: Some(vec![JobGroup {
+                    name: "sync".to_string(),
+                    description: None,
+                    steps: vec!["generate".to_string(), "release".to_string()],
+                    params,
+                    ..Default::default()
+                }]),
+                ..OrbConfig::default()
+            };
+            let files = generate(&cli, &default_opts(), Some(&config));
+            let job = &files[&PathBuf::from("src/jobs/sync.yml")];
+            assert!(
+                !job.contains("<< parameters.output >>") && !job.contains("\n  output:\n"),
+                "same-named options must never be unified into one job \
+                 parameter (explicit={explicit}):\n{job}"
+            );
+            if explicit {
+                assert!(
+                    job.contains("Where generate writes its report.")
+                        && job.contains("Where release writes its archive."),
+                    "each step keeps its OWN description:\n{job}"
+                );
+                assert!(
+                    job.contains("output: << parameters.generate_output >>")
+                        && job.contains("output: << parameters.release_output >>"),
+                    "each step forwards its own independent parameter:\n{job}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -6711,14 +6851,11 @@ mod tests {
 
     #[test]
     fn job_group_explicit_restricted_param_still_reaches_the_command() {
-        // gen-circleci-orb#422: an explicitly job_group.params-selected
-        // restricted param ("name") must be renamed to a group-scoped job
-        // key ("sync_name") rather than kept under the bare, CircleCI-
-        // reserved "name" — mirroring #412's rename-not-drop strategy, but
-        // scoped to the job group since a shared/explicit param has no
-        // single subcommand of its own. build_job_group_invoke_step's lookup
-        // must find it there and wire it through to the command's own
-        // resolved key ("release_name").
+        // gen-circleci-orb#422/#423: an explicitly job_group.params-selected
+        // restricted param ("name") must never keep the bare, CircleCI-
+        // reserved job key. Declared by a single step it is that step's own
+        // parameter, under the same resolved key its command declares
+        // ("release_name") -- not unified with anything.
         use crate::orb_config::{JobGroup, OrbConfig};
 
         let name_param = Parameter {
@@ -6748,10 +6885,10 @@ mod tests {
         let files = generate(&cli, &default_opts(), Some(&config));
         let job = &files[&PathBuf::from("src/jobs/sync.yml")];
         assert!(
-            job.contains("\n  sync_name:\n"),
-            "explicit params list must declare the restricted param under a \
-             group-scoped key ('sync_name'), not the bare, CircleCI-reserved \
-             'name':\n{job}"
+            job.contains("\n  release_name:\n"),
+            "an explicitly selected restricted param, declared by one step \
+             only, is that step's own parameter under its resolved key \
+             ('release_name'), not the bare, CircleCI-reserved 'name':\n{job}"
         );
         assert!(
             !job.contains("\n  name:\n"),
@@ -6759,20 +6896,19 @@ mod tests {
              job parameter:\n{job}"
         );
         assert!(
-            job.contains("release_name: << parameters.sync_name >>"),
-            "the invoke step must forward the job's 'sync_name' value to the \
-             command's own resolved key 'release_name':\n{job}"
+            job.contains("release_name: << parameters.release_name >>"),
+            "the invoke step must forward the job's value to the command's \
+             own resolved key 'release_name':\n{job}"
         );
     }
 
     #[test]
     fn job_group_shared_restricted_required_param_is_not_duplicated() {
-        // gen-circleci-orb#422: a shared restricted param ("name", present on
-        // every step) must be declared once under a group-scoped job key
-        // ("sync_name") and forwarded from there to each command's own
-        // resolved key — add_mandatory_params must not ALSO add a
-        // resolved-rename duplicate on top of it (that would triple-declare
-        // it: group-scoped + two per-subcommand renames).
+        // gen-circleci-orb#422: an INHERITED restricted param ("name", the
+        // same input in every step) is declared once under a group-scoped
+        // job key ("sync_name") and forwarded from there to each command's
+        // own resolved key -- add_mandatory_params must not ALSO add
+        // per-subcommand duplicates on top of it.
         use crate::orb_config::{JobGroup, OrbConfig};
 
         let make_name_param = || Parameter {
@@ -6782,6 +6918,7 @@ mod tests {
             default: None,
             required: true,
             description: "Name for the thing.".to_string(),
+            inherited: true,
             ..Default::default()
         };
         let subs = vec![
@@ -6801,42 +6938,66 @@ mod tests {
         };
         let files = generate(&cli, &default_opts(), Some(&config));
         let job = &files[&PathBuf::from("src/jobs/sync.yml")];
-        // "generate_name"/"release_name" legitimately appear in the invoke
-        // steps below (forwarding to each command's own resolved key) --
-        // the bug this guards is a DUPLICATE job-level parameter
-        // DECLARATION (2-space indent), not their presence anywhere in the
-        // file.
         assert!(
             job.contains("\n  sync_name:\n"),
-            "the shared restricted param must be declared once under a \
-             group-scoped key ('sync_name'):\n{job}"
+            "the inherited restricted param is declared once, group-scoped:\n{job}"
         );
         assert!(
-            !job.contains("\n  name:\n"),
-            "the bare, CircleCI-reserved 'name' key must never appear as a \
-             job parameter:\n{job}"
+            !job.contains("\n  name:\n")
+                && !job.contains("\n  generate_name:\n")
+                && !job.contains("\n  release_name:\n"),
+            "no bare or per-subcommand duplicate may be DECLARED:\n{job}"
         );
         assert!(
-            !job.contains("\n  generate_name:\n"),
-            "a shared restricted param already declared under its \
-             group-scoped key must not ALSO get a per-subcommand \
-             resolved-rename duplicate DECLARED as a job parameter:\n{job}"
+            job.contains("generate_name: << parameters.sync_name >>")
+                && job.contains("release_name: << parameters.sync_name >>"),
+            "the single job value is forwarded to each command's own key:\n{job}"
+        );
+    }
+
+    #[test]
+    fn job_group_keeps_same_named_required_restricted_params_independent() {
+        // gen-circleci-orb#423: two steps each declaring their own required
+        // `--name` are independent inputs, not one shared value.
+        use crate::orb_config::{JobGroup, OrbConfig};
+
+        let make_name_param = || Parameter {
+            long_name: "name".to_string(),
+            required: true,
+            description: "Name for the thing.".to_string(),
+            ..Default::default()
+        };
+        let cli = make_cli(
+            "mytool",
+            vec![
+                make_leaf("generate", vec![make_name_param()]),
+                make_leaf("release", vec![make_name_param()]),
+            ],
+        );
+        let config = OrbConfig {
+            job_group: Some(vec![JobGroup {
+                name: "sync".to_string(),
+                description: None,
+                steps: vec!["generate".to_string(), "release".to_string()],
+                params: None,
+                ..Default::default()
+            }]),
+            ..OrbConfig::default()
+        };
+        let files = generate(&cli, &default_opts(), Some(&config));
+        let job = &files[&PathBuf::from("src/jobs/sync.yml")];
+        assert!(
+            job.contains("\n  generate_name:\n") && job.contains("\n  release_name:\n"),
+            "each step gets its own independently-settable parameter:\n{job}"
         );
         assert!(
-            !job.contains("\n  release_name:\n"),
-            "a shared restricted param already declared under its \
-             group-scoped key must not ALSO get a per-subcommand \
-             resolved-rename duplicate DECLARED as a job parameter:\n{job}"
+            !job.contains("sync_name"),
+            "nothing is unified under a group-scoped key:\n{job}"
         );
         assert!(
-            job.contains("generate_name: << parameters.sync_name >>"),
-            "the invoke step must forward the shared job param to each \
-             command's own resolved key:\n{job}"
-        );
-        assert!(
-            job.contains("release_name: << parameters.sync_name >>"),
-            "the invoke step must forward the shared job param to each \
-             command's own resolved key:\n{job}"
+            job.contains("generate_name: << parameters.generate_name >>")
+                && job.contains("release_name: << parameters.release_name >>"),
+            "each step forwards its own value:\n{job}"
         );
     }
 

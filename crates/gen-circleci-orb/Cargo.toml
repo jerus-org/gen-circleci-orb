@@ -69,6 +69,11 @@ name = "fixture-cli-param-collision"
 path = "src/bin/fixture-cli-param-collision.rs"
 required-features = ["test-fixtures"]
 
+[[bin]]
+name = "fixture-cli-shared-params"
+path = "src/bin/fixture-cli-shared-params.rs"
+required-features = ["test-fixtures"]
+
 [lib]
 name = "gen_circleci_orb"
 path = "src/lib.rs"

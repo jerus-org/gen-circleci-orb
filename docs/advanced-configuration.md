@@ -51,15 +51,19 @@ optional built-ins, third-party-orb steps, and custom `run` steps. There are two
 
 ### Simple mode
 
-List command names in `steps`; shared parameters are auto-detected and wired through. This is
-what `gen-circleci-orb config add-job-group` writes.
+List command names in `steps`; parameters inherited from a parent command (a clap `global`
+option, the same input in every step) are auto-detected and wired through as one job parameter.
+Options that two steps each declare for themselves are never combined, even when they share a name
+and type: each stays a separate `{step}_{name}` job parameter, since the steps may mean different
+things by it. This is what `gen-circleci-orb config add-job-group` writes.
 
 ```toml
 [[job_group]]
 name = "check_and_report"
 description = "Validate then report in one job."
 steps = ["validate", "report"]
-# params = ["orb_path"]   # optional: pin the shared parameter set explicitly
+# params = ["orb_path"]   # optional: expose these options (one job parameter per step,
+#                           or a single one when the option is inherited)
 ```
 
 ### Rich mode

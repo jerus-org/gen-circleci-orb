@@ -14,10 +14,14 @@ pub fn parse_top_level(
     let description = extract_description(help_text);
     let sub_names = extract_subcommand_names(help_text);
 
+    // Options the root declares are inherited by every subcommand below it
+    // when clap marks them `global` (gen-circleci-orb#423).
+    let root_options = own_options(help_text, &normalize_binary_name(binary), opts);
+
     let mut subcommands = Vec::new();
     for name in sub_names {
         let sub_help = run_help(binary, &[&name])?;
-        let sub = parse_subcommand(&[name], &sub_help, binary, opts)?;
+        let sub = parse_subcommand(&[name], &sub_help, binary, opts, &root_options)?;
         subcommands.push(sub);
     }
 
@@ -26,6 +30,22 @@ pub fn parse_top_level(
         description,
         subcommands,
     })
+}
+
+/// The options a command's own `--help` declares, as long name → description.
+/// Best effort: used only to recognise inherited (`global`) options in the
+/// commands below it, so a declaration that cannot be parsed is simply not
+/// counted — the naming/coverage errors are the leaf's concern, not an
+/// ancestor's. The description is part of the identity: clap repeats a
+/// `global` argument's exact help text in every subcommand, whereas an
+/// unrelated option that merely shares a name with a non-global ancestor
+/// option (which no subcommand's `--help` shows) reads differently.
+fn own_options(help_text: &str, command: &str, opts: &ParseOptions) -> HashMap<String, String> {
+    parse_parameters_detailed(help_text, command, opts)
+        .parameters
+        .into_iter()
+        .map(|p| (p.long_name, p.description))
+        .collect()
 }
 
 /// Extract the filename stem from a binary path, returning just the bare name.
@@ -52,6 +72,7 @@ fn parse_subcommand(
     help_text: &str,
     binary: &str,
     opts: &ParseOptions,
+    ancestor_options: &HashMap<String, String>,
 ) -> Result<SubCommand> {
     let name = path.last().expect("path is never empty").clone();
     let description = extract_description(help_text);
@@ -59,13 +80,26 @@ fn parse_subcommand(
     let child_names = extract_subcommand_names(help_text);
     let is_leaf = child_names.is_empty();
 
+    // What this command's own children inherit: everything above it, plus
+    // whatever this command itself declares.
+    let mut child_ancestor_options = ancestor_options.clone();
+    if !is_leaf {
+        child_ancestor_options.extend(own_options(help_text, &name, opts));
+    }
+
     let mut subcommands = Vec::new();
     for child_name in &child_names {
         let mut child_path = path.to_vec();
         child_path.push(child_name.clone());
         let path_refs: Vec<&str> = child_path.iter().map(String::as_str).collect();
         let child_help = run_help(binary, &path_refs)?;
-        let child = parse_subcommand(&child_path, &child_help, binary, opts)?;
+        let child = parse_subcommand(
+            &child_path,
+            &child_help,
+            binary,
+            opts,
+            &child_ancestor_options,
+        )?;
         subcommands.push(child);
     }
 
@@ -78,7 +112,11 @@ fn parse_subcommand(
         let full_path_display = path.join(" ");
         check_naming(&full_path_display, &parsed.errors)?;
         check_coverage(&full_path_display, &parsed.unparsed, opts)?;
-        parsed.parameters
+        let mut parameters = parsed.parameters;
+        for p in &mut parameters {
+            p.inherited = ancestor_options.get(&p.long_name) == Some(&p.description);
+        }
+        parameters
     } else {
         Vec::new()
     };
@@ -688,6 +726,7 @@ fn parse_option_block(
         required,
         description,
         repeatable,
+        inherited: false,
     })
 }
 
@@ -751,6 +790,7 @@ fn parse_short_only_block(
         required: !is_boolean && required.shorts.contains(&short),
         description,
         repeatable,
+        inherited: false,
     })
 }
 
@@ -785,6 +825,7 @@ fn parse_positional_block(
         required,
         description,
         repeatable: false,
+        inherited: false,
     })
 }
 
@@ -2396,7 +2437,7 @@ Options:
             allow_unparsed_help: true,
             ..ParseOptions::default()
         };
-        let err = parse_subcommand(&["cmd".to_string()], help, "tool", &opts)
+        let err = parse_subcommand(&["cmd".to_string()], help, "tool", &opts, &HashMap::new())
             .expect_err("a naming failure must still fail generation");
         assert!(err.to_string().contains("short_param"));
     }
@@ -2420,7 +2461,7 @@ Options:
             ..ParseOptions::default()
         };
         let path = vec!["a".to_string(), "b".to_string(), "c".to_string()];
-        let err = parse_subcommand(&path, help, "tool", &opts)
+        let err = parse_subcommand(&path, help, "tool", &opts, &HashMap::new())
             .expect_err("a naming failure must still fail generation");
         assert!(
             err.to_string().contains("a b c"),
