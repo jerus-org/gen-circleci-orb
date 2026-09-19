@@ -1815,18 +1815,29 @@ fn find_leaf_subcommand<'a>(cli: &'a CliDefinition, name: &str) -> Option<&'a Su
     search(&cli.subcommands, name)
 }
 
-/// Out of scope for gen-circleci-orb#413 (which is specifically about
-/// `add_mandatory_params`/`build_job_group_invoke_step` silently dropping a
-/// restricted param): an explicitly-`params`-selected restricted param
-/// (e.g. a `job_group.params` list naming `"name"`) still isn't resolved
-/// through `resolve_param_orb_name` here, and would keep the bare,
-/// CircleCI-reserved key. Same gap in `resolve_shared_params` below, and
-/// structurally harder there — a "shared" param spans multiple subcommands,
-/// each of which would resolve a restricted name differently (e.g.
-/// `release_name` vs `deploy_name`), so one unified job key can't cleanly
-/// represent it; needs its own design pass, not a small follow-on to #413.
-/// Filed as gen-circleci-orb#422.
+/// Resolve the JOB-level parameter key for a param shared or explicitly
+/// selected across a job group's steps (`resolve_explicit_params`/
+/// `resolve_shared_params` below). A shared/explicit param has no single
+/// subcommand of its own — it is, by definition, forwarded to more than one
+/// step's own command, each of which may resolve the bare CLI name
+/// differently (`resolve_param_orb_name` is subcommand-scoped) — so it
+/// cannot be keyed the way a per-subcommand mandatory param is. Mirrors
+/// `resolve_command_param_name`'s rename strategy (bare name, unless it
+/// collides with a CircleCI-reserved job field, in which case prefix it),
+/// but scoped to the job group's own name instead of a subcommand's
+/// (gen-circleci-orb#422). Applied uniformly regardless of how many steps
+/// actually declare the param, so there is exactly one naming rule to
+/// reason about rather than a one-sub/many-sub special case.
+fn resolve_job_group_param_name(group_name: &str, param_name: &str) -> String {
+    if RESERVED_JOB_PARAMS.contains(&param_name) {
+        format!("{}_{param_name}", group_name.replace('-', "_"))
+    } else {
+        param_name.to_string()
+    }
+}
+
 fn resolve_explicit_params(
+    group_name: &str,
     explicit: &[String],
     step_subs: &[&SubCommand],
 ) -> IndexMap<String, OrbParameter> {
@@ -1834,7 +1845,8 @@ fn resolve_explicit_params(
     for param_name in explicit {
         for sub in step_subs.iter() {
             if let Some(p) = sub.parameters.iter().find(|p| &p.long_name == param_name) {
-                result.insert(param_name.clone(), cli_param_to_orb_param(p));
+                let job_key = resolve_job_group_param_name(group_name, param_name);
+                result.insert(job_key, cli_param_to_orb_param(p));
                 break;
             }
         }
@@ -1842,7 +1854,10 @@ fn resolve_explicit_params(
     result
 }
 
-fn resolve_shared_params(step_subs: &[&SubCommand]) -> IndexMap<String, OrbParameter> {
+fn resolve_shared_params(
+    group_name: &str,
+    step_subs: &[&SubCommand],
+) -> IndexMap<String, OrbParameter> {
     let mut result = IndexMap::new();
     let Some(first) = step_subs.first() else {
         return result;
@@ -1864,7 +1879,8 @@ fn resolve_shared_params(step_subs: &[&SubCommand]) -> IndexMap<String, OrbParam
     );
     for p in &first.parameters {
         if shared_names.contains(p.long_name.as_str()) {
-            result.insert(p.long_name.clone(), cli_param_to_orb_param(p));
+            let job_key = resolve_job_group_param_name(group_name, &p.long_name);
+            result.insert(job_key, cli_param_to_orb_param(p));
         }
     }
     result
@@ -1880,6 +1896,7 @@ fn resolve_shared_params(step_subs: &[&SubCommand]) -> IndexMap<String, OrbParam
 /// only a genuine remaining collision gets the additional `{sub}_` prefix.
 fn add_mandatory_params(
     params: &mut IndexMap<String, OrbParameter>,
+    group_name: &str,
     step_subs: &[&SubCommand],
     config: Option<&OrbConfig>,
 ) {
@@ -1889,13 +1906,14 @@ fn add_mandatory_params(
             if !p.required || matches!(p.param_type, ParamType::Boolean) {
                 continue;
             }
-            // Already selected by shared/explicit mode under its own bare
-            // CLI name (gen-circleci-orb#422's gap: neither resolves a
-            // restricted rename) -- don't ALSO add a resolved-rename
-            // duplicate on top of it; that would both triple-declare the
-            // param and reintroduce the bare, CircleCI-reserved key this
-            // function exists to avoid for the ones it does add.
-            if present.contains(&p.long_name) {
+            // Already selected by shared/explicit mode, under the same key
+            // `resolve_job_group_param_name` would produce for it (bare, or
+            // group-prefixed if restricted, gen-circleci-orb#422) -- don't
+            // ALSO add a resolved-rename duplicate on top of it; that would
+            // both triple-declare the param and reintroduce a second,
+            // sub-scoped key for something already declared under the
+            // group-scoped one.
+            if present.contains(&resolve_job_group_param_name(group_name, &p.long_name)) {
                 continue;
             }
             let resolved = resolve_param_orb_name(&sub.name, &p.long_name, config);
@@ -1908,7 +1926,16 @@ fn add_mandatory_params(
                         resolve_param_orb_name(&other.name, &op.long_name, config) == resolved
                     })
             });
-            let job_name = if collides {
+            // `resolved` is the command-level key -- only renamed away from
+            // the bare CLI name when RESTRICTED_COMMAND_PARAMS (just "name")
+            // applies. A JOB parameter has a broader reserved set
+            // (RESERVED_JOB_PARAMS: type/filters/matrix/requires/context/
+            // pre_steps/post_steps too), so a param like "type" passes
+            // through `resolved` unrenamed yet is still invalid as a bare
+            // job key -- needs the same `{sub}_` prefix `collides` already
+            // uses, even with no actual cross-subcommand collision.
+            let needs_rename = collides || RESERVED_JOB_PARAMS.contains(&resolved.as_str());
+            let job_name = if needs_rename {
                 format!("{}_{resolved}", sub.name)
             } else {
                 resolved
@@ -1925,11 +1952,11 @@ fn build_job_group_params(
     config: Option<&OrbConfig>,
 ) -> IndexMap<String, OrbParameter> {
     let mut params = if let Some(explicit) = &group.params {
-        resolve_explicit_params(explicit, step_subs)
+        resolve_explicit_params(&group.name, explicit, step_subs)
     } else {
-        resolve_shared_params(step_subs)
+        resolve_shared_params(&group.name, step_subs)
     };
-    add_mandatory_params(&mut params, step_subs, config);
+    add_mandatory_params(&mut params, &group.name, step_subs, config);
     params
 }
 
@@ -1940,6 +1967,7 @@ fn build_job_group_params(
 /// started renaming the command's own declared key).
 fn build_job_group_invoke_step(
     sub: &SubCommand,
+    group_name: &str,
     job_params: &IndexMap<String, OrbParameter>,
     config: Option<&OrbConfig>,
 ) -> serde_yaml::Value {
@@ -1949,22 +1977,22 @@ fn build_job_group_invoke_step(
         // Find the name this param has in the merged job parameter set:
         // the resolved key first (add_mandatory_params' own scheme), then
         // the sub-prefixed resolved form (cross-subcommand collision
-        // disambiguation), then finally the bare CLI name -- shared/explicit
-        // mode doesn't yet resolve a restricted rename (gen-circleci-orb#422),
-        // so a param they selected can only be found there. Whichever key is
-        // found, the invoke step's own key (left side) is always
-        // `command_key` -- the invoked command's real declared parameter
-        // name, independent of what the job happens to expose it as.
+        // disambiguation), then finally the group-scoped key
+        // `resolve_job_group_param_name` produces for a shared/explicit
+        // selection (gen-circleci-orb#422) -- a param they selected can only
+        // be found there. Whichever key is found, the invoke step's own key
+        // (left side) is always `command_key` -- the invoked command's real
+        // declared parameter name, independent of what the job happens to
+        // expose it as.
         let job_param_name = if job_params.contains_key(&command_key) {
             Some(command_key.clone())
         } else {
             let prefixed = format!("{}_{command_key}", sub.name);
             if job_params.contains_key(&prefixed) {
                 Some(prefixed)
-            } else if job_params.contains_key(&p.long_name) {
-                Some(p.long_name.clone())
             } else {
-                None
+                let group_key = resolve_job_group_param_name(group_name, &p.long_name);
+                job_params.contains_key(&group_key).then_some(group_key)
             }
         };
         if let Some(job_name) = job_param_name {
@@ -2192,7 +2220,12 @@ fn render_job_group(
         build_attach_workspace_step(),
     ];
     for sub in &step_subs {
-        steps.push(build_job_group_invoke_step(sub, &parameters, config));
+        steps.push(build_job_group_invoke_step(
+            sub,
+            &group.name,
+            &parameters,
+            config,
+        ));
     }
 
     let description = group
@@ -6383,14 +6416,70 @@ mod tests {
     }
 
     #[test]
+    fn job_group_renames_a_mandatory_param_reserved_only_at_the_job_level() {
+        // Code-review finding on #422: RESTRICTED_COMMAND_PARAMS (just
+        // "name") is narrower than RESERVED_JOB_PARAMS (also type/filters/
+        // matrix/requires/context/pre_steps/post_steps) -- a param like
+        // "type" passes through resolve_param_orb_name unrenamed (valid as
+        // a COMMAND param) but is still invalid as a bare JOB parameter key
+        // (collides with CircleCI's own reserved job "type" field). Must be
+        // sub-prefixed the same way a genuine cross-subcommand collision is,
+        // even with no other subcommand declaring "type" at all.
+        let type_param = Parameter {
+            long_name: "type".to_string(),
+            short: None,
+            param_type: ParamType::String,
+            default: None,
+            required: true,
+            description: "Type of the release.".to_string(),
+            ..Default::default()
+        };
+        let subs = vec![
+            make_leaf("generate", vec![]),
+            make_leaf("release", vec![type_param]),
+        ];
+        let cli = make_cli("mytool", subs);
+        let config = crate::orb_config::OrbConfig {
+            job_group: Some(vec![crate::orb_config::JobGroup {
+                name: "sync".to_string(),
+                description: None,
+                steps: vec!["generate".to_string(), "release".to_string()],
+                params: None,
+                ..Default::default()
+            }]),
+            ..crate::orb_config::OrbConfig::default()
+        };
+        let files = generate(&cli, &default_opts(), Some(&config));
+        let job = &files[&PathBuf::from("src/jobs/sync.yml")];
+        assert!(
+            job.contains("\n  release_type:\n"),
+            "the job-level-only-reserved 'type' param must be renamed to \
+             'release_type', not left bare (colliding with the reserved job \
+             'type' field):\n{job}"
+        );
+        assert!(
+            !job.contains("\n  type:\n"),
+            "the bare, CircleCI-reserved 'type' key must never appear as a \
+             job parameter:\n{job}"
+        );
+        assert!(
+            job.contains("type: << parameters.release_type >>"),
+            "the invoke step must forward the job's 'release_type' value to \
+             the command's own (unrenamed, since \"type\" is not restricted \
+             at the command level) key 'type':\n{job}"
+        );
+    }
+
+    #[test]
     fn job_group_explicit_restricted_param_still_reaches_the_command() {
-        // Code-review finding on #413: resolve_explicit_params (gen-circleci-
-        // orb#422, deliberately out of scope) still stores an explicitly
-        // job_group.params-selected restricted param under its bare CLI
-        // name ("name"). build_job_group_invoke_step's lookup must still
-        // find it there and wire it through to the command's own resolved
-        // key ("release_name") -- not silently drop the value because the
-        // primary (resolved-key) lookup misses.
+        // gen-circleci-orb#422: an explicitly job_group.params-selected
+        // restricted param ("name") must be renamed to a group-scoped job
+        // key ("sync_name") rather than kept under the bare, CircleCI-
+        // reserved "name" — mirroring #412's rename-not-drop strategy, but
+        // scoped to the job group since a shared/explicit param has no
+        // single subcommand of its own. build_job_group_invoke_step's lookup
+        // must find it there and wire it through to the command's own
+        // resolved key ("release_name").
         use crate::orb_config::{JobGroup, OrbConfig};
 
         let name_param = Parameter {
@@ -6420,25 +6509,31 @@ mod tests {
         let files = generate(&cli, &default_opts(), Some(&config));
         let job = &files[&PathBuf::from("src/jobs/sync.yml")];
         assert!(
-            job.contains("\n  name:\n"),
-            "explicit params list must still declare 'name' as the job's \
-             own parameter (its #422 gap, unchanged by #413):\n{job}"
+            job.contains("\n  sync_name:\n"),
+            "explicit params list must declare the restricted param under a \
+             group-scoped key ('sync_name'), not the bare, CircleCI-reserved \
+             'name':\n{job}"
         );
         assert!(
-            job.contains("release_name: << parameters.name >>"),
-            "the invoke step must forward the job's 'name' value to the \
-             command's own resolved key 'release_name', not drop it \
-             because the resolved-key lookup misses:\n{job}"
+            !job.contains("\n  name:\n"),
+            "the bare, CircleCI-reserved 'name' key must never appear as a \
+             job parameter:\n{job}"
+        );
+        assert!(
+            job.contains("release_name: << parameters.sync_name >>"),
+            "the invoke step must forward the job's 'sync_name' value to the \
+             command's own resolved key 'release_name':\n{job}"
         );
     }
 
     #[test]
     fn job_group_shared_restricted_required_param_is_not_duplicated() {
-        // Code-review finding on #413: add_mandatory_params must not ALSO
-        // add a resolved-rename entry for a restricted param that
-        // resolve_shared_params already selected under its bare CLI name --
-        // that would triple-declare it (bare + two resolved renames) instead
-        // of leaving the pre-existing #422 gap exactly as it was.
+        // gen-circleci-orb#422: a shared restricted param ("name", present on
+        // every step) must be declared once under a group-scoped job key
+        // ("sync_name") and forwarded from there to each command's own
+        // resolved key — add_mandatory_params must not ALSO add a
+        // resolved-rename duplicate on top of it (that would triple-declare
+        // it: group-scoped + two per-subcommand renames).
         use crate::orb_config::{JobGroup, OrbConfig};
 
         let make_name_param = || Parameter {
@@ -6469,29 +6564,40 @@ mod tests {
         let job = &files[&PathBuf::from("src/jobs/sync.yml")];
         // "generate_name"/"release_name" legitimately appear in the invoke
         // steps below (forwarding to each command's own resolved key) --
-        // the bug is a DUPLICATE job-level parameter DECLARATION (2-space
-        // indent), not their presence anywhere in the file.
+        // the bug this guards is a DUPLICATE job-level parameter
+        // DECLARATION (2-space indent), not their presence anywhere in the
+        // file.
+        assert!(
+            job.contains("\n  sync_name:\n"),
+            "the shared restricted param must be declared once under a \
+             group-scoped key ('sync_name'):\n{job}"
+        );
+        assert!(
+            !job.contains("\n  name:\n"),
+            "the bare, CircleCI-reserved 'name' key must never appear as a \
+             job parameter:\n{job}"
+        );
         assert!(
             !job.contains("\n  generate_name:\n"),
-            "a shared restricted param already selected under its bare key \
-             must not ALSO get a resolved-rename duplicate DECLARED as a \
-             job parameter:\n{job}"
+            "a shared restricted param already declared under its \
+             group-scoped key must not ALSO get a per-subcommand \
+             resolved-rename duplicate DECLARED as a job parameter:\n{job}"
         );
         assert!(
             !job.contains("\n  release_name:\n"),
-            "a shared restricted param already selected under its bare key \
-             must not ALSO get a resolved-rename duplicate DECLARED as a \
-             job parameter:\n{job}"
+            "a shared restricted param already declared under its \
+             group-scoped key must not ALSO get a per-subcommand \
+             resolved-rename duplicate DECLARED as a job parameter:\n{job}"
         );
         assert!(
-            job.contains("generate_name: << parameters.name >>"),
-            "the invoke step must still forward the shared job param to \
-             each command's own resolved key:\n{job}"
+            job.contains("generate_name: << parameters.sync_name >>"),
+            "the invoke step must forward the shared job param to each \
+             command's own resolved key:\n{job}"
         );
         assert!(
-            job.contains("release_name: << parameters.name >>"),
-            "the invoke step must still forward the shared job param to \
-             each command's own resolved key:\n{job}"
+            job.contains("release_name: << parameters.sync_name >>"),
+            "the invoke step must forward the shared job param to each \
+             command's own resolved key:\n{job}"
         );
     }
 
