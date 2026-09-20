@@ -5,9 +5,40 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.22] - 2026-09-20
+
+Summary: Added[3], Changed[1], Documentation[2], Fixed[14], Testing[2]
+
+### Added
+
+ - feat: init interactively sets up post_merge_regen
+ - feat: differentiate short/long CLI help
+ - feat: generalize hardcoded check-only step
+
+### Fixed
+
+ - fix: key short_param by the effective name
+ - fix: never share same-named job group options
+ - fix: key orb_name lookups by effective name
+ - fix: resolve restricted params in job groups
+ - fix(deps): update dependency toolkit to v8
+ - fix: don't misread a wrapped Commands: entry
+ - fix: enable wrap_help so -h/--help actually wrap
+ - fix: make every flag's short help one sentence
+ - fix: key hardcode_check lookup by effective name
+ - fix: don't match an excluded leaf by bare name
+ - fix: qualify param-override lookups (#418)
+ - fix: rename restricted params in job groups
+ - fix: address #421 review comments
+ - fix: resolve renamed param-key collisions
+
+### Changed
+
+ - refactor: bind job group keys in one table
+
 ## [0.1.21] - 2026-09-16
 
-Summary: Fixed[10], Testing[3]
+Summary: Chore[1], Fixed[10], Testing[3]
 
 ### Fixed
 
@@ -926,7 +957,8 @@ Summary: Added[2], Chore[1], Fixed[2], Testing[1]
 
 Summary: Chore[2]
 
-[Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.20...HEAD
+[Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.21...HEAD
+[0.1.21]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.20...v0.1.21
 [0.1.20]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.19...v0.1.20
 [0.1.19]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.18...v0.1.19
 [0.1.18]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.17...v0.1.18
