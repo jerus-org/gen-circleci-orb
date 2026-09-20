@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - deps: update dependency toolkit to v8(pr [#429])
 - resolve restricted params in job groups(pr [#431])
 - key orb_name lookups by effective name(pr [#432])
+- never share same-named job group options(pr [#433])
 
 ## [0.1.21] - 2026-09-16
 
@@ -1200,6 +1201,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#430]: https://github.com/jerus-org/gen-circleci-orb/pull/430
 [#431]: https://github.com/jerus-org/gen-circleci-orb/pull/431
 [#432]: https://github.com/jerus-org/gen-circleci-orb/pull/432
+[#433]: https://github.com/jerus-org/gen-circleci-orb/pull/433
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.21...HEAD
 [0.1.21]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.20...v0.1.21
 [0.1.20]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.19...v0.1.20
