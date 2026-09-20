@@ -500,14 +500,27 @@ const RESTRICTED_COMMAND_PARAMS: &[&str] = &["name"];
 /// Restricted names are prefixed with the subcommand name
 /// (e.g. `generate` + `name` → `generate_name`).
 fn resolve_command_param_name(subcommand: &str, param: &str) -> String {
-    if RESTRICTED_COMMAND_PARAMS.contains(&param) {
-        // Snake-case the subcommand: a multi-word subcommand name (e.g.
-        // `add-job-group`) must not leak hyphens into the orb param key or its
-        // derived env var — orb param keys must be snake_case (RC010).
-        format!("{}_{param}", subcommand.replace('-', "_"))
+    prefix_if_reserved(RESTRICTED_COMMAND_PARAMS, subcommand, param)
+}
+
+/// `{scope}_{name}` when `name` is in `reserved`, else `name` unchanged. The
+/// one rename rule behind every generated key that must avoid a
+/// CircleCI-reserved name — command params (scope: the subcommand), job-group
+/// inherited params (scope: the group). The scope is snake-cased: a
+/// multi-word name (e.g. `add-job-group`) must not leak hyphens into an orb
+/// param key or its derived env var — orb param keys must be snake_case
+/// (RC010).
+fn prefix_if_reserved(reserved: &[&str], scope: &str, name: &str) -> String {
+    if reserved.contains(&name) {
+        scoped(scope, name)
     } else {
-        param.to_string()
+        name.to_string()
     }
+}
+
+/// `{scope}_{name}`, with the scope snake-cased (see [`prefix_if_reserved`]).
+fn scoped(scope: &str, name: &str) -> String {
+    format!("{}_{name}", scope.replace('-', "_"))
 }
 
 /// Resolve the orb-facing parameter name for a CLI parameter, honoring an
@@ -1864,24 +1877,81 @@ fn find_leaf_subcommand<'a>(
     search(&cli.subcommands, "", name, effective_names)
 }
 
-/// Resolve the JOB-level parameter key for a param shared or explicitly
-/// selected across a job group's steps (`resolve_explicit_params`/
-/// `resolve_shared_params` below). A shared/explicit param has no single
-/// subcommand of its own — it is, by definition, forwarded to more than one
-/// step's own command, each of which may resolve the bare CLI name
-/// differently (`resolve_param_orb_name` is subcommand-scoped) — so it
-/// cannot be keyed the way a per-subcommand mandatory param is. Mirrors
-/// `resolve_command_param_name`'s rename strategy (bare name, unless it
-/// collides with a CircleCI-reserved job field, in which case prefix it),
-/// but scoped to the job group's own name instead of a subcommand's
-/// (gen-circleci-orb#422). Applied uniformly regardless of how many steps
-/// actually declare the param, so there is exactly one naming rule to
-/// reason about rather than a one-sub/many-sub special case.
+/// Resolve the JOB-level key for an inherited param — one job value shared by
+/// every step that inherits it, so it has no single subcommand to scope by
+/// (gen-circleci-orb#422): bare, unless CircleCI reserves that name for a
+/// job, in which case it is scoped to the job group instead.
 fn resolve_job_group_param_name(group_name: &str, param_name: &str) -> String {
-    if RESERVED_JOB_PARAMS.contains(&param_name) {
-        format!("{}_{param_name}", group_name.replace('-', "_"))
-    } else {
-        param_name.to_string()
+    prefix_if_reserved(RESERVED_JOB_PARAMS, group_name, param_name)
+}
+
+/// Where a job-level key came from. Two declarations landing on one key is
+/// only legitimate when they are the same declaration: every step that
+/// inherits an option shares one key by design, whereas a step's own option
+/// is its own.
+#[derive(Debug, Clone, PartialEq)]
+struct KeyOrigin {
+    id: String,
+    label: String,
+}
+
+impl KeyOrigin {
+    fn inherited(long_name: &str) -> Self {
+        Self {
+            id: format!("inherited:{long_name}"),
+            label: format!("inherited '--{long_name}'"),
+        }
+    }
+
+    fn step(sub: &SubCommand, long_name: &str) -> Self {
+        Self {
+            id: format!("step:{}:{long_name}", sub.name),
+            label: format!("'--{long_name}' on step '{}'", sub.name),
+        }
+    }
+}
+
+/// A job group's parameter set together with the one table that says which
+/// job key each step's parameter is wired to. Built once by the producer side
+/// (`build_job_group_params`), so the invoke step reads its key from here
+/// instead of re-deriving which naming scheme produced it — a guess that
+/// depended on no two schemes ever yielding the same string.
+#[derive(Default)]
+struct JobGroupParams {
+    params: IndexMap<String, OrbParameter>,
+    /// `(step index, param long_name)` → the job key it is declared under.
+    keys: HashMap<(usize, String), String>,
+    origins: HashMap<String, KeyOrigin>,
+    /// Two different declarations resolving to one job key.
+    collisions: Vec<String>,
+}
+
+impl JobGroupParams {
+    /// Wires `step_idx`'s `long_name` to `key`, declaring the job parameter
+    /// the first time the key is seen. A second, DIFFERENT declaration on the
+    /// same key is recorded as a collision and keeps the first.
+    fn bind(
+        &mut self,
+        group_name: &str,
+        step_idx: usize,
+        p: &Parameter,
+        key: String,
+        origin: KeyOrigin,
+    ) {
+        match self.origins.get(&key) {
+            None => {
+                self.params.insert(key.clone(), cli_param_to_orb_param(p));
+                self.origins.insert(key.clone(), origin);
+            }
+            Some(existing) if *existing == origin => {}
+            Some(existing) => self.collisions.push(format!(
+                "job_group '{group_name}': {} and {} both resolve to job parameter '{key}' — \
+                 set [subcommand.<step>.param.<flag>] orb_name = \"...\" on the step's own \
+                 option to give it a different key",
+                existing.label, origin.label
+            )),
+        }
+        self.keys.insert((step_idx, p.long_name.clone()), key);
     }
 }
 
@@ -1890,63 +1960,64 @@ fn resolve_job_group_param_name(group_name: &str, param_name: &str) -> String {
 /// that merely two steps each declare for themselves is NOT shared — the
 /// options may mean different things (`generate --output` vs `release
 /// --output`), so unifying them would force one value on both
-/// (gen-circleci-orb#423).
-fn resolve_explicit_params(
+/// (gen-circleci-orb#423). Each declaring step is judged on its own: an
+/// inherited declaration shares one key, a step's own declaration gets its
+/// own even when another step's same-named option happens to be inherited.
+fn bind_explicit_params(
+    out: &mut JobGroupParams,
     group_name: &str,
     explicit: &[String],
     steps: &[ResolvedStep],
     config: Option<&OrbConfig>,
-) -> IndexMap<String, OrbParameter> {
-    let mut result = IndexMap::new();
+) {
     for param_name in explicit {
-        let declaring: Vec<(&ResolvedStep, &Parameter)> = steps
-            .iter()
-            .filter_map(|step| {
-                step.0
-                    .parameters
-                    .iter()
-                    .find(|p| &p.long_name == param_name)
-                    .map(|p| (step, p))
-            })
-            .collect();
-        // Each declaring step is judged on its own: an inherited declaration
-        // is the same input everywhere and shares one job key; a step's own
-        // independent declaration gets its own key, even when another step's
-        // same-named option happens to be inherited.
-        if let Some((_, first)) = declaring.iter().find(|(_, p)| p.inherited) {
-            let job_key = resolve_job_group_param_name(group_name, param_name);
-            result.insert(job_key, cli_param_to_orb_param(first));
-        }
-        for ((sub, effective_name), p) in declaring.iter().filter(|(_, p)| !p.inherited) {
-            let key = per_step_job_key(sub, effective_name, p, steps, config);
-            result.insert(key, cli_param_to_orb_param(p));
+        for (idx, (sub, effective_name)) in steps.iter().enumerate() {
+            let Some(p) = sub.parameters.iter().find(|p| &p.long_name == param_name) else {
+                continue;
+            };
+            if p.inherited {
+                let key = resolve_job_group_param_name(group_name, param_name);
+                out.bind(group_name, idx, p, key, KeyOrigin::inherited(param_name));
+            } else {
+                let key = per_step_job_key(sub, effective_name, p, steps, config);
+                out.bind(group_name, idx, p, key, KeyOrigin::step(sub, param_name));
+            }
         }
     }
-    result
 }
 
 /// Default mode: the unified set is the inherited options present on every
 /// step — never a same-named option the steps each declared independently.
-fn resolve_shared_params(
-    group_name: &str,
-    steps: &[ResolvedStep],
-) -> IndexMap<String, OrbParameter> {
-    let mut result = IndexMap::new();
+fn bind_shared_params(out: &mut JobGroupParams, group_name: &str, steps: &[ResolvedStep]) {
     let Some(((first, _), rest)) = steps.split_first() else {
-        return result;
+        return;
     };
-    for p in first.parameters.iter().filter(|p| p.inherited) {
+    for shared in first.parameters.iter().filter(|p| p.inherited) {
         let on_every_step = rest.iter().all(|(sub, _)| {
             sub.parameters
                 .iter()
-                .any(|op| op.inherited && op.long_name == p.long_name)
+                .any(|op| op.inherited && op.long_name == shared.long_name)
         });
-        if on_every_step {
-            let job_key = resolve_job_group_param_name(group_name, &p.long_name);
-            result.insert(job_key, cli_param_to_orb_param(p));
+        if !on_every_step {
+            continue;
+        }
+        let key = resolve_job_group_param_name(group_name, &shared.long_name);
+        for (idx, (sub, _)) in steps.iter().enumerate() {
+            if let Some(p) = sub
+                .parameters
+                .iter()
+                .find(|p| p.long_name == shared.long_name)
+            {
+                out.bind(
+                    group_name,
+                    idx,
+                    p,
+                    key.clone(),
+                    KeyOrigin::inherited(&shared.long_name),
+                );
+            }
         }
     }
-    result
 }
 
 /// The job-level key for one step's own parameter: its resolved command-level
@@ -1973,50 +2044,34 @@ fn per_step_job_key(
     // requires/context/pre_steps/post_steps too), so a param like "type"
     // passes through unrenamed yet is still invalid as a bare job key.
     if collides || RESERVED_JOB_PARAMS.contains(&resolved.as_str()) {
-        format!("{}_{resolved}", sub.name)
+        scoped(&sub.name, &resolved)
     } else {
         resolved
     }
 }
 
-/// A required, non-boolean param not already in the job's shared/explicit
-/// parameter set gets a mandatory slot here. Resolves each candidate through
-/// `resolve_param_orb_name` FIRST (restricted-name rename / `orb_name`
-/// override, same as the per-subcommand path #369/#412 already fixed) before
-/// checking for a cross-subcommand name collision — a restricted param on
-/// two different subcommands already differs once resolved (e.g.
-/// `release_name` vs `deploy_name`), so it needs no further disambiguation;
-/// only a genuine remaining collision gets the additional `{sub}_` prefix.
-fn add_mandatory_params(
-    params: &mut IndexMap<String, OrbParameter>,
+/// A required, non-boolean param not already bound by shared/explicit
+/// selection gets a mandatory slot here, under its own per-step key
+/// (`per_step_job_key`: the restricted-name rename / `orb_name` override of
+/// #369/#412, `{sub}_`-prefixed on a cross-step collision).
+fn bind_mandatory_params(
+    out: &mut JobGroupParams,
     group_name: &str,
     steps: &[ResolvedStep],
     config: Option<&OrbConfig>,
 ) {
-    let mut present: std::collections::HashSet<String> = params.keys().cloned().collect();
-    for (sub, effective_name) in steps {
+    for (idx, (sub, effective_name)) in steps.iter().enumerate() {
         for p in &sub.parameters {
             if !p.required || matches!(p.param_type, ParamType::Boolean) {
                 continue;
             }
-            // Already selected by shared/explicit mode, under the same key
-            // `resolve_job_group_param_name` would produce for it (bare, or
-            // group-prefixed if restricted, gen-circleci-orb#422) -- don't
-            // ALSO add a resolved-rename duplicate on top of it; that would
-            // both triple-declare the param and reintroduce a second,
-            // sub-scoped key for something already declared under the
-            // group-scoped one.
-            if p.inherited
-                && present.contains(&resolve_job_group_param_name(group_name, &p.long_name))
-            {
+            // An inherited param already bound under its shared key must not
+            // ALSO get a per-step duplicate on top of it.
+            if p.inherited && out.keys.contains_key(&(idx, p.long_name.clone())) {
                 continue;
             }
-            let job_name = per_step_job_key(sub, effective_name, p, steps, config);
-            if present.contains(&job_name) {
-                continue;
-            }
-            params.insert(job_name.clone(), cli_param_to_orb_param(p));
-            present.insert(job_name);
+            let key = per_step_job_key(sub, effective_name, p, steps, config);
+            out.bind(group_name, idx, p, key, KeyOrigin::step(sub, &p.long_name));
         }
     }
 }
@@ -2025,55 +2080,65 @@ fn build_job_group_params(
     group: &crate::orb_config::JobGroup,
     steps: &[ResolvedStep],
     config: Option<&OrbConfig>,
-) -> IndexMap<String, OrbParameter> {
-    let mut params = if let Some(explicit) = &group.params {
-        resolve_explicit_params(&group.name, explicit, steps, config)
+) -> JobGroupParams {
+    let mut out = JobGroupParams::default();
+    if let Some(explicit) = &group.params {
+        bind_explicit_params(&mut out, &group.name, explicit, steps, config);
     } else {
-        resolve_shared_params(&group.name, steps)
-    };
-    add_mandatory_params(&mut params, &group.name, steps, config);
-    params
+        bind_shared_params(&mut out, &group.name, steps);
+    }
+    bind_mandatory_params(&mut out, &group.name, steps, config);
+    out
+}
+
+/// Every job-group parameter-key collision across the config's simple-mode
+/// groups (rich-mode groups declare their own parameters, so have nothing to
+/// collide). Checked before rendering, alongside `validate_param_key_collisions`,
+/// so a collision fails loudly instead of one declaration silently
+/// overwriting another.
+pub(crate) fn job_group_key_collisions(
+    cli: &CliDefinition,
+    config: Option<&OrbConfig>,
+    effective_names: &HashMap<String, String>,
+) -> Vec<String> {
+    let mut errors = Vec::new();
+    for group in config
+        .and_then(|c| c.job_group.as_ref())
+        .into_iter()
+        .flatten()
+        .filter(|g| g.step.is_none())
+    {
+        let steps: Vec<ResolvedStep> = group
+            .steps
+            .iter()
+            .filter_map(|name| find_leaf_subcommand(cli, name, effective_names))
+            .collect();
+        errors.extend(build_job_group_params(group, &steps, config).collisions);
+    }
+    errors
 }
 
 /// The invoke step's key (left side) must match the SAME key the invoked
 /// command itself declares that parameter under — `resolve_param_orb_name`,
-/// not the bare CLI flag name (gen-circleci-orb#413: forwarding under the
-/// bare name broke for any restricted/`orb_name`-overridden param once #412
-/// started renaming the command's own declared key).
+/// not the bare CLI flag name (gen-circleci-orb#413) — while the value
+/// (right side) is whatever job key `build_job_group_params` bound that
+/// step's parameter to.
 fn build_job_group_invoke_step(
+    step_idx: usize,
     (sub, effective_name): &ResolvedStep,
-    group_name: &str,
-    job_params: &IndexMap<String, OrbParameter>,
+    keys: &HashMap<(usize, String), String>,
     config: Option<&OrbConfig>,
 ) -> serde_yaml::Value {
     let mut invoke_map = serde_yaml::Mapping::new();
     for p in &sub.parameters {
-        let command_key = resolve_param_orb_name(&sub.name, effective_name, &p.long_name, config);
-        // Find the name this param has in the job's parameter set. An
-        // inherited param is the one job value shared by every step
-        // (`resolve_job_group_param_name`, #422). Anything else is this
-        // step's OWN parameter (`per_step_job_key`, #423): the `{sub}_`
-        // form is tried before the bare key so a same-named inherited
-        // param's shared key is never mistaken for it. The invoke step's own
-        // key (left side) is always `command_key` -- the invoked command's
-        // real declared parameter name, whatever the job exposes it as.
-        let group_key = resolve_job_group_param_name(group_name, &p.long_name);
-        let prefixed = format!("{}_{command_key}", sub.name);
-        let job_param_name = if p.inherited && job_params.contains_key(&group_key) {
-            Some(group_key)
-        } else if job_params.contains_key(&prefixed) {
-            Some(prefixed)
-        } else if job_params.contains_key(&command_key) {
-            Some(command_key.clone())
-        } else {
-            None
+        let Some(job_name) = keys.get(&(step_idx, p.long_name.clone())) else {
+            continue;
         };
-        if let Some(job_name) = job_param_name {
-            invoke_map.insert(
-                serde_yaml::Value::String(command_key),
-                serde_yaml::Value::String(format!("<< parameters.{job_name} >>")),
-            );
-        }
+        let command_key = resolve_param_orb_name(&sub.name, effective_name, &p.long_name, config);
+        invoke_map.insert(
+            serde_yaml::Value::String(command_key),
+            serde_yaml::Value::String(format!("<< parameters.{job_name} >>")),
+        );
     }
     serde_yaml::Value::Mapping({
         let mut m = serde_yaml::Mapping::new();
@@ -2283,7 +2348,11 @@ fn render_job_group(
         .filter_map(|name| find_leaf_subcommand(cli, name, effective_names))
         .collect();
 
-    let mut parameters = build_job_group_params(group, &steps_resolved, config);
+    let JobGroupParams {
+        params: mut parameters,
+        keys,
+        ..
+    } = build_job_group_params(group, &steps_resolved, config);
 
     let (attach_param, root_param) = build_workspace_params();
     parameters.insert("attach_workspace".to_string(), attach_param);
@@ -2293,13 +2362,8 @@ fn render_job_group(
         serde_yaml::Value::String("checkout".to_string()),
         build_attach_workspace_step(),
     ];
-    for step in &steps_resolved {
-        steps.push(build_job_group_invoke_step(
-            step,
-            &group.name,
-            &parameters,
-            config,
-        ));
+    for (idx, step) in steps_resolved.iter().enumerate() {
+        steps.push(build_job_group_invoke_step(idx, step, &keys, config));
     }
 
     let description = group
@@ -6683,6 +6747,121 @@ mod tests {
                  (inherited_first={inherited_first}):\n{job}"
             );
         }
+    }
+
+    #[test]
+    fn job_group_key_collisions_reports_two_declarations_landing_on_one_job_key() {
+        // Note from the #431 review: the group-scoped key `{group}_{param}`
+        // for an inherited restricted `--name` (`sync_name`) is synthesized
+        // with no check against a genuinely different flag that resolves to
+        // the same key -- the second insert used to silently overwrite the
+        // first, and the invoke step then forwarded one value to both.
+        use crate::orb_config::{JobGroup, OrbConfig};
+
+        let mut inherited_name = make_param("name", None, true);
+        inherited_name.inherited = true;
+        let cli = make_cli(
+            "mytool",
+            vec![
+                make_leaf("generate", vec![inherited_name.clone()]),
+                make_leaf(
+                    "release",
+                    vec![inherited_name, make_param("sync_name", None, true)],
+                ),
+            ],
+        );
+        let config = OrbConfig {
+            job_group: Some(vec![JobGroup {
+                name: "sync".to_string(),
+                description: None,
+                steps: vec!["generate".to_string(), "release".to_string()],
+                params: None,
+                ..Default::default()
+            }]),
+            ..OrbConfig::default()
+        };
+        let errors = job_group_key_collisions(
+            &cli,
+            Some(&config),
+            &compute_effective_names(&cli, Some(&config)),
+        );
+        assert_eq!(errors.len(), 1, "got: {errors:?}");
+        assert!(
+            errors[0].contains("job_group 'sync'")
+                && errors[0].contains("'sync_name'")
+                && errors[0].contains("orb_name"),
+            "the message names the group, the key and the fix: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn job_group_key_collisions_accepts_independent_and_shared_declarations() {
+        use crate::orb_config::{JobGroup, OrbConfig};
+
+        let mut inherited = make_param("config", None, false);
+        inherited.inherited = true;
+        let cli = make_cli(
+            "mytool",
+            vec![
+                make_leaf(
+                    "generate",
+                    vec![inherited.clone(), make_param("output", None, true)],
+                ),
+                make_leaf("release", vec![inherited, make_param("output", None, true)]),
+            ],
+        );
+        let config = OrbConfig {
+            job_group: Some(vec![JobGroup {
+                name: "sync".to_string(),
+                description: None,
+                steps: vec!["generate".to_string(), "release".to_string()],
+                params: None,
+                ..Default::default()
+            }]),
+            ..OrbConfig::default()
+        };
+        let errors = job_group_key_collisions(
+            &cli,
+            Some(&config),
+            &compute_effective_names(&cli, Some(&config)),
+        );
+        assert!(errors.is_empty(), "got: {errors:?}");
+    }
+
+    #[test]
+    fn job_group_step_prefix_is_snake_cased_for_a_hyphenated_step_name() {
+        // Orb parameter keys must be snake_case (RC010): a step named
+        // `add-thing` prefixes its per-step key `add_thing_`, never
+        // `add-thing_`, exactly as `resolve_command_param_name` does.
+        use crate::orb_config::{JobGroup, OrbConfig};
+
+        let cli = make_cli(
+            "mytool",
+            vec![
+                make_leaf("add-thing", vec![make_param("path", None, true)]),
+                make_leaf("remove-thing", vec![make_param("path", None, true)]),
+            ],
+        );
+        let config = OrbConfig {
+            job_group: Some(vec![JobGroup {
+                name: "sync".to_string(),
+                description: None,
+                steps: vec!["add-thing".to_string(), "remove-thing".to_string()],
+                params: None,
+                ..Default::default()
+            }]),
+            ..OrbConfig::default()
+        };
+        let files = generate(&cli, &default_opts(), Some(&config));
+        let job = &files[&PathBuf::from("src/jobs/sync.yml")];
+        assert!(
+            job.contains("\n  add_thing_path:\n") && job.contains("\n  remove_thing_path:\n"),
+            "per-step keys must be snake_case:\n{job}"
+        );
+        assert!(
+            !job.contains("add-thing_path") && !job.contains("remove-thing_path"),
+            "a hyphen must never leak into a parameter key:\n{job}"
+        );
     }
 
     #[test]

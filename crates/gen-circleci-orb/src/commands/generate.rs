@@ -1167,6 +1167,17 @@ impl Generate {
         )?;
         validate_param_overrides(&cli_def, &orb_config, &effective_names)?;
         validate_param_key_collisions(&cli_def, &orb_config, &effective_names)?;
+        let job_group_collisions = orb_generator::render::job_group_key_collisions(
+            &cli_def,
+            Some(&orb_config),
+            &effective_names,
+        );
+        if !job_group_collisions.is_empty() {
+            anyhow::bail!(
+                "job group key collision(s):\n{}",
+                job_group_collisions.join("\n")
+            );
+        }
 
         let opts = orb_generator::GenerateOpts {
             namespaces,
