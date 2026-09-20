@@ -449,8 +449,13 @@ path) would be unsafe.
 
 ### Compose a simple job
 
-`[[job_group]]` in simple mode combines a few commands into one job with their shared parameters
-wired through automatically:
+`[[job_group]]` in simple mode combines a few commands into one job. A parameter the tool declares
+once, high in its command tree (a clap `global` option such as `--verbose`), is the same input in
+every command and becomes one job parameter wired through to each step. Two commands that each
+declare their own same-named option (say `generate --output` and `release --output`) are **not**
+sharing it: they may mean different things, so they are never combined into one job parameter.
+Required options of that kind get their own `{step}_{name}` parameters automatically, and optional
+ones can be exposed the same way by listing them in `params`:
 
 ```toml
 [[job_group]]

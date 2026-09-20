@@ -531,3 +531,40 @@ fn extract_marked_yaml_block(markdown: &str, marker: &str) -> String {
         .trim()
         .to_string()
 }
+
+/// gen-circleci-orb#423: only an option declared by an ancestor (a clap
+/// `global = true` flag) is genuinely shared across subcommands. Two
+/// subcommands that each declare their own `--output` are independent
+/// inputs that merely share a name.
+#[test]
+#[cfg(feature = "test-fixtures")]
+fn parse_binary_marks_only_ancestor_declared_options_as_inherited() {
+    let binary = env!("CARGO_BIN_EXE_fixture-cli-shared-params");
+    let cli = gen_circleci_orb::help_parser::parse_binary(
+        binary,
+        &gen_circleci_orb::help_parser::ParseOptions::default(),
+    )
+    .expect("parse_binary must succeed against a real, well-formed CLI");
+
+    for name in ["generate", "release"] {
+        let sub = cli
+            .subcommands
+            .iter()
+            .find(|s| s.name == name)
+            .unwrap_or_else(|| panic!("'{name}' must be discovered"));
+        let param = |long: &str| {
+            sub.parameters
+                .iter()
+                .find(|p| p.long_name == long)
+                .unwrap_or_else(|| panic!("'{name}' must have --{long}: {:?}", sub.parameters))
+        };
+        assert!(
+            param("config").inherited,
+            "'{name} --config' is declared globally at the root, so it is inherited"
+        );
+        assert!(
+            !param("output").inherited,
+            "'{name} --output' is the subcommand's own option, not inherited"
+        );
+    }
+}
