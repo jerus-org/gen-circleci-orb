@@ -32,6 +32,29 @@ pub fn parse_top_level(
     })
 }
 
+/// The `[subcommand.<name>.short_param]` names that may apply to the leaf at
+/// `path`. Whether the leaf's section is its bare name or the path-qualified
+/// one depends on whether the bare name collides with another leaf, which is
+/// not known until the whole tree has been parsed — so both are offered, the
+/// path-qualified section (`ci_release`) winning per flag. The generator
+/// checks afterwards that each name really came from the section its
+/// effective name selects (`validate_short_param_sections`, #435).
+fn short_param_names_for(path: &[String], opts: &ParseOptions) -> Option<HashMap<char, String>> {
+    let bare = path.last().and_then(|n| opts.short_param_names.get(n));
+    let qualified = opts.short_param_names.get(&path.join("_"));
+    if bare.is_none() && qualified.is_none() {
+        return None;
+    }
+    let mut merged = bare.cloned().unwrap_or_default();
+    merged.extend(
+        qualified
+            .into_iter()
+            .flatten()
+            .map(|(c, n)| (*c, n.clone())),
+    );
+    Some(merged)
+}
+
 /// The options a command's own `--help` declares, as long name → description.
 /// Best effort: used only to recognise inherited (`global`) options in the
 /// commands below it, so a declaration that cannot be parsed is simply not
@@ -104,11 +127,8 @@ fn parse_subcommand(
     }
 
     let parameters = if is_leaf {
-        // `short_param_names` is still keyed by bare name (config-driven,
-        // unrelated to this fix) — only the two diagnostics below need the
-        // full path, so a display-only string is built for them separately
-        // rather than changing what `parse_parameters_detailed` looks up by.
-        let parsed = parse_parameters_detailed(help_text, &name, opts);
+        let short_names = short_param_names_for(path, opts);
+        let parsed = parse_parameters_with(help_text, short_names.as_ref());
         let full_path_display = path.join(" ");
         check_naming(&full_path_display, &parsed.errors)?;
         check_coverage(&full_path_display, &parsed.unparsed, opts)?;
@@ -501,12 +521,17 @@ pub fn parse_parameters(text: &str) -> Vec<Parameter> {
 /// that produced no parameter (see [`ParsedHelp::unparsed`]) and ones that
 /// cannot be named (see [`ParsedHelp::errors`]).
 pub fn parse_parameters_detailed(text: &str, subcommand: &str, opts: &ParseOptions) -> ParsedHelp {
+    parse_parameters_with(text, opts.short_param_names.get(subcommand))
+}
+
+/// [`parse_parameters_detailed`] with the short-flag names already chosen —
+/// see [`short_param_names_for`] for how a leaf's are picked.
+fn parse_parameters_with(text: &str, short_names: Option<&HashMap<char, String>>) -> ParsedHelp {
     let required = RequiredInputs {
         flags: extract_required_flags(text),
         shorts: extract_required_shorts(text),
         positionals: extract_required_positionals(text),
     };
-    let short_names = opts.short_param_names.get(subcommand);
     let lines: Vec<&str> = text.lines().collect();
     let mut params = Vec::new();
     // Every declaration line seen, and the subset that yielded a parameter.
@@ -2267,6 +2292,72 @@ Options:
             .unwrap_or_else(|| panic!("no `repeat_count` in {:?}", parsed.parameters));
         assert_eq!(p.short, Some('n'));
         assert_eq!(p.param_type, ParamType::String);
+    }
+
+    /// gen-circleci-orb#435: a nested leaf is configured under the section its
+    /// effective name selects (`ci_release`), like every other
+    /// `[subcommand.<name>]` setting — not under the bare `release`.
+    #[test]
+    fn short_only_option_of_a_nested_leaf_is_named_from_its_path_section() {
+        let help = "Do something\n\nUsage: tool ci release [OPTIONS]\n\nOptions:\n  -n <COUNT>  How many times\n  -h, --help  Print help\n";
+        let sections = |key: &str| ParseOptions {
+            short_param_names: [(
+                key.to_string(),
+                [('n', "repeat_count".to_string())].into_iter().collect(),
+            )]
+            .into_iter()
+            .collect(),
+            ..ParseOptions::default()
+        };
+        let path = ["ci".to_string(), "release".to_string()];
+        let sub = parse_subcommand(
+            &path,
+            help,
+            "tool",
+            &sections("ci_release"),
+            &HashMap::new(),
+        )
+        .expect("the path-qualified section must name the flag");
+        assert!(
+            sub.parameters.iter().any(|p| p.long_name == "repeat_count"),
+            "got: {:?}",
+            sub.parameters
+        );
+        // The bare section still names it; whether it is the RIGHT section is
+        // decided once the whole tree is known (`validate_short_param_sections`).
+        let sub = parse_subcommand(&path, help, "tool", &sections("release"), &HashMap::new())
+            .expect("the bare section keeps naming a nested leaf");
+        assert!(sub.parameters.iter().any(|p| p.long_name == "repeat_count"));
+    }
+
+    #[test]
+    fn short_only_name_from_the_path_section_beats_the_bare_section() {
+        let help = "Do something\n\nUsage: tool ci release [OPTIONS]\n\nOptions:\n  -n <COUNT>  How many times\n  -h, --help  Print help\n";
+        let opts = ParseOptions {
+            short_param_names: [
+                (
+                    "release".to_string(),
+                    [('n', "bare_name".to_string())].into_iter().collect(),
+                ),
+                (
+                    "ci_release".to_string(),
+                    [('n', "qualified_name".to_string())].into_iter().collect(),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+            ..ParseOptions::default()
+        };
+        let path = ["ci".to_string(), "release".to_string()];
+        let sub = parse_subcommand(&path, help, "tool", &opts, &HashMap::new()).unwrap();
+        assert!(
+            sub.parameters
+                .iter()
+                .any(|p| p.long_name == "qualified_name")
+                && !sub.parameters.iter().any(|p| p.long_name == "bare_name"),
+            "got: {:?}",
+            sub.parameters
+        );
     }
 
     /// "How many times" yields `how` — not a name worth generating. Fail and
