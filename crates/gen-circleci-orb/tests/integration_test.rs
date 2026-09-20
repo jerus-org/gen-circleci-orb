@@ -568,3 +568,82 @@ fn parse_binary_marks_only_ancestor_declared_options_as_inherited() {
         );
     }
 }
+
+/// Runs `generate` against fixture-cli-short-collision with a config holding
+/// the given `(section, name)` `[subcommand.<section>.short_param]` entries
+/// naming `-n`; returns the finished process and the temp dir.
+#[cfg(feature = "test-fixtures")]
+fn generate_short_collision(sections: &[(&str, &str)]) -> (std::process::Output, TempDir) {
+    let out = TempDir::new().unwrap();
+    let mut config = String::from(
+        "[orb]\nbinary = \"fixture-cli-short-collision\"\nnamespaces = [\"jerus-org\"]\n",
+    );
+    for (section, name) in sections {
+        config.push_str(&format!(
+            "\n[subcommand.{section}.short_param]\nn = \"{name}\"\n"
+        ));
+    }
+    let config_path = out.path().join("gen-circleci-orb.toml");
+    std::fs::write(&config_path, config).unwrap();
+
+    let fixture_bin = std::path::Path::new(env!("CARGO_BIN_EXE_fixture-cli-short-collision"));
+    let existing_path = std::env::var_os("PATH").unwrap_or_default();
+    let mut paths: Vec<_> = std::env::split_paths(&existing_path).collect();
+    paths.insert(0, fixture_bin.parent().unwrap().to_path_buf());
+    let output = Command::new(env!("CARGO_BIN_EXE_gen-circleci-orb"))
+        .args([
+            "generate",
+            "--config",
+            config_path.to_str().unwrap(),
+            "--output",
+            out.path().to_str().unwrap(),
+            "--no-record",
+        ])
+        .env("PATH", std::env::join_paths(paths).unwrap())
+        .output()
+        .unwrap();
+    (output, out)
+}
+
+/// gen-circleci-orb#435: each colliding leaf is configured under the section
+/// its effective name selects, so the nested `ci release` can name its own
+/// short-only flag under `[subcommand.ci_release.short_param]`.
+#[test]
+#[cfg(feature = "test-fixtures")]
+fn generate_names_each_colliding_leafs_short_only_flag_from_its_own_section() {
+    let (output, out) =
+        generate_short_collision(&[("release", "root_count"), ("ci_release", "nested_count")]);
+    assert!(
+        output.status.success(),
+        "both leaves configured under their own section must succeed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let src = out.path().join("orb").join("src");
+    for (script, env_var) in [
+        ("release.sh", "GCO_ROOT_COUNT"),
+        ("ci_release.sh", "GCO_NESTED_COUNT"),
+    ] {
+        let text = std::fs::read_to_string(src.join("scripts").join(script)).unwrap();
+        assert!(
+            text.contains(env_var),
+            "{script} must use its OWN section's name ({env_var}):\n{text}"
+        );
+    }
+}
+
+/// The bare `[subcommand.release.short_param]` is the ROOT `release`'s
+/// section. Naming the nested leaf's flag from it is the leak #435 removes.
+#[test]
+#[cfg(feature = "test-fixtures")]
+fn generate_rejects_a_bare_short_param_section_leaking_onto_the_nested_leaf() {
+    let (output, _out) = generate_short_collision(&[("release", "root_count")]);
+    assert!(
+        !output.status.success(),
+        "the bare section must not silently name the nested leaf's flag"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("[subcommand.ci_release.short_param]"),
+        "the error must say where the entry belongs:\n{stderr}"
+    );
+}

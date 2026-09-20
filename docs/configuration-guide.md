@@ -150,6 +150,17 @@ first word of its description (`-f  Force the operation` → `force`). Where tha
 useful — `-n  How many times` → `how` — generation fails and asks for a name here. Set an entry to
 override a derived name too.
 
+Like every other `[subcommand.<name>]` setting, the section is named for the leaf's effective
+name: its bare name, or — when another subcommand shares that bare name — its full path joined with
+underscores (a nested `ci release` alongside a root `release` is `[subcommand.ci_release.short_param]`;
+the root keeps `[subcommand.release.short_param]`). An entry found under a different section than
+its leaf's own fails generation and names the section it belongs in.
+
+> **Upgrading:** earlier versions applied a bare `[subcommand.release.short_param]` section to
+> every leaf named `release`, including a nested `ci release`. That entry now applies to the root
+> `release` only; move the nested leaf's entry to `[subcommand.ci_release.short_param]`.
+> `generate` fails and says so if it finds one under the wrong section.
+
 The option is still passed to the CLI by its short flag; only the orb parameter is named.
 
 ### `merge_verbosity` — opt a subcommand out of the verbose/quiet merge

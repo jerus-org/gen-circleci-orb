@@ -909,6 +909,79 @@ pub(crate) fn validate_param_key_collisions(
     Ok(())
 }
 
+/// Checks that each short-only option was named from the
+/// `[subcommand.<name>.short_param]` section its leaf's effective name selects
+/// — the same section every other setting for that leaf lives in
+/// (gen-circleci-orb#435).
+///
+/// The parser cannot know that: it runs before the whole tree is known, so it
+/// offers a leaf both its bare and its path-qualified section
+/// (`help_parser::clap::short_param_names_for`). Here the tree is known, so a
+/// name that came from any other section is an error rather than a setting
+/// silently leaking from one leaf onto another that shares its bare name.
+pub(crate) fn validate_short_param_sections(
+    cli_def: &help_parser::types::CliDefinition,
+    config: &orb_config::OrbConfig,
+    effective_names: &std::collections::HashMap<String, String>,
+) -> Result<()> {
+    use help_parser::types::ParamKind;
+
+    let section_name = |key: &str, c: char| -> Option<&str> {
+        config
+            .subcommand
+            .as_ref()?
+            .get(key)?
+            .short_param
+            .as_ref()?
+            .iter()
+            .find(|(flag, _)| flag.chars().eq([c]))
+            .map(|(_, name)| name.as_str())
+    };
+    let mut errors = Vec::new();
+    walk_subcommands(&cli_def.subcommands, "", &mut |sub, path| {
+        if !sub.is_leaf {
+            return;
+        }
+        let effective = effective_names
+            .get(path)
+            .map(String::as_str)
+            .unwrap_or(&sub.name);
+        let path_key = path.replace('.', "_");
+        let leaf = path.replace('.', " ");
+        for p in sub
+            .parameters
+            .iter()
+            .filter(|p| p.kind == ParamKind::ShortOnly)
+        {
+            let Some(c) = p.short else { continue };
+            match section_name(effective, c) {
+                Some(name) if name != p.long_name => errors.push(format!(
+                    "`{leaf}`: -{c} was named '{}' from another section, but \
+                     [subcommand.{effective}.short_param] says '{name}' — a leaf's own section wins",
+                    p.long_name
+                )),
+                Some(_) => {}
+                None => {
+                    for other in [sub.name.as_str(), path_key.as_str()] {
+                        if other != effective && section_name(other, c) == Some(&p.long_name) {
+                            errors.push(format!(
+                                "`{leaf}`: [subcommand.{other}.short_param] has an entry for -{c} \
+                                 ('{}'), but it does not apply to this leaf, whose section is \
+                                 [subcommand.{effective}.short_param] — move the entry there",
+                                p.long_name
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    });
+    if !errors.is_empty() {
+        anyhow::bail!("short_param section mismatch(es):\n{}", errors.join("\n"));
+    }
+    Ok(())
+}
+
 /// Depth-first visit of every subcommand in the tree (leaf or not) — mirrors
 /// `find_subcommand`'s own traversal so a param-key collision is caught
 /// wherever a subcommand's parameters live.
@@ -1167,6 +1240,7 @@ impl Generate {
         )?;
         validate_param_overrides(&cli_def, &orb_config, &effective_names)?;
         validate_param_key_collisions(&cli_def, &orb_config, &effective_names)?;
+        validate_short_param_sections(&cli_def, &orb_config, &effective_names)?;
         let job_group_collisions = orb_generator::render::job_group_key_collisions(
             &cli_def,
             Some(&orb_config),
@@ -3313,6 +3387,179 @@ mod tests {
             "the nested leaf still collides and the suggested fix must name \
              its qualified section: {err}"
         );
+    }
+
+    // ── validate_short_param_sections (#435) ────────────────────────────────
+
+    fn short_only(long_name: &str, c: char) -> help_parser::types::Parameter {
+        help_parser::types::Parameter {
+            long_name: long_name.to_string(),
+            short: Some(c),
+            kind: help_parser::types::ParamKind::ShortOnly,
+            description: "How many times".to_string(),
+            ..Default::default()
+        }
+    }
+
+    fn short_param_config(sections: &[(&str, &str)]) -> crate::orb_config::OrbConfig {
+        use crate::orb_config::SubcommandConfig;
+        let mut subcommands = IndexMap::new();
+        for (section, name) in sections {
+            let mut short_param = IndexMap::new();
+            short_param.insert("n".to_string(), (*name).to_string());
+            subcommands.insert(
+                (*section).to_string(),
+                SubcommandConfig {
+                    short_param: Some(short_param),
+                    ..Default::default()
+                },
+            );
+        }
+        crate::orb_config::OrbConfig {
+            subcommand: Some(subcommands),
+            ..Default::default()
+        }
+    }
+
+    /// Root `release` (effective `release`) and nested `ci release` (effective
+    /// `ci_release`), each with a short-only `-n` already named `repeat_count`.
+    fn colliding_short_only_cli() -> help_parser::types::CliDefinition {
+        let leaf = || help_parser::types::SubCommand {
+            name: "release".to_string(),
+            description: String::new(),
+            short_about: String::new(),
+            is_leaf: true,
+            parameters: vec![short_only("repeat_count", 'n')],
+            subcommands: vec![],
+        };
+        help_parser::types::CliDefinition {
+            binary_name: "demo".to_string(),
+            description: String::new(),
+            subcommands: vec![
+                leaf(),
+                help_parser::types::SubCommand {
+                    name: "ci".to_string(),
+                    description: String::new(),
+                    short_about: String::new(),
+                    is_leaf: false,
+                    parameters: vec![],
+                    subcommands: vec![leaf()],
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn validate_short_param_sections_rejects_a_bare_section_naming_a_qualified_leaf() {
+        // Only `[subcommand.release.short_param]` exists. It is the ROOT
+        // `release`'s section; the parser also applied it to `ci release`,
+        // whose section is `ci_release`.
+        let cli = colliding_short_only_cli();
+        let config = short_param_config(&[("release", "repeat_count")]);
+        let err = validate_short_param_sections(
+            &cli,
+            &config,
+            &orb_generator::render::compute_effective_names(&cli, None),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("ci release")
+                && err.contains("[subcommand.release.short_param]")
+                && err.contains("[subcommand.ci_release.short_param]"),
+            "must name the leaf, where the name was found, and where it belongs: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_short_param_sections_accepts_each_leaf_under_its_own_section() {
+        let cli = colliding_short_only_cli();
+        let config =
+            short_param_config(&[("release", "repeat_count"), ("ci_release", "repeat_count")]);
+        let result = validate_short_param_sections(
+            &cli,
+            &config,
+            &orb_generator::render::compute_effective_names(&cli, None),
+        );
+        assert!(result.is_ok(), "got: {result:?}");
+    }
+
+    #[test]
+    fn validate_short_param_sections_rejects_a_path_section_on_a_uniquely_named_leaf() {
+        // `ci deploy` is the only `deploy`, so its effective name is the bare
+        // `deploy`; a `[subcommand.ci_deploy]` section matches no other
+        // setting for it and would be an unnoticed one-off spelling.
+        let cli = help_parser::types::CliDefinition {
+            binary_name: "demo".to_string(),
+            description: String::new(),
+            subcommands: vec![help_parser::types::SubCommand {
+                name: "ci".to_string(),
+                description: String::new(),
+                short_about: String::new(),
+                is_leaf: false,
+                parameters: vec![],
+                subcommands: vec![help_parser::types::SubCommand {
+                    name: "deploy".to_string(),
+                    description: String::new(),
+                    short_about: String::new(),
+                    is_leaf: true,
+                    parameters: vec![short_only("repeat_count", 'n')],
+                    subcommands: vec![],
+                }],
+            }],
+        };
+        let effective = orb_generator::render::compute_effective_names(&cli, None);
+        let err = validate_short_param_sections(
+            &cli,
+            &short_param_config(&[("ci_deploy", "repeat_count")]),
+            &effective,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("[subcommand.ci_deploy.short_param]")
+                && err.contains("[subcommand.deploy.short_param]"),
+            "got: {err}"
+        );
+        assert!(validate_short_param_sections(
+            &cli,
+            &short_param_config(&[("deploy", "repeat_count")]),
+            &effective
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn validate_short_param_sections_rejects_a_name_from_a_different_section() {
+        // The effective section says `alpha`, but the parse picked `beta`
+        // from the path-qualified one: the leaf's own section must win.
+        let cli = help_parser::types::CliDefinition {
+            binary_name: "demo".to_string(),
+            description: String::new(),
+            subcommands: vec![help_parser::types::SubCommand {
+                name: "ci".to_string(),
+                description: String::new(),
+                short_about: String::new(),
+                is_leaf: false,
+                parameters: vec![],
+                subcommands: vec![help_parser::types::SubCommand {
+                    name: "deploy".to_string(),
+                    description: String::new(),
+                    short_about: String::new(),
+                    is_leaf: true,
+                    parameters: vec![short_only("beta", 'n')],
+                    subcommands: vec![],
+                }],
+            }],
+        };
+        let err = validate_short_param_sections(
+            &cli,
+            &short_param_config(&[("deploy", "alpha"), ("ci_deploy", "beta")]),
+            &orb_generator::render::compute_effective_names(&cli, None),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("alpha") && err.contains("beta"), "got: {err}");
     }
 
     // ── validate_job_group_step_order ───────────────────────────────────────

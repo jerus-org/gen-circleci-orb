@@ -70,6 +70,11 @@ path = "src/bin/fixture-cli-param-collision.rs"
 required-features = ["test-fixtures"]
 
 [[bin]]
+name = "fixture-cli-short-collision"
+path = "src/bin/fixture-cli-short-collision.rs"
+required-features = ["test-fixtures"]
+
+[[bin]]
 name = "fixture-cli-shared-params"
 path = "src/bin/fixture-cli-shared-params.rs"
 required-features = ["test-fixtures"]
