@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - differentiate short/long CLI help(pr [#428])
 - init interactively sets up [post_merge_regen](pr [#430])
 
+### Changed
+
+- refactor-bind job group keys in one table(pr [#434])
+
 ### Fixed
 
 - deps: update dependency gen-circleci-orb to v0.1.21(pr [#406])
@@ -1202,6 +1206,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#431]: https://github.com/jerus-org/gen-circleci-orb/pull/431
 [#432]: https://github.com/jerus-org/gen-circleci-orb/pull/432
 [#433]: https://github.com/jerus-org/gen-circleci-orb/pull/433
+[#434]: https://github.com/jerus-org/gen-circleci-orb/pull/434
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.21...HEAD
 [0.1.21]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.20...v0.1.21
 [0.1.20]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.19...v0.1.20
