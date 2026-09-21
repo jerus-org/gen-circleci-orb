@@ -1,6 +1,11 @@
 #[test]
 fn cli_tests() {
     let cases = trycmd::TestCases::new();
+    // `init --gen-circleci-orb-version` defaults to this crate's own version, so
+    // snapshots assert it exactly without being edited on every release.
+    cases
+        .insert_var("[VERSION]", env!("CARGO_PKG_VERSION"))
+        .expect("[VERSION] is a valid trycmd variable name");
     cases.case("tests/cmd/*.trycmd").register_bin(
         "gen-circleci-orb",
         std::path::Path::new(env!("CARGO_BIN_EXE_gen-circleci-orb")),

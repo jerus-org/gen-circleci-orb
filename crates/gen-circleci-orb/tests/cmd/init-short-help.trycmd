@@ -28,7 +28,7 @@ Orb publishing:
           (CIRCLE_TOKEN)
       --gen-circleci-orb-version <GEN_CIRCLECI_ORB_VERSION>
           Version of the jerus-org/gen-circleci-orb orb to pin in generated
-          CI [default: 0.1.21]
+          CI [default: [VERSION]]
       --home-url <HOME_URL>
           Home URL for the orb (shown in the CircleCI registry)
       --source-url <SOURCE_URL>

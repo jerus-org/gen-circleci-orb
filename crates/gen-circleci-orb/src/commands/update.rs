@@ -13,7 +13,9 @@ use crate::{ci_patcher, orb_config};
 /// Reads the committed `gen-circleci-orb.toml` (never overwrites it) and rewrites
 /// only the gen-circleci-orb-managed blocks in `.circleci/config.yml`, preserving
 /// the consumer's own jobs and customizations. Run with `--check` in CI to fail
-/// when the wiring is out of date.
+/// when the wiring is out of date. It also checks the arguments of every
+/// gen-circleci-orb job invocation in the CI files against the orb's job
+/// parameters, removing arguments a job no longer declares.
 #[derive(Debug, clap::Args)]
 pub struct Update {
     /// Path to gen-circleci-orb.toml.
@@ -98,14 +100,83 @@ impl Update {
             }
         }
 
+        let arg_problems = self.validate_orb_arguments()?;
+
+        if self.check && out_of_date {
+            anyhow::bail!("CI wiring is out of date — run `gen-circleci-orb update`");
+        }
+        if !arg_problems.is_empty() {
+            anyhow::bail!(
+                "invalid orb job arguments:\n  {}",
+                arg_problems.join("\n  ")
+            );
+        }
         if self.check {
-            if out_of_date {
-                anyhow::bail!("CI wiring is out of date — run `gen-circleci-orb update`");
-            }
             println!("CI wiring is up to date.");
         }
         Ok(())
     }
+
+    /// Check the orb job arguments in every CI file under `ci_dir` that
+    /// imports this orb. Managed blocks are valid by construction; this covers
+    /// hand-authored invocations (e.g. in `release.yml`). In write mode,
+    /// arguments the job no longer declares are removed; anything that cannot be
+    /// fixed mechanically is returned as one message per problem.
+    fn validate_orb_arguments(&self) -> Result<Vec<String>> {
+        let schema = crate::orb_wiring::schema()?;
+        let mut problems = Vec::new();
+        for path in ci_yaml_files(&self.ci_dir)? {
+            let mut content = std::fs::read_to_string(&path)
+                .with_context(|| format!("reading {}", path.display()))?;
+            let mut findings = crate::orb_wiring::validate(&content, &schema);
+            // The schema is this binary's version of the orb. A file pinned to
+            // another version is flagged (whether or not it has findings) and
+            // never rewritten, since it may legitimately use other arguments.
+            let pin = crate::orb_wiring::orb_pin(&content);
+            if let Some(w) = pin_warning(&path, pin.as_deref()) {
+                eprintln!("warning: {w}");
+            }
+            let pin_matches = pin.as_deref() == Some(env!("CARGO_PKG_VERSION"));
+            if !self.check && pin_matches && !findings.is_empty() {
+                let stripped = crate::orb_wiring::strip_unexpected(&content, &findings);
+                if stripped != content {
+                    crate::fs_atomic::write_atomically(&path, &stripped)
+                        .with_context(|| format!("writing {}", path.display()))?;
+                    println!("Removed stale orb job arguments from {}", path.display());
+                    content = stripped;
+                    findings = crate::orb_wiring::validate(&content, &schema);
+                }
+            }
+            for f in &findings {
+                problems.push(format!("{}: {f}", path.display()));
+            }
+        }
+        Ok(problems)
+    }
+}
+
+/// A warning when `path` pins the orb at a version other than this binary's.
+/// `None` when the versions agree or the file does not import the orb.
+fn pin_warning(path: &std::path::Path, pin: Option<&str>) -> Option<String> {
+    let pin = pin.filter(|p| *p != env!("CARGO_PKG_VERSION"))?;
+    Some(format!(
+        "{} pins gen-circleci-orb@{pin} but the binary is {}; orb job arguments \
+         are checked against {} and the file is not rewritten",
+        path.display(),
+        env!("CARGO_PKG_VERSION"),
+        env!("CARGO_PKG_VERSION"),
+    ))
+}
+
+/// `*.yml` / `*.yaml` files directly under `dir`, in name order.
+fn ci_yaml_files(dir: &std::path::Path) -> Result<Vec<PathBuf>> {
+    let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
+        .with_context(|| format!("reading {}", dir.display()))?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.is_file() && p.extension().is_some_and(|x| x == "yml" || x == "yaml"))
+        .collect();
+    files.sort();
+    Ok(files)
 }
 
 /// Files (relative to `ci_dir`) `update` resyncs, and the function that
@@ -761,6 +832,147 @@ workflows:
             before,
             "--check must not write the config"
         );
+    }
+
+    fn stale_release_pinned(pin: &str) -> String {
+        format!(
+            "\
+version: 2.1
+orbs:
+  gen-circleci-orb: jerus-org/gen-circleci-orb@{pin}
+workflows:
+  release:
+    jobs:
+      # keep this comment
+      - gen-circleci-orb/build_rust_binary:
+          name: build-binary
+          package: mytool
+          rust_image: old-image
+          requires: [approve-release]
+"
+        )
+    }
+
+    /// A stale `release.yml` pinned at this binary's own orb version.
+    fn stale_release() -> String {
+        stale_release_pinned(env!("CARGO_PKG_VERSION"))
+    }
+
+    /// A repo whose `config.yml` is already in sync, plus a `release.yml`.
+    fn synced_repo_with_release(release: &str) -> (TempDir, PathBuf, PathBuf) {
+        let dir = TempDir::new().unwrap();
+        let (toml, ci_dir) = write_repo(&dir, TOML, OLD_CONFIG);
+        Update {
+            config: toml.clone(),
+            ci_dir: ci_dir.clone(),
+            check: false,
+        }
+        .run()
+        .unwrap();
+        fs::write(ci_dir.join("release.yml"), release).unwrap();
+        (dir, toml, ci_dir)
+    }
+
+    #[test]
+    fn update_check_fails_on_a_stale_orb_argument_in_release_yml() {
+        let (_dir, toml, ci_dir) = synced_repo_with_release(&stale_release());
+        let err = Update {
+            config: toml,
+            ci_dir: ci_dir.clone(),
+            check: true,
+        }
+        .run()
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("release.yml"), "must name the file: {err}");
+        assert!(err.contains("rust_image"), "must name the argument: {err}");
+        assert_eq!(
+            fs::read_to_string(ci_dir.join("release.yml")).unwrap(),
+            stale_release(),
+            "--check must not write"
+        );
+    }
+
+    #[test]
+    fn update_strips_a_stale_orb_argument_from_release_yml() {
+        let (_dir, toml, ci_dir) = synced_repo_with_release(&stale_release());
+        let cmd = |check| Update {
+            config: toml.clone(),
+            ci_dir: ci_dir.clone(),
+            check,
+        };
+        cmd(false).run().unwrap();
+        assert_eq!(
+            fs::read_to_string(ci_dir.join("release.yml")).unwrap(),
+            stale_release().replace("          rust_image: old-image\n", ""),
+        );
+        cmd(true).run().unwrap();
+    }
+
+    #[test]
+    fn pin_warning_names_the_binary_version_and_the_file_pin() {
+        let w = pin_warning(std::path::Path::new(".circleci/release.yml"), Some("0.0.1")).unwrap();
+        assert!(w.contains(".circleci/release.yml"), "{w}");
+        assert!(w.contains("pins gen-circleci-orb@0.0.1"), "{w}");
+        assert!(
+            w.contains(&format!("binary is {}", env!("CARGO_PKG_VERSION"))),
+            "{w}"
+        );
+    }
+
+    #[test]
+    fn pin_warning_is_absent_when_the_pin_matches_or_the_orb_is_not_imported() {
+        let p = std::path::Path::new("f.yml");
+        assert_eq!(pin_warning(p, Some(env!("CARGO_PKG_VERSION"))), None);
+        assert_eq!(pin_warning(p, None), None);
+    }
+
+    #[test]
+    fn update_does_not_strip_arguments_when_the_pin_differs_from_the_binary() {
+        let release = stale_release_pinned("0.0.1");
+        let (_dir, toml, ci_dir) = synced_repo_with_release(&release);
+        let err = Update {
+            config: toml,
+            ci_dir: ci_dir.clone(),
+            check: false,
+        }
+        .run()
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("rust_image"), "{err}");
+        assert_eq!(
+            fs::read_to_string(ci_dir.join("release.yml")).unwrap(),
+            release,
+            "a file pinned to another orb version must not be rewritten"
+        );
+    }
+
+    #[test]
+    fn update_fails_when_a_required_orb_argument_is_missing() {
+        let release = stale_release().replace("          package: mytool\n", "");
+        let (_dir, toml, ci_dir) = synced_repo_with_release(&release);
+        let err = Update {
+            config: toml,
+            ci_dir,
+            check: false,
+        }
+        .run()
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("package"), "{err}");
+    }
+
+    #[test]
+    fn update_check_passes_a_valid_release_yml() {
+        let release = stale_release().replace("          rust_image: old-image\n", "");
+        let (_dir, toml, ci_dir) = synced_repo_with_release(&release);
+        Update {
+            config: toml,
+            ci_dir,
+            check: true,
+        }
+        .run()
+        .unwrap();
     }
 
     #[test]
