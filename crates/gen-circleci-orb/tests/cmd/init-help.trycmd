@@ -65,7 +65,7 @@ Orb publishing:
           Defaults to the version of this binary (orb and crate are
           released together).
           
-          [default: [..]]
+          [default: [VERSION]]
 
       --home-url <HOME_URL>
           Home URL for the orb (shown in the CircleCI registry)
