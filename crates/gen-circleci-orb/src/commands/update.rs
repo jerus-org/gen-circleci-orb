@@ -139,7 +139,7 @@ impl Update {
                 .with_context(|| format!("reading {}", path.display()))?;
             let is_managed = path
                 .file_name()
-                .and_then(|n| n.to_str())
+                .and_then(std::ffi::OsStr::to_str)
                 .is_some_and(|n| managed.iter().any(|m| m == n));
             let pin = crate::orb_wiring::orb_pin(&content);
             if let Some(w) = pin_warning(&path, pin.as_deref(), is_managed) {
