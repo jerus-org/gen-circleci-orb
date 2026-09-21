@@ -11,6 +11,7 @@ mod fs_atomic;
 pub mod help_parser;
 pub mod orb_config;
 pub mod orb_generator;
+pub mod orb_wiring;
 pub mod output_writer;
 
 /// Command-line interface for gen-circleci-orb.
@@ -73,7 +74,9 @@ pub enum Commands {
     /// Reads the committed gen-circleci-orb.toml (never overwrites it) and rewrites only the
     /// gen-circleci-orb-managed blocks in .circleci/config.yml, preserving the consumer's own
     /// jobs and customizations. Run with --check in CI to fail when the wiring is out of date
-    /// relative to the pinned orb version.
+    /// relative to the pinned orb version. It also checks the arguments of every gen-circleci-orb
+    /// job invocation in the CI files against the orb's job parameters, removing arguments a job
+    /// no longer declares.
     Update(commands::update::Update),
 }
 
