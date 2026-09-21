@@ -5334,7 +5334,7 @@ SOFTWARE.
 
 Used by:
 
-- gen-circleci-orb 0.1.23
+- gen-circleci-orb 0.1.24
 
 ```text
 MIT License
