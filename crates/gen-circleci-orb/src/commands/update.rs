@@ -43,8 +43,9 @@ impl Update {
             eprintln!("warning: {w}");
         }
         let opts = opts_from_config(&config);
+        self.warn_pin_mismatches(&opts)?;
 
-        let mut out_of_date = false;
+        let mut drifted: Vec<String> = Vec::new();
         for (filename, resync_fn) in resync_targets(&opts) {
             let path = self.ci_dir.join(&filename);
             // The post_merge_ci_file is the one target most consumers won't
@@ -82,9 +83,14 @@ impl Update {
                 if resynced != current {
                     eprintln!(
                         "{}",
-                        drift_message(&opts.gen_circleci_orb_version, &current, &resynced)
+                        drift_message(
+                            &opts.gen_circleci_orb_version,
+                            &filename,
+                            &current,
+                            &resynced
+                        )
                     );
-                    out_of_date = true;
+                    drifted.push(filename.clone());
                 }
                 continue;
             }
@@ -102,17 +108,43 @@ impl Update {
 
         let arg_problems = self.validate_orb_arguments()?;
 
-        if self.check && out_of_date {
-            anyhow::bail!("CI wiring is out of date — run `gen-circleci-orb update`");
+        let mut failures = Vec::new();
+        if !drifted.is_empty() {
+            failures.push(format!(
+                "CI wiring is out of date in {} — run `gen-circleci-orb update`",
+                drifted.join(", ")
+            ));
         }
         if !arg_problems.is_empty() {
-            anyhow::bail!(
+            failures.push(format!(
                 "invalid orb job arguments:\n  {}",
                 arg_problems.join("\n  ")
-            );
+            ));
+        }
+        if !failures.is_empty() {
+            anyhow::bail!(failures.join("\n"));
         }
         if self.check {
             println!("CI wiring is up to date.");
+        }
+        Ok(())
+    }
+
+    /// Warn about every CI file that pins the orb at a version other than this
+    /// binary's, before any drift is reported, so the cause reads first.
+    fn warn_pin_mismatches(&self, opts: &ci_patcher::PatchOpts) -> Result<()> {
+        let managed: Vec<String> = resync_targets(opts).into_iter().map(|(f, _)| f).collect();
+        for path in ci_yaml_files(&self.ci_dir)? {
+            let content = std::fs::read_to_string(&path)
+                .with_context(|| format!("reading {}", path.display()))?;
+            let is_managed = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| managed.iter().any(|m| m == n));
+            let pin = crate::orb_wiring::orb_pin(&content);
+            if let Some(w) = pin_warning(&path, pin.as_deref(), is_managed) {
+                eprintln!("warning: {w}");
+            }
         }
         Ok(())
     }
@@ -130,12 +162,9 @@ impl Update {
                 .with_context(|| format!("reading {}", path.display()))?;
             let mut findings = crate::orb_wiring::validate(&content, &schema);
             // The schema is this binary's version of the orb. A file pinned to
-            // another version is flagged (whether or not it has findings) and
-            // never rewritten, since it may legitimately use other arguments.
+            // another version is never rewritten, since it may legitimately use
+            // other arguments.
             let pin = crate::orb_wiring::orb_pin(&content);
-            if let Some(w) = pin_warning(&path, pin.as_deref()) {
-                eprintln!("warning: {w}");
-            }
             let pin_matches = pin.as_deref() == Some(env!("CARGO_PKG_VERSION"));
             if !self.check && pin_matches && !findings.is_empty() {
                 let stripped = crate::orb_wiring::strip_unexpected(&content, &findings);
@@ -148,24 +177,57 @@ impl Update {
                 }
             }
             for f in &findings {
-                problems.push(format!("{}: {f}", path.display()));
+                problems.push(format!(
+                    "{}: {f} ({})",
+                    path.display(),
+                    remedy(&f.kind, pin.as_deref(), pin_matches)
+                ));
             }
         }
         Ok(problems)
     }
 }
 
-/// A warning when `path` pins the orb at a version other than this binary's.
-/// `None` when the versions agree or the file does not import the orb.
-fn pin_warning(path: &std::path::Path, pin: Option<&str>) -> Option<String> {
-    let pin = pin.filter(|p| *p != env!("CARGO_PKG_VERSION"))?;
+/// A warning when `path` pins the orb at a version other than this binary's,
+/// saying what `update` will and will not do about it. `managed` is whether
+/// `update` regenerates this file's orb pin. `None` when the versions agree or
+/// the file does not import the orb.
+fn pin_warning(path: &std::path::Path, pin: Option<&str>, managed: bool) -> Option<String> {
+    let version = env!("CARGO_PKG_VERSION");
+    let pin = pin.filter(|p| *p != version)?;
+    let action = if managed {
+        format!("`update` will set this pin to {version}")
+    } else {
+        format!(
+            "`update` does not change this pin (bump it to {version}, or use the CLI \
+             matching the pin); orb job arguments are checked against {version} and \
+             this file is not rewritten"
+        )
+    };
     Some(format!(
-        "{} pins gen-circleci-orb@{pin} but the binary is {}; orb job arguments \
-         are checked against {} and the file is not rewritten",
-        path.display(),
-        env!("CARGO_PKG_VERSION"),
-        env!("CARGO_PKG_VERSION"),
+        "{} pins gen-circleci-orb@{pin} but the binary is {version}; {action}",
+        path.display()
     ))
+}
+
+/// What the user should do about a finding, given whether `update` may rewrite
+/// the file (its orb pin matches this binary).
+fn remedy(kind: &crate::orb_wiring::FindingKind, pin: Option<&str>, pin_matches: bool) -> String {
+    use crate::orb_wiring::FindingKind;
+    match kind {
+        FindingKind::UnexpectedArg(_) if pin_matches => {
+            "run `gen-circleci-orb update` to remove it".to_string()
+        }
+        FindingKind::UnexpectedArg(_) => format!(
+            "file pins gen-circleci-orb@{}, not this binary's {}: use the CLI matching \
+             the pin, or bump the pin, then run `gen-circleci-orb update`",
+            pin.unwrap_or("?"),
+            env!("CARGO_PKG_VERSION")
+        ),
+        FindingKind::MissingRequiredArg(_) | FindingKind::UnknownJob => {
+            "edit the file by hand".to_string()
+        }
+    }
 }
 
 /// `*.yml` / `*.yaml` files directly under `dir`, in name order.
@@ -381,9 +443,9 @@ fn opts_from_config(config: &orb_config::OrbConfig) -> ci_patcher::PatchOpts {
 /// Operator-facing message when `--check` finds the wiring out of date. The local
 /// CLI must be upgraded to the pinned version FIRST, or `update` reproduces the
 /// old wiring.
-fn drift_message(version: &str, current: &str, would_be: &str) -> String {
+fn drift_message(version: &str, file: &str, current: &str, would_be: &str) -> String {
     format!(
-        "CI wiring is out of date for gen-circleci-orb@{version}.\n\
+        "{file}: CI wiring is out of date for gen-circleci-orb@{version}.\n\
          \x20 1. Upgrade your local CLI to match:  cargo binstall gen-circleci-orb@{version}\n\
          \x20    (an older CLI would re-create the OLD wiring)\n\
          \x20 2. Re-sync the wiring:               gen-circleci-orb update\n\
@@ -911,7 +973,12 @@ workflows:
 
     #[test]
     fn pin_warning_names_the_binary_version_and_the_file_pin() {
-        let w = pin_warning(std::path::Path::new(".circleci/release.yml"), Some("0.0.1")).unwrap();
+        let w = pin_warning(
+            std::path::Path::new(".circleci/release.yml"),
+            Some("0.0.1"),
+            false,
+        )
+        .unwrap();
         assert!(w.contains(".circleci/release.yml"), "{w}");
         assert!(w.contains("pins gen-circleci-orb@0.0.1"), "{w}");
         assert!(
@@ -923,8 +990,122 @@ workflows:
     #[test]
     fn pin_warning_is_absent_when_the_pin_matches_or_the_orb_is_not_imported() {
         let p = std::path::Path::new("f.yml");
-        assert_eq!(pin_warning(p, Some(env!("CARGO_PKG_VERSION"))), None);
-        assert_eq!(pin_warning(p, None), None);
+        assert_eq!(pin_warning(p, Some(env!("CARGO_PKG_VERSION")), false), None);
+        assert_eq!(pin_warning(p, None, false), None);
+    }
+
+    #[test]
+    fn drift_message_names_the_file() {
+        let m = drift_message("0.1.22", "config.yml", "a\n", "b\n");
+        assert!(m.starts_with("config.yml: CI wiring is out of date"), "{m}");
+    }
+
+    #[test]
+    fn pin_warning_says_update_resets_the_pin_of_a_managed_file() {
+        let w = pin_warning(std::path::Path::new("config.yml"), Some("0.0.1"), true).unwrap();
+        assert!(
+            w.contains(&format!(
+                "`update` will set this pin to {}",
+                env!("CARGO_PKG_VERSION")
+            )),
+            "{w}"
+        );
+    }
+
+    #[test]
+    fn pin_warning_says_update_leaves_the_pin_of_an_unmanaged_file() {
+        let w = pin_warning(std::path::Path::new("release.yml"), Some("0.0.1"), false).unwrap();
+        assert!(w.contains("`update` does not change this pin"), "{w}");
+        assert!(w.contains("not rewritten"), "{w}");
+    }
+
+    #[test]
+    fn update_check_reports_drift_and_bad_arguments_together_and_writes_nothing() {
+        let dir = TempDir::new().unwrap();
+        let (toml, ci_dir) = write_repo(&dir, TOML, OLD_CONFIG);
+        fs::write(ci_dir.join("release.yml"), stale_release()).unwrap();
+        let config_before = fs::read_to_string(ci_dir.join("config.yml")).unwrap();
+        let err = Update {
+            config: toml,
+            ci_dir: ci_dir.clone(),
+            check: true,
+        }
+        .run()
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("out of date"), "drift missing: {err}");
+        assert!(err.contains("config.yml"), "drifted file not named: {err}");
+        assert!(
+            err.contains("rust_image"),
+            "argument problem missing: {err}"
+        );
+        assert_eq!(
+            fs::read_to_string(ci_dir.join("config.yml")).unwrap(),
+            config_before
+        );
+        assert_eq!(
+            fs::read_to_string(ci_dir.join("release.yml")).unwrap(),
+            stale_release()
+        );
+    }
+
+    #[test]
+    fn update_fixes_drift_and_stale_arguments_in_one_run() {
+        let dir = TempDir::new().unwrap();
+        let (toml, ci_dir) = write_repo(&dir, TOML, OLD_CONFIG);
+        fs::write(ci_dir.join("release.yml"), stale_release()).unwrap();
+        let cmd = |check| Update {
+            config: toml.clone(),
+            ci_dir: ci_dir.clone(),
+            check,
+        };
+        cmd(false).run().unwrap();
+        cmd(true).run().unwrap();
+    }
+
+    #[test]
+    fn check_error_tells_the_user_to_run_update_for_a_stale_argument() {
+        let (_dir, toml, ci_dir) = synced_repo_with_release(&stale_release());
+        let err = Update {
+            config: toml,
+            ci_dir,
+            check: true,
+        }
+        .run()
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("run `gen-circleci-orb update`"), "{err}");
+    }
+
+    #[test]
+    fn check_error_says_a_missing_argument_needs_a_hand_edit() {
+        let release = stale_release().replace("          package: mytool\n", "");
+        let (_dir, toml, ci_dir) = synced_repo_with_release(&release);
+        let err = Update {
+            config: toml,
+            ci_dir,
+            check: true,
+        }
+        .run()
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("package"), "{err}");
+        assert!(err.contains("edit the file by hand"), "{err}");
+    }
+
+    #[test]
+    fn check_error_for_a_differently_pinned_file_points_at_the_pin() {
+        let release = stale_release_pinned("0.0.1");
+        let (_dir, toml, ci_dir) = synced_repo_with_release(&release);
+        let err = Update {
+            config: toml,
+            ci_dir,
+            check: true,
+        }
+        .run()
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("pins gen-circleci-orb@0.0.1"), "{err}");
     }
 
     #[test]
