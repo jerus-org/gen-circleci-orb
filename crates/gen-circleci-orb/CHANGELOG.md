@@ -5,9 +5,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.23] - 2026-09-21
+
+Summary: Added[1], Testing[2]
+
+### Added
+
+ - feat: validate orb job arguments in all CI files
+
 ## [0.1.22] - 2026-09-20
 
-Summary: Added[3], Changed[1], Documentation[2], Fixed[14], Testing[2]
+Summary: Added[3], Changed[1], Chore[1], Documentation[2], Fixed[14], Testing[2]
 
 ### Added
 
@@ -957,7 +965,8 @@ Summary: Added[2], Chore[1], Fixed[2], Testing[1]
 
 Summary: Chore[2]
 
-[Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.21...HEAD
+[Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.22...HEAD
+[0.1.22]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.21...v0.1.22
 [0.1.21]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.20...v0.1.21
 [0.1.20]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.19...v0.1.20
 [0.1.19]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.18...v0.1.19
