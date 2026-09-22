@@ -117,8 +117,8 @@ impl Update {
         }
         if !arg_problems.is_empty() {
             failures.push(format!(
-                "invalid orb job arguments:\n  {}",
-                arg_problems.join("\n  ")
+                "invalid orb job arguments:\n\n{}",
+                arg_problems.join("\n\n")
             ));
         }
         if !failures.is_empty() {
@@ -176,11 +176,13 @@ impl Update {
                     findings = crate::orb_wiring::validate(&content, &schema);
                 }
             }
-            for f in &findings {
-                problems.push(format!(
-                    "{}: {f} ({})",
-                    path.display(),
-                    remedy(&f.kind, pin.as_deref(), pin_matches)
+            if !findings.is_empty() {
+                problems.push(argument_message(
+                    &path,
+                    &content,
+                    &findings,
+                    pin.as_deref(),
+                    pin_matches,
                 ));
             }
         }
@@ -210,24 +212,60 @@ fn pin_warning(path: &std::path::Path, pin: Option<&str>, managed: bool) -> Opti
     ))
 }
 
-/// What the user should do about a finding, given whether `update` may rewrite
-/// the file (its orb pin matches this binary).
-fn remedy(kind: &crate::orb_wiring::FindingKind, pin: Option<&str>, pin_matches: bool) -> String {
+/// Operator-facing message for one file's invalid orb job arguments. Mirrors
+/// `drift_message`'s shape (numbered steps, then a diff summary) for the
+/// arguments `update` can fix by removing them; the file is otherwise
+/// untouched, so the message says what to do by hand instead.
+fn argument_message(
+    path: &std::path::Path,
+    content: &str,
+    findings: &[crate::orb_wiring::Finding],
+    pin: Option<&str>,
+    pin_matches: bool,
+) -> String {
     use crate::orb_wiring::FindingKind;
-    match kind {
-        FindingKind::UnexpectedArg(_) if pin_matches => {
-            "run `gen-circleci-orb update` to remove it".to_string()
-        }
-        FindingKind::UnexpectedArg(_) => format!(
-            "file pins gen-circleci-orb@{}, not this binary's {}: use the CLI matching \
-             the pin, or bump the pin, then run `gen-circleci-orb update`",
-            pin.unwrap_or("?"),
-            env!("CARGO_PKG_VERSION")
-        ),
-        FindingKind::MissingRequiredArg(_) | FindingKind::UnknownJob => {
-            "edit the file by hand".to_string()
+    let version = env!("CARGO_PKG_VERSION");
+    let mut out = format!(
+        "{}: invalid orb job argument(s) for gen-circleci-orb@{version}.\n",
+        path.display()
+    );
+    for f in findings {
+        out.push_str(&format!("  - {f}\n"));
+    }
+
+    let fixable: Vec<crate::orb_wiring::Finding> = findings
+        .iter()
+        .filter(|f| matches!(f.kind, FindingKind::UnexpectedArg(_)))
+        .cloned()
+        .collect();
+    let has_unfixable = fixable.len() != findings.len();
+
+    if !fixable.is_empty() {
+        if pin_matches {
+            let stripped = crate::orb_wiring::strip_unexpected(content, &fixable);
+            out.push_str(&format!(
+                "  1. Run `gen-circleci-orb update` to remove the unexpected argument(s).\n\
+                 \x20 2. Commit + push the config change.\n\
+                 Summary of the change (run `gen-circleci-orb update` then `git diff` for \
+                 the exact diff):\n{}\n",
+                line_diff(content, &stripped)
+            ));
+        } else {
+            out.push_str(&format!(
+                "  1. This file pins gen-circleci-orb@{} but the binary is {version}: use \
+                 the CLI matching the pin, or bump the pin.\n\
+                 \x20 2. Re-sync the wiring:               gen-circleci-orb update\n",
+                pin.unwrap_or("?")
+            ));
         }
     }
+    if has_unfixable {
+        out.push_str(
+            "  Edit the file by hand — `update` cannot add a missing argument or \
+             rename a job.\n",
+        );
+    }
+    out.trim_end().to_string()
 }
 
 /// `*.yml` / `*.yaml` files directly under `dir`, in name order.
@@ -948,6 +986,18 @@ workflows:
         .to_string();
         assert!(err.contains("release.yml"), "must name the file: {err}");
         assert!(err.contains("rust_image"), "must name the argument: {err}");
+        assert!(
+            err.contains("Run `gen-circleci-orb update`"),
+            "must say how to fix it: {err}"
+        );
+        assert!(
+            err.contains("Summary of the change"),
+            "must show what update would do: {err}"
+        );
+        assert!(
+            err.contains("-           rust_image: old-image"),
+            "must show the line update would remove: {err}"
+        );
         assert_eq!(
             fs::read_to_string(ci_dir.join("release.yml")).unwrap(),
             stale_release(),
@@ -1074,7 +1124,7 @@ workflows:
         .run()
         .unwrap_err()
         .to_string();
-        assert!(err.contains("run `gen-circleci-orb update`"), "{err}");
+        assert!(err.contains("Run `gen-circleci-orb update`"), "{err}");
     }
 
     #[test]
@@ -1090,7 +1140,7 @@ workflows:
         .unwrap_err()
         .to_string();
         assert!(err.contains("package"), "{err}");
-        assert!(err.contains("edit the file by hand"), "{err}");
+        assert!(err.contains("Edit the file by hand"), "{err}");
     }
 
     #[test]
