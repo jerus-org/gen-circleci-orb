@@ -1935,10 +1935,10 @@ DEALINGS IN THE SOFTWARE.
 Used by:
 
 - backtrace 0.3.76
-- cc 1.4.6
-- cfg-if 1.0.4
+- cc 1.4.7
+- cfg-if 1.0.5
 - cmake 0.1.58
-- find-msvc-tools 0.1.12
+- find-msvc-tools 0.1.13
 - git2 0.21.0
 - jobserver 0.1.35
 - js-sys 0.3.105
@@ -2686,7 +2686,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- hyper-rustls 0.27.9
+- hyper-rustls 0.27.10
 - rustls-native-certs 0.8.4
 - rustls 0.23.45
 
@@ -4640,7 +4640,7 @@ Used by:
 - clap_derive 4.6.7
 - clap_lex 1.1.1
 - colorchoice 1.0.5
-- config 0.15.25
+- config 0.15.26
 - env_filter 2.0.0
 - env_logger 0.11.11
 - is_terminal_polyfill 1.70.2
@@ -4809,7 +4809,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- synstructure 0.13.2
+- synstructure 0.14.0
 
 ```text
 Copyright 2016 Nika Layzell
@@ -5210,7 +5210,7 @@ SOFTWARE.
 
 Used by:
 
-- libredox 0.1.24
+- libredox 0.1.25
 
 ```text
 MIT License
@@ -5334,7 +5334,7 @@ SOFTWARE.
 
 Used by:
 
-- gen-circleci-orb 0.1.24
+- gen-circleci-orb 0.1.25
 
 ```text
 MIT License
@@ -5675,17 +5675,17 @@ Used by:
 - linux-raw-sys 0.12.1
 - once_cell 1.21.4
 - pathdiff 0.2.3
-- pest 2.9.1
-- pest_derive 2.9.1
-- pest_generator 2.9.1
-- pest_meta 2.9.1
+- pest 2.9.2
+- pest_derive 2.9.2
+- pest_generator 2.9.2
+- pest_meta 2.9.2
 - pin-project-lite 0.2.17
 - portable-atomic-util 0.2.8
 - portable-atomic 1.15.0
 - proc-macro2 1.0.107
 - quote 1.0.47
 - rustc-stable-hash 0.1.2
-- rustix 1.1.4
+- rustix 1.1.5
 - rustversion 1.0.23
 - semver 1.0.28
 - serde 1.0.229
@@ -5697,14 +5697,14 @@ Used by:
 - smol_str 0.3.6
 - syn 1.0.109
 - syn 2.0.119
-- syn 3.0.5
+- syn 3.0.6
 - thiserror-impl 1.0.69
 - thiserror-impl 2.0.20
 - thiserror 1.0.69
 - thiserror 2.0.20
 - typed-builder-macro 0.18.2
 - typed-builder 0.18.2
-- unicode-ident 1.0.24
+- unicode-ident 1.0.26
 - unsafe-libyaml 0.2.11
 - wasi 0.11.1+wasi-snapshot-preview1
 - wasm-streams 0.4.2
@@ -6305,7 +6305,7 @@ SOFTWARE.
 
 Used by:
 
-- redox_users 0.5.2
+- redox_users 0.5.3
 
 ```text
 The MIT License (MIT)
@@ -6337,8 +6337,8 @@ SOFTWARE.
 
 Used by:
 
-- async-compression 0.4.47
-- compression-codecs 0.4.42
+- async-compression 0.4.48
+- compression-codecs 0.4.43
 - compression-core 0.4.33
 
 ```text
@@ -6947,7 +6947,7 @@ Exhibit B - "Incompatible With Secondary Licenses" Notice
 
 Used by:
 
-- unicode-ident 1.0.24
+- unicode-ident 1.0.26
 
 ```text
 UNICODE LICENSE V3
@@ -7007,9 +7007,9 @@ Used by:
 - potential_utf 0.1.6
 - tinystr 0.8.4
 - writeable 0.6.4
-- yoke-derive 0.8.2
+- yoke-derive 0.8.3
 - yoke 0.8.3
-- zerofrom-derive 0.1.7
+- zerofrom-derive 0.1.8
 - zerofrom 0.1.8
 - zerotrie 0.2.5
 - zerovec-derive 0.11.6
