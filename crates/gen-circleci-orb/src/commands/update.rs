@@ -43,7 +43,11 @@ impl Update {
             eprintln!("warning: {w}");
         }
         let opts = opts_from_config(&config);
-        self.warn_pin_mismatches(&opts)?;
+        // Decided once per run: honours `NO_COLOR` and a non-tty stderr (e.g.
+        // output piped to a log file), and stays consistent across every
+        // message this run prints.
+        let color = console::colors_enabled_stderr();
+        self.warn_pin_mismatches(&opts, color)?;
 
         let mut drifted: Vec<String> = Vec::new();
         for (filename, resync_fn) in resync_targets(&opts) {
@@ -87,7 +91,8 @@ impl Update {
                             &opts.gen_circleci_orb_version,
                             &filename,
                             &current,
-                            &resynced
+                            &resynced,
+                            color,
                         )
                     );
                     drifted.push(filename.clone());
@@ -106,7 +111,7 @@ impl Update {
             }
         }
 
-        let arg_problems = self.validate_orb_arguments()?;
+        let arg_problems = self.validate_orb_arguments(color)?;
 
         let mut failures = Vec::new();
         if !drifted.is_empty() {
@@ -132,7 +137,7 @@ impl Update {
 
     /// Warn about every CI file that pins the orb at a version other than this
     /// binary's, before any drift is reported, so the cause reads first.
-    fn warn_pin_mismatches(&self, opts: &ci_patcher::PatchOpts) -> Result<()> {
+    fn warn_pin_mismatches(&self, opts: &ci_patcher::PatchOpts, color: bool) -> Result<()> {
         let managed: Vec<String> = resync_targets(opts).into_iter().map(|(f, _)| f).collect();
         for path in ci_yaml_files(&self.ci_dir)? {
             let content = std::fs::read_to_string(&path)
@@ -142,7 +147,7 @@ impl Update {
                 .and_then(std::ffi::OsStr::to_str)
                 .is_some_and(|n| managed.iter().any(|m| m == n));
             let pin = crate::orb_wiring::orb_pin(&content);
-            if let Some(w) = pin_warning(&path, pin.as_deref(), is_managed) {
+            if let Some(w) = pin_warning(&path, pin.as_deref(), is_managed, color) {
                 eprintln!("warning: {w}");
             }
         }
@@ -154,7 +159,7 @@ impl Update {
     /// hand-authored invocations (e.g. in `release.yml`). In write mode,
     /// arguments the job no longer declares are removed; anything that cannot be
     /// fixed mechanically is returned as one message per problem.
-    fn validate_orb_arguments(&self) -> Result<Vec<String>> {
+    fn validate_orb_arguments(&self, color: bool) -> Result<Vec<String>> {
         let schema = crate::orb_wiring::schema()?;
         let mut problems = Vec::new();
         for path in ci_yaml_files(&self.ci_dir)? {
@@ -183,6 +188,7 @@ impl Update {
                     &findings,
                     pin.as_deref(),
                     pin_matches,
+                    color,
                 ));
             }
         }
@@ -190,11 +196,29 @@ impl Update {
     }
 }
 
+/// The file name highlighted for a terminal — a user scanning a report of
+/// several problems needs to see which file each one is in at a glance. Plain
+/// text when `color` is false (`Update::run` decides this once, via
+/// `console::colors_enabled_stderr()`, honouring `NO_COLOR` and a non-tty
+/// stderr).
+fn styled_file(file: impl std::fmt::Display, color: bool) -> String {
+    if color {
+        console::style(file).cyan().force_styling(true).to_string()
+    } else {
+        file.to_string()
+    }
+}
+
 /// A warning when `path` pins the orb at a version other than this binary's,
 /// saying what `update` will and will not do about it. `managed` is whether
 /// `update` regenerates this file's orb pin. `None` when the versions agree or
 /// the file does not import the orb.
-fn pin_warning(path: &std::path::Path, pin: Option<&str>, managed: bool) -> Option<String> {
+fn pin_warning(
+    path: &std::path::Path,
+    pin: Option<&str>,
+    managed: bool,
+    color: bool,
+) -> Option<String> {
     let version = env!("CARGO_PKG_VERSION");
     let pin = pin.filter(|p| *p != version)?;
     let action = if managed {
@@ -208,7 +232,7 @@ fn pin_warning(path: &std::path::Path, pin: Option<&str>, managed: bool) -> Opti
     };
     Some(format!(
         "{} pins gen-circleci-orb@{pin} but the binary is {version}; {action}",
-        path.display()
+        styled_file(path.display(), color)
     ))
 }
 
@@ -222,12 +246,13 @@ fn argument_message(
     findings: &[crate::orb_wiring::Finding],
     pin: Option<&str>,
     pin_matches: bool,
+    color: bool,
 ) -> String {
     use crate::orb_wiring::FindingKind;
     let version = env!("CARGO_PKG_VERSION");
     let mut out = format!(
         "{}: invalid orb job argument(s) for gen-circleci-orb@{version}.\n",
-        path.display()
+        styled_file(path.display(), color)
     );
     for f in findings {
         out.push_str(&format!("  - {f}\n"));
@@ -481,14 +506,15 @@ fn opts_from_config(config: &orb_config::OrbConfig) -> ci_patcher::PatchOpts {
 /// Operator-facing message when `--check` finds the wiring out of date. The local
 /// CLI must be upgraded to the pinned version FIRST, or `update` reproduces the
 /// old wiring.
-fn drift_message(version: &str, file: &str, current: &str, would_be: &str) -> String {
+fn drift_message(version: &str, file: &str, current: &str, would_be: &str, color: bool) -> String {
     format!(
-        "{file}: CI wiring is out of date for gen-circleci-orb@{version}.\n\
+        "{}: CI wiring is out of date for gen-circleci-orb@{version}.\n\
          \x20 1. Upgrade your local CLI to match:  cargo binstall gen-circleci-orb@{version}\n\
          \x20    (an older CLI would re-create the OLD wiring)\n\
          \x20 2. Re-sync the wiring:               gen-circleci-orb update\n\
          \x20 3. Commit + push the config change.\n\
          Summary of the change (run `gen-circleci-orb update` then `git diff` for the exact diff):\n{}",
+        styled_file(file, color),
         line_diff(current, would_be)
     )
 }
@@ -1027,6 +1053,7 @@ workflows:
             std::path::Path::new(".circleci/release.yml"),
             Some("0.0.1"),
             false,
+            false,
         )
         .unwrap();
         assert!(w.contains(".circleci/release.yml"), "{w}");
@@ -1040,19 +1067,38 @@ workflows:
     #[test]
     fn pin_warning_is_absent_when_the_pin_matches_or_the_orb_is_not_imported() {
         let p = std::path::Path::new("f.yml");
-        assert_eq!(pin_warning(p, Some(env!("CARGO_PKG_VERSION")), false), None);
-        assert_eq!(pin_warning(p, None, false), None);
+        assert_eq!(
+            pin_warning(p, Some(env!("CARGO_PKG_VERSION")), false, false),
+            None
+        );
+        assert_eq!(pin_warning(p, None, false, false), None);
+    }
+
+    #[test]
+    fn styled_file_wraps_the_path_in_cyan_when_color_is_on() {
+        assert_eq!(styled_file("config.yml", true), "\x1b[36mconfig.yml\x1b[0m");
+    }
+
+    #[test]
+    fn styled_file_is_plain_text_when_color_is_off() {
+        assert_eq!(styled_file("config.yml", false), "config.yml");
     }
 
     #[test]
     fn drift_message_names_the_file() {
-        let m = drift_message("0.1.22", "config.yml", "a\n", "b\n");
+        let m = drift_message("0.1.22", "config.yml", "a\n", "b\n", false);
         assert!(m.starts_with("config.yml: CI wiring is out of date"), "{m}");
     }
 
     #[test]
     fn pin_warning_says_update_resets_the_pin_of_a_managed_file() {
-        let w = pin_warning(std::path::Path::new("config.yml"), Some("0.0.1"), true).unwrap();
+        let w = pin_warning(
+            std::path::Path::new("config.yml"),
+            Some("0.0.1"),
+            true,
+            false,
+        )
+        .unwrap();
         assert!(
             w.contains(&format!(
                 "`update` will set this pin to {}",
@@ -1064,7 +1110,13 @@ workflows:
 
     #[test]
     fn pin_warning_says_update_leaves_the_pin_of_an_unmanaged_file() {
-        let w = pin_warning(std::path::Path::new("release.yml"), Some("0.0.1"), false).unwrap();
+        let w = pin_warning(
+            std::path::Path::new("release.yml"),
+            Some("0.0.1"),
+            false,
+            false,
+        )
+        .unwrap();
         assert!(w.contains("`update` does not change this pin"), "{w}");
         assert!(w.contains("not rewritten"), "{w}");
     }
