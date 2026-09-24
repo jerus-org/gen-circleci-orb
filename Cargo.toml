@@ -17,7 +17,7 @@ clap = { version = "4.6.7", features = ["derive", "wrap_help"] }
 
 # Error Handling
 anyhow = "1.0.104"
-thiserror = "2.0.20"
+thiserror = "2.0.21"
 
 # Logging
 tracing = "0.1.44"
