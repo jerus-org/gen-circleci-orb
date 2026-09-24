@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - deps: update rust crate thiserror to 2.0.21(pr [#453])
+- deps: update dependency circleci-public/circleci-cli to v1.0.51305(pr [#450])
 
 ## [0.1.25] - 2026-09-22
 
@@ -1252,6 +1253,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#447]: https://github.com/jerus-org/gen-circleci-orb/pull/447
 [#448]: https://github.com/jerus-org/gen-circleci-orb/pull/448
 [#453]: https://github.com/jerus-org/gen-circleci-orb/pull/453
+[#450]: https://github.com/jerus-org/gen-circleci-orb/pull/450
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.25...HEAD
 [0.1.25]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.24...v0.1.25
 [0.1.24]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.23...v0.1.24
