@@ -5,9 +5,22 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.26] - 2026-09-25
+
+Summary: Added[1], Fixed[2]
+
+### Added
+
+ - feat: workspace-sourced job parameters
+
+### Fixed
+
+ - fix(deps): update rust crate pcu to 0.6.36
+ - fix(deps): update rust crate thiserror to 2.0.21
+
 ## [0.1.25] - 2026-09-22
 
-Summary: Added[2], Fixed[1]
+Summary: Added[2], Chore[1], Fixed[1]
 
 ### Added
 
@@ -990,7 +1003,8 @@ Summary: Added[2], Chore[1], Fixed[2], Testing[1]
 
 Summary: Chore[2]
 
-[Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.24...HEAD
+[Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.25...HEAD
+[0.1.25]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.24...v0.1.25
 [0.1.24]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.23...v0.1.24
 [0.1.23]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.22...v0.1.23
 [0.1.22]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.21...v0.1.22
