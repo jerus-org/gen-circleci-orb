@@ -915,27 +915,38 @@ fn render_command_script_content(
             // a mandatory one).
             let resolved_var = env_var_name(&format!("{orb_name}_resolved"));
             let value_var = format!("{env_var}_VALUE");
+            // A bare `-z` only rejects a genuinely zero-length string -- a
+            // whitespace-only value (an upstream template accidentally
+            // passing `version: " "`) would otherwise slip through as
+            // "present" at every check below, right up to being forwarded
+            // to the CLI as a literal argument. `[[:space:]]*$` treats
+            // whitespace-only the same as empty everywhere a value is
+            // tested, including the literal-vs-resolved fallback decision.
+            let is_blank = |var: &str| format!("[[ \"${{{var}}}\" =~ ^[[:space:]]*$ ]]");
             let resolve_lines = format!(
                 "{value_var}=\"${{{env_var}:-}}\"\n\
-                 if [[ -z \"${{{value_var}}}\" ]]; then\n  \
+                 if {blank}; then\n  \
                  {value_var}=\"${{{resolved_var}:-}}\"\n\
-                 fi"
+                 fi",
+                blank = is_blank(&value_var)
             );
             if p.required {
                 format!(
                     "{resolve_lines}\n\
-                     if [[ -z \"${{{value_var}}}\" ]]; then\n  \
+                     if {blank}; then\n  \
                      echo \"ERROR: no value for {orb_name} -- set the '{orb_name}' \
                      parameter, or '{orb_name}_env_var' (with attach_workspace) to \
                      resolve one at runtime.\" >&2\n  \
                      exit 1\n\
                      fi\n\
-                     set -- \"$@\" {flag}\"${{{value_var}}}\""
+                     set -- \"$@\" {flag}\"${{{value_var}}}\"",
+                    blank = is_blank(&value_var)
                 )
             } else {
                 format!(
                     "{resolve_lines}\n\
-                     [[ -n \"${{{value_var}}}\" ]] && set -- \"$@\" {flag}\"${{{value_var}}}\""
+                     {blank_negated} && set -- \"$@\" {flag}\"${{{value_var}}}\"",
+                    blank_negated = is_blank(&value_var).replacen("[[ ", "[[ ! ", 1)
                 )
             }
         } else if p.long_name == LOG_LEVEL_PARAM {
@@ -1850,7 +1861,6 @@ source "${SOURCE_FILE}"
 RESOLVED="${!GCO_TARGET_ENV_VAR:-}"
 if [[ -z "${RESOLVED}" ]]; then
   echo "ERROR: ${GCO_TARGET_ENV_VAR} not found (or empty) in ${SOURCE_FILE}" >&2
-  cat "${SOURCE_FILE}" >&2
   exit 1
 fi
 
@@ -6029,6 +6039,25 @@ mod tests {
     }
 
     #[test]
+    fn resolve_workspace_param_script_never_dumps_the_source_files_contents() {
+        // `version_source_file` is documented as overridable to point at any
+        // producer's own env-style output file -- possibly a shared file
+        // carrying other, unrelated values alongside the one being
+        // extracted. Printing the whole file to the (potentially more
+        // widely readable) CI log on a resolution failure would leak
+        // whatever else is in it; the error message already names the
+        // missing variable and the file path, which is enough to debug
+        // without echoing arbitrary file contents.
+        let (cli, config) = workspace_sourced_fixture();
+        let files = generate(&cli, &default_opts(), Some(&config));
+        let script = &files[&PathBuf::from("src/scripts/resolve_workspace_param.sh")];
+        assert!(
+            !script.contains("cat \"${SOURCE_FILE}\""),
+            "the script must not dump the source file's contents to the CI log:\n{script}"
+        );
+    }
+
+    #[test]
     fn command_script_falls_back_to_resolved_env_var_when_literal_is_empty() {
         let (cli, config) = workspace_sourced_fixture();
         let files = generate(&cli, &default_opts(), Some(&config));
@@ -6049,6 +6078,31 @@ mod tests {
             script.contains("exit 1"),
             "script must fail loudly when neither the literal nor the resolved value \
              is available:\n{script}"
+        );
+    }
+
+    #[test]
+    fn workspace_sourced_blank_check_treats_whitespace_only_value_as_absent() {
+        // A `-z` check on the literal only rejects a genuinely zero-length
+        // string -- a whitespace-only value (e.g. an upstream template
+        // accidentally passing `version: " "`) would slip through as
+        // "present" and get forwarded to the CLI as a literal argument,
+        // producing a confusing downstream parse failure instead of this
+        // script's own clear error. Both the literal-vs-resolved fallback
+        // decision and the final required/optional check must treat
+        // whitespace-only the same as empty.
+        let (cli, config) = workspace_sourced_fixture();
+        let files = generate(&cli, &default_opts(), Some(&config));
+        let script = &files[&PathBuf::from("src/scripts/release_prep.sh")];
+        assert!(
+            script.contains("[[:space:]]"),
+            "the blank check must treat a whitespace-only value as absent, not just a \
+             zero-length string:\n{script}"
+        );
+        assert!(
+            !script.contains("[[ -z \"${GCO_VERSION_VALUE}\" ]]"),
+            "the final required-param check must use the whitespace-aware blank check, \
+             not a bare -z:\n{script}"
         );
     }
 
@@ -6147,7 +6201,8 @@ mod tests {
             "an optional workspace_sourced param must not hard-error when unset:\n{script}"
         );
         assert!(
-            script.contains("[[ -n \"${GCO_TAG_VALUE}\" ]] && set -- \"$@\" --tag"),
+            script
+                .contains("[[ ! \"${GCO_TAG_VALUE}\" =~ ^[[:space:]]*$ ]] && set -- \"$@\" --tag"),
             "an optional workspace_sourced param must conditionally omit its flag, \
              matching its pre-existing optional behavior:\n{script}"
         );
