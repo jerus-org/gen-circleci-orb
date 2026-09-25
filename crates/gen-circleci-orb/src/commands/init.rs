@@ -324,6 +324,7 @@ pub(crate) fn populate_orb_path_defaults(
             .or_insert(ParamOverride {
                 default: Some("src/@orb.yml".to_string()),
                 orb_name: None,
+                workspace_sourced: None,
             });
     }
 }
@@ -3112,6 +3113,7 @@ mod tests {
             ParamOverride {
                 default: Some("src/@orb.yml".to_string()),
                 orb_name: None,
+                workspace_sourced: None,
             },
         );
         let mut recorded = IndexMap::new();

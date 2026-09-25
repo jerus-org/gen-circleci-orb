@@ -878,6 +878,43 @@ pub(crate) fn validate_param_key_collisions(
             .get(path)
             .map(String::as_str)
             .unwrap_or(&sub.name);
+        // Keys a workspace_sourced param's own resolved key synthesizes
+        // (render::build_workspace_sourced_params) -- unlike
+        // SYNTHESIZED_JOB_PARAMS this set is dynamic (it names the *target*
+        // param, e.g. "version_env_var"), so it's computed per subcommand
+        // rather than checked against a fixed list.
+        let mut workspace_sourced_keys: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        for p in &sub.parameters {
+            let workspace_sourced = config
+                .subcommand
+                .as_ref()
+                .and_then(|sc| sc.get(section))
+                .and_then(|sc_config| sc_config.param.as_ref())
+                .and_then(|params| params.get(&p.long_name))
+                .and_then(|o| o.workspace_sourced)
+                .unwrap_or(false);
+            if workspace_sourced {
+                if matches!(p.param_type, help_parser::types::ParamType::Boolean) {
+                    errors.push(format!(
+                        "subcommand '{section}': parameter '--{}' is workspace_sourced but is a \
+                         boolean flag — the runtime-resolution fallback only applies to \
+                         value-taking params (a boolean's script codegen has no value slot to \
+                         fall back into); remove workspace_sourced from this param",
+                        p.long_name
+                    ));
+                }
+                let resolved_key = orb_generator::render::resolve_param_orb_name(
+                    &sub.name,
+                    section,
+                    &p.long_name,
+                    Some(config),
+                );
+                workspace_sourced_keys.insert(format!("{resolved_key}_env_var"));
+                workspace_sourced_keys.insert(format!("{resolved_key}_source_file"));
+            }
+        }
+
         let mut seen: std::collections::HashMap<String, &str> = std::collections::HashMap::new();
         for p in &sub.parameters {
             let key = orb_generator::render::resolve_param_orb_name(
@@ -898,6 +935,15 @@ pub(crate) fn validate_param_key_collisions(
                     "subcommand '{section}': parameter '--{}' resolves to orb parameter '{key}', which \
                      the generator itself reserves for a synthesized job parameter — set \
                      [subcommand.{section}.param.<flag>] orb_name = \"...\" to give it a different key",
+                    p.long_name
+                ));
+            }
+            if workspace_sourced_keys.contains(&key) {
+                errors.push(format!(
+                    "subcommand '{section}': parameter '--{}' resolves to orb parameter '{key}', which \
+                     a workspace_sourced param on this subcommand reserves for its own runtime-resolution \
+                     parameters — set [subcommand.{section}.param.<flag>] orb_name = \"...\" to give it a \
+                     different key",
                     p.long_name
                 ));
             }
@@ -2795,6 +2841,7 @@ mod tests {
             ParamOverride {
                 default: Some(default.to_string()),
                 orb_name: None,
+                workspace_sourced: None,
             },
         );
         let mut subcommands = IndexMap::new();
@@ -3032,6 +3079,7 @@ mod tests {
             ParamOverride {
                 default: Some("abc".to_string()),
                 orb_name: None,
+                workspace_sourced: None,
             },
         );
         let mut subcommands = IndexMap::new();
@@ -3140,6 +3188,7 @@ mod tests {
             ParamOverride {
                 default: None,
                 orb_name: Some("generate_name_alt".to_string()),
+                workspace_sourced: None,
             },
         );
         let mut subcommands = IndexMap::new();
@@ -3185,6 +3234,7 @@ mod tests {
                 // Same string the automatic restricted-name rename already
                 // produces -- a genuinely no-op override.
                 orb_name: Some("generate_name".to_string()),
+                workspace_sourced: None,
             },
         );
         let mut subcommands = IndexMap::new();
@@ -3261,6 +3311,7 @@ mod tests {
             ParamOverride {
                 default: None,
                 orb_name: Some("target_branch".to_string()),
+                workspace_sourced: None,
             },
         );
         let mut subcommands = IndexMap::new();
@@ -3283,6 +3334,115 @@ mod tests {
         .unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("target_branch"), "got: {msg}");
+    }
+
+    fn config_with_workspace_sourced(
+        sub_name: &str,
+        param_name: &str,
+    ) -> crate::orb_config::OrbConfig {
+        use crate::orb_config::{OrbConfig, ParamOverride, SubcommandConfig};
+        let mut overrides = IndexMap::new();
+        overrides.insert(
+            param_name.to_string(),
+            ParamOverride {
+                default: None,
+                orb_name: None,
+                workspace_sourced: Some(true),
+            },
+        );
+        let mut subcommands = IndexMap::new();
+        subcommands.insert(
+            sub_name.to_string(),
+            SubcommandConfig {
+                param: Some(overrides),
+                ..SubcommandConfig::default()
+            },
+        );
+        OrbConfig {
+            subcommand: Some(subcommands),
+            ..OrbConfig::default()
+        }
+    }
+
+    #[test]
+    fn validate_param_key_collisions_rejects_a_param_colliding_with_a_workspace_sourced_env_var_key(
+    ) {
+        // "version" is flagged workspace_sourced, which synthesizes a
+        // "version_env_var" job parameter (render::build_workspace_sourced_params)
+        // -- an unrelated CLI flag that happens to resolve to that exact name
+        // would be silently shadowed the same way SYNTHESIZED_JOB_PARAMS
+        // already guards against.
+        let cli = cli_with_params(
+            "release-prep",
+            vec![
+                param("version", ParamType::String),
+                param("version_env_var", ParamType::String),
+            ],
+        );
+        let config = config_with_workspace_sourced("release-prep", "version");
+        let err = validate_param_key_collisions(
+            &cli,
+            &config,
+            &orb_generator::render::compute_effective_names(&cli, None),
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("version_env_var"), "got: {msg}");
+    }
+
+    #[test]
+    fn validate_param_key_collisions_rejects_a_param_colliding_with_a_workspace_sourced_source_file_key(
+    ) {
+        let cli = cli_with_params(
+            "release-prep",
+            vec![
+                param("version", ParamType::String),
+                param("version_source_file", ParamType::String),
+            ],
+        );
+        let config = config_with_workspace_sourced("release-prep", "version");
+        let err = validate_param_key_collisions(
+            &cli,
+            &config,
+            &orb_generator::render::compute_effective_names(&cli, None),
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("version_source_file"), "got: {msg}");
+    }
+
+    #[test]
+    fn validate_param_key_collisions_rejects_workspace_sourced_on_a_boolean_param() {
+        // A boolean's script codegen is a value-less switch
+        // (`[[ ... ]] && set -- "$@" --flag`) -- there's no value slot for a
+        // resolved-fallback to land in, so workspace_sourced on a boolean is
+        // rejected outright rather than silently generating `--flag "true"`.
+        let cli = cli_with_params(
+            "release-prep",
+            vec![param("deny_warnings", ParamType::Boolean)],
+        );
+        let config = config_with_workspace_sourced("release-prep", "deny_warnings");
+        let err = validate_param_key_collisions(
+            &cli,
+            &config,
+            &orb_generator::render::compute_effective_names(&cli, None),
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("deny_warnings"), "got: {msg}");
+        assert!(msg.contains("boolean"), "got: {msg}");
+    }
+
+    #[test]
+    fn validate_param_key_collisions_accepts_a_workspace_sourced_param_with_no_other_collisions() {
+        let cli = cli_with_params("release-prep", vec![param("version", ParamType::String)]);
+        let config = config_with_workspace_sourced("release-prep", "version");
+        let result = validate_param_key_collisions(
+            &cli,
+            &config,
+            &orb_generator::render::compute_effective_names(&cli, None),
+        );
+        assert!(result.is_ok(), "got: {result:?}");
     }
 
     /// gen-circleci-orb#425: root `release` and nested `a release` share a bare
@@ -3330,6 +3490,7 @@ mod tests {
             ParamOverride {
                 default: None,
                 orb_name: Some(orb_name.to_string()),
+                workspace_sourced: None,
             },
         );
         let mut subcommands = IndexMap::new();

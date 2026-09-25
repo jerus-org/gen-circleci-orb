@@ -153,6 +153,18 @@ pub fn generate(
         "echo \"export PATH=\\\"${WORKSPACE_ROOT}:\\$PATH\\\"\" >> \"$BASH_ENV\"\n".to_string(),
     );
 
+    // resolve_workspace_param.sh — generated only when at least one param,
+    // anywhere in the tree, is configured `workspace_sourced = true`.
+    // Unlike add-workspace-to-path.sh, this script is genuinely unused by
+    // the (overwhelmingly common) literal-only case, so it stays absent
+    // rather than cluttering every consumer's orb with an unreferenced file.
+    if any_workspace_sourced_param(&cli.subcommands, &effective_names, "", config) {
+        files.insert(
+            PathBuf::from("src/scripts/resolve_workspace_param.sh"),
+            RESOLVE_WORKSPACE_PARAM_SCRIPT.to_string(),
+        );
+    }
+
     // set_https_remote command + script (generated whenever any push subcommand is named)
     if !opts.git_push_subcommands.is_empty() {
         files.insert(
@@ -343,6 +355,26 @@ fn is_hardcoded_check_param(
     p.long_name == HARDCODED_CHECK_PARAM && is_hardcode_check(config, effective_name)
 }
 
+/// Whether `p` is configured `[subcommand.<effective_name>.param.<flag>]
+/// workspace_sourced = true` — opting it into a runtime-resolved fallback
+/// (see `build_workspace_sourced_params`/`render_command_script_content`)
+/// alongside its ordinary pipeline-compile-time literal. Config keys an
+/// override by the CLI flag name (`p.long_name`), matching every other
+/// per-param override lookup (`render_job`'s default-override loop).
+fn is_workspace_sourced_param(
+    effective_name: &str,
+    p: &Parameter,
+    config: Option<&OrbConfig>,
+) -> bool {
+    config
+        .and_then(|c| c.subcommand.as_ref())
+        .and_then(|sc| sc.get(effective_name))
+        .and_then(|sc_config| sc_config.param.as_ref())
+        .and_then(|params| params.get(&p.long_name))
+        .and_then(|o| o.workspace_sourced)
+        .unwrap_or(false)
+}
+
 /// Subcommands that are interactive (CLI-only) by default, unless the consumer
 /// opts them back in with `[subcommand.<name>] interactive = false`. `help` is
 /// not listed here — it is reserved earlier, at the `--help` parser.
@@ -440,6 +472,43 @@ fn collect_leaf_paths<'a>(
 /// elsewhere in the tree, in which case it's already been qualified by its
 /// full path.
 #[allow(clippy::too_many_arguments)]
+/// Whether any leaf subcommand in `subs` (recursively) has a param configured
+/// `workspace_sourced = true` — decides whether `resolve_workspace_param.sh`
+/// needs to be generated at all. Mirrors `render_subcommand`'s own
+/// interactive-skip + effective-name resolution so it agrees with what
+/// actually gets rendered.
+fn any_workspace_sourced_param(
+    subs: &[SubCommand],
+    effective_names: &HashMap<String, String>,
+    path_prefix: &str,
+    config: Option<&OrbConfig>,
+) -> bool {
+    subs.iter().any(|sub| {
+        if is_interactive(config, &sub.name) {
+            return false;
+        }
+        let dotted_path = if path_prefix.is_empty() {
+            sub.name.clone()
+        } else {
+            format!("{path_prefix}.{}", sub.name)
+        };
+        if sub.is_leaf {
+            let effective_name = effective_names
+                .get(&dotted_path)
+                .cloned()
+                .unwrap_or_else(|| sub.name.clone());
+            if sub
+                .parameters
+                .iter()
+                .any(|p| is_workspace_sourced_param(&effective_name, p, config))
+            {
+                return true;
+            }
+        }
+        any_workspace_sourced_param(&sub.subcommands, effective_names, &dotted_path, config)
+    })
+}
+
 fn render_subcommand(
     sub: &SubCommand,
     path: &[String],
@@ -833,7 +902,43 @@ fn render_command_script_content(
             ParamKind::ShortOnly => p.short.map(|c| format!("-{c} ")).unwrap_or_default(),
             ParamKind::Long => format!("--{} ", p.long_name.replace('_', "-")),
         };
-        let line = if p.long_name == LOG_LEVEL_PARAM {
+        let line = if is_workspace_sourced_param(effective_name, p, config) {
+            // Prefer the literal (unchanged precedence for every existing
+            // consumer) -> fall back to the workspace-resolved value (set by
+            // build_resolve_workspace_param_step's script into a distinctly
+            // named var, so there's no environment:-vs-$BASH_ENV precedence
+            // to reason about) -> for a REQUIRED param, a loud error naming
+            // both if neither is set; for an OPTIONAL one, silently omit the
+            // flag (matching that param's own pre-existing, still-valid
+            // "unset is fine" behavior — workspace_sourced adds a second way
+            // to supply the value, it must not narrow an optional param into
+            // a mandatory one).
+            let resolved_var = env_var_name(&format!("{orb_name}_resolved"));
+            let value_var = format!("{env_var}_VALUE");
+            let resolve_lines = format!(
+                "{value_var}=\"${{{env_var}:-}}\"\n\
+                 if [[ -z \"${{{value_var}}}\" ]]; then\n  \
+                 {value_var}=\"${{{resolved_var}:-}}\"\n\
+                 fi"
+            );
+            if p.required {
+                format!(
+                    "{resolve_lines}\n\
+                     if [[ -z \"${{{value_var}}}\" ]]; then\n  \
+                     echo \"ERROR: no value for {orb_name} -- set the '{orb_name}' \
+                     parameter, or '{orb_name}_env_var' (with attach_workspace) to \
+                     resolve one at runtime.\" >&2\n  \
+                     exit 1\n\
+                     fi\n\
+                     set -- \"$@\" {flag}\"${{{value_var}}}\""
+                )
+            } else {
+                format!(
+                    "{resolve_lines}\n\
+                     [[ -n \"${{{value_var}}}\" ]] && set -- \"$@\" {flag}\"${{{value_var}}}\""
+                )
+            }
+        } else if p.long_name == LOG_LEVEL_PARAM {
             render_log_level_case(&env_var)
         } else {
             match &p.param_type {
@@ -914,6 +1019,36 @@ fn render_job(
     parameters.insert("attach_workspace".to_string(), attach_param);
     parameters.insert("workspace_root".to_string(), root_param);
 
+    // Params opted into runtime workspace-sourced resolution
+    // (`[subcommand.<name>.param.<flag>] workspace_sourced = true`) — see
+    // `is_workspace_sourced_param`. Computed from the subcommand's OWN
+    // params (unlike the orb-producing block below), since this targets one
+    // specific existing param, not a fixed job-wide concern.
+    let workspace_sourced_keys: Vec<String> = sub
+        .parameters
+        .iter()
+        .filter(|p| is_workspace_sourced_param(effective_name, p, config))
+        .map(|p| resolve_param_orb_name(&sub.name, effective_name, &p.long_name, config))
+        .collect();
+    for key in &workspace_sourced_keys {
+        let (env_var_param, source_file_param) = build_workspace_sourced_params(key);
+        parameters.insert(format!("{key}_env_var"), env_var_param);
+        parameters.insert(format!("{key}_source_file"), source_file_param);
+        // A required CLI param (e.g. release-prep's positional `version`)
+        // otherwise gets no `default:` at all (`orb_param_default` only
+        // omits it for a required param), which CircleCI then also requires
+        // at job-invocation time -- defeating the whole point of the
+        // fallback below. workspace_sourced means "the literal is now
+        // optional, resolution can supply it instead", so its own job
+        // parameter must gain an empty default regardless of the CLI's own
+        // required-ness.
+        if let Some(param) = parameters.get_mut(key) {
+            if param.default.is_none() {
+                param.default = Some(serde_yaml::Value::String(String::new()));
+            }
+        }
+    }
+
     // Orb-producing jobs (those with an `orb_dir` param) can persist the
     // regenerated orb to the workspace so it flows to downstream pack/review/push
     // jobs without an immediate push (Model B). Default off; activated by the
@@ -935,6 +1070,9 @@ fn render_job(
         steps.push(build_target_branch_switch_step());
     }
     steps.push(build_attach_workspace_step());
+    for key in &workspace_sourced_keys {
+        steps.push(build_resolve_workspace_param_step(key));
+    }
     if opts.git_push_subcommands.contains(&sub.name) {
         steps.push(serde_yaml::Value::String("set_https_remote".to_string()));
     }
@@ -1591,6 +1729,134 @@ fn build_attach_workspace_step() -> serde_yaml::Value {
     );
     serde_yaml::Value::Mapping(when_map)
 }
+
+/// The two job parameters a `workspace_sourced` param (`resolved_key`, its
+/// already-resolved orb-facing name, e.g. `version`) gains: which variable to
+/// extract, and which file to extract it from. Both empty by default — the
+/// feature only activates when a consumer sets `<resolved_key>_env_var`,
+/// keeping every existing literal-only consumer's job byte-for-byte
+/// unchanged.
+fn build_workspace_sourced_params(resolved_key: &str) -> (OrbParameter, OrbParameter) {
+    let env_var = OrbParameter {
+        param_type: "string".to_string(),
+        description: format!(
+            "Name of the variable inside <workspace_root>/versions.env-shaped source \
+             file holding {resolved_key}'s real value (e.g. \"CRATE_VERSION_MYAPP\", as \
+             written by circleci-toolkit's calculate_versions). Leave empty (default) to \
+             use the {resolved_key} parameter's own literal value instead. Requires \
+             attach_workspace."
+        ),
+        default: Some(serde_yaml::Value::String(String::new())),
+        enum_values: None,
+    };
+    let source_file = OrbParameter {
+        param_type: "string".to_string(),
+        description: format!(
+            "Path to the env-style file to resolve {resolved_key}_env_var from. Empty \
+             (default) resolves to '<workspace_root>/versions.env' — calculate_versions' \
+             own output path. Only used when {resolved_key}_env_var is set."
+        ),
+        default: Some(serde_yaml::Value::String(String::new())),
+        enum_values: None,
+    };
+    (env_var, source_file)
+}
+
+/// Conditional step: when `<resolved_key>_env_var` is non-empty, source the
+/// (attached-workspace) file it names, extract that one variable, and export
+/// it to `$BASH_ENV` as `GCO_<RESOLVED_KEY>_RESOLVED` — a name distinct from
+/// the literal `GCO_<RESOLVED_KEY>` so the command script's own fallback
+/// logic (`render_command_script_content`) never depends on any
+/// `environment:`-vs-`$BASH_ENV` precedence ordering between this step and
+/// the command's own `run` step. No-op when `<resolved_key>_env_var` is
+/// empty (the default): every existing literal-only consumer is unaffected.
+fn build_resolve_workspace_param_step(resolved_key: &str) -> serde_yaml::Value {
+    let env_var_param = format!("{resolved_key}_env_var");
+    let source_file_param = format!("{resolved_key}_source_file");
+    let override_var = env_var_name(&format!("{resolved_key}_resolved"));
+
+    let mut run_map = serde_yaml::Mapping::new();
+    run_map.insert(
+        serde_yaml::Value::String("name".to_string()),
+        serde_yaml::Value::String(format!("Resolve {resolved_key} from attached workspace")),
+    );
+    run_map.insert(
+        serde_yaml::Value::String("command".to_string()),
+        serde_yaml::Value::String("<<include(scripts/resolve_workspace_param.sh)>>".to_string()),
+    );
+    let mut env_map = serde_yaml::Mapping::new();
+    env_map.insert(
+        serde_yaml::Value::String("GCO_TARGET_ENV_VAR".to_string()),
+        serde_yaml::Value::String(format!("<< parameters.{env_var_param} >>")),
+    );
+    env_map.insert(
+        serde_yaml::Value::String("GCO_SOURCE_FILE".to_string()),
+        serde_yaml::Value::String(format!("<< parameters.{source_file_param} >>")),
+    );
+    env_map.insert(
+        serde_yaml::Value::String("GCO_WORKSPACE_ROOT".to_string()),
+        serde_yaml::Value::String("<< parameters.workspace_root >>".to_string()),
+    );
+    env_map.insert(
+        serde_yaml::Value::String("GCO_OVERRIDE_VAR".to_string()),
+        serde_yaml::Value::String(override_var),
+    );
+    run_map.insert(
+        serde_yaml::Value::String("environment".to_string()),
+        serde_yaml::Value::Mapping(env_map),
+    );
+    let mut run_step = serde_yaml::Mapping::new();
+    run_step.insert(
+        serde_yaml::Value::String("run".to_string()),
+        serde_yaml::Value::Mapping(run_map),
+    );
+    let inner_steps = serde_yaml::Value::Sequence(vec![serde_yaml::Value::Mapping(run_step)]);
+    let mut when_inner = serde_yaml::Mapping::new();
+    when_inner.insert(
+        serde_yaml::Value::String("condition".to_string()),
+        serde_yaml::Value::String(format!("<< parameters.{env_var_param} >>")),
+    );
+    when_inner.insert(serde_yaml::Value::String("steps".to_string()), inner_steps);
+    let mut when_map = serde_yaml::Mapping::new();
+    when_map.insert(
+        serde_yaml::Value::String("when".to_string()),
+        serde_yaml::Value::Mapping(when_inner),
+    );
+    serde_yaml::Value::Mapping(when_map)
+}
+
+/// The generic script `build_resolve_workspace_param_step` includes: given
+/// `GCO_TARGET_ENV_VAR` (required) and `GCO_WORKSPACE_ROOT`, sources
+/// `GCO_SOURCE_FILE` (default `<workspace_root>/versions.env`), extracts
+/// `GCO_TARGET_ENV_VAR` via indirect expansion, and exports it to `$BASH_ENV`
+/// under `GCO_OVERRIDE_VAR`'s name. Loud, specific errors — never a silent
+/// empty fallback — mirroring `add-workspace-to-path.sh`'s own directness.
+const RESOLVE_WORKSPACE_PARAM_SCRIPT: &str = r#"if [[ -z "${GCO_TARGET_ENV_VAR:-}" ]]; then
+  echo "ERROR: GCO_TARGET_ENV_VAR must be set to use workspace-sourced resolution" >&2
+  exit 1
+fi
+
+SOURCE_FILE="${GCO_SOURCE_FILE:-${GCO_WORKSPACE_ROOT}/versions.env}"
+
+if [[ ! -f "${SOURCE_FILE}" ]]; then
+  echo "ERROR: workspace source file not found: ${SOURCE_FILE}" >&2
+  echo "Did you set attach_workspace: true and persist it from an earlier job?" >&2
+  exit 1
+fi
+
+# shellcheck source=/dev/null
+source "${SOURCE_FILE}"
+
+RESOLVED="${!GCO_TARGET_ENV_VAR:-}"
+if [[ -z "${RESOLVED}" ]]; then
+  echo "ERROR: ${GCO_TARGET_ENV_VAR} not found (or empty) in ${SOURCE_FILE}" >&2
+  cat "${SOURCE_FILE}" >&2
+  exit 1
+fi
+
+echo "Resolved ${GCO_TARGET_ENV_VAR} from workspace: ${RESOLVED}"
+echo "export ${GCO_OVERRIDE_VAR}=${RESOLVED}" >> "$BASH_ENV"
+"#;
 
 /// Boolean job parameter that toggles persisting the regenerated orb dir to the
 /// workspace (Model B). Off by default; the consumer workflow sets it on the
@@ -2434,6 +2700,7 @@ mod tests {
                 crate::orb_config::ParamOverride {
                     default: None,
                     orb_name: Some("custom_name".to_string()),
+                    workspace_sourced: None,
                 },
             );
             let mut subcommands = IndexMap::new();
@@ -2471,6 +2738,7 @@ mod tests {
             crate::orb_config::ParamOverride {
                 default: None,
                 orb_name: Some("generate_name_alt".to_string()),
+                workspace_sourced: None,
             },
         );
         let mut subcommands = IndexMap::new();
@@ -4251,6 +4519,7 @@ mod tests {
             crate::orb_config::ParamOverride {
                 default: Some("my-default".to_string()),
                 orb_name: None,
+                workspace_sourced: None,
             },
         );
         subcommands.insert(
@@ -4310,6 +4579,7 @@ mod tests {
             crate::orb_config::ParamOverride {
                 default: None,
                 orb_name: Some("generate_name_alt".to_string()),
+                workspace_sourced: None,
             },
         );
         let mut subcommands = IndexMap::new();
@@ -4378,6 +4648,7 @@ mod tests {
             crate::orb_config::ParamOverride {
                 default: None,
                 orb_name: Some("output_name".to_string()),
+                workspace_sourced: None,
             },
         );
         let mut subcommands = IndexMap::new();
@@ -4445,6 +4716,7 @@ mod tests {
             crate::orb_config::ParamOverride {
                 default: None,
                 orb_name: Some("name_alt".to_string()),
+                workspace_sourced: None,
             },
         );
         param_overrides.insert(
@@ -4452,6 +4724,7 @@ mod tests {
             crate::orb_config::ParamOverride {
                 default: None,
                 orb_name: Some("generate_name_alt".to_string()),
+                workspace_sourced: None,
             },
         );
         let mut subcommands = IndexMap::new();
@@ -4514,6 +4787,7 @@ mod tests {
             crate::orb_config::ParamOverride {
                 default: None,
                 orb_name: Some("custom_output".to_string()),
+                workspace_sourced: None,
             },
         );
         let mut subcommands = IndexMap::new();
@@ -5614,6 +5888,271 @@ mod tests {
         );
     }
 
+    // ── workspace-sourced job parameters ─────────────────────────────────────
+
+    /// A subcommand with one required positional `version` param, plus an
+    /// `OrbConfig` flagging it `workspace_sourced = true` under
+    /// `[subcommand.release-prep.param.version]` — the exact shape
+    /// jci-audit's `release-prep`/`publish-record` need.
+    fn workspace_sourced_fixture() -> (CliDefinition, OrbConfig) {
+        let params = vec![Parameter {
+            long_name: "version".to_string(),
+            short: None,
+            kind: ParamKind::Positional,
+            param_type: ParamType::String,
+            default: None,
+            required: true,
+            description: "The release version being validated.".to_string(),
+            ..Default::default()
+        }];
+        let sub = make_leaf("release-prep", params);
+        let cli = make_cli("mytool", vec![sub]);
+
+        let mut param_overrides = IndexMap::new();
+        param_overrides.insert(
+            "version".to_string(),
+            crate::orb_config::ParamOverride {
+                default: None,
+                orb_name: None,
+                workspace_sourced: Some(true),
+            },
+        );
+        let mut subcommands = IndexMap::new();
+        subcommands.insert(
+            "release-prep".to_string(),
+            crate::orb_config::SubcommandConfig {
+                param: Some(param_overrides),
+                ..Default::default()
+            },
+        );
+        let config = OrbConfig {
+            subcommand: Some(subcommands),
+            ..Default::default()
+        };
+        (cli, config)
+    }
+
+    #[test]
+    fn workspace_sourced_param_adds_env_var_job_parameter() {
+        let (cli, config) = workspace_sourced_fixture();
+        let files = generate(&cli, &default_opts(), Some(&config));
+        let job = &files[&PathBuf::from("src/jobs/release_prep.yml")];
+        assert!(
+            job.contains("version_env_var:"),
+            "a workspace_sourced param must gain a '<key>_env_var' job parameter:\n{job}"
+        );
+    }
+
+    #[test]
+    fn workspace_sourced_param_adds_source_file_job_parameter() {
+        let (cli, config) = workspace_sourced_fixture();
+        let files = generate(&cli, &default_opts(), Some(&config));
+        let job = &files[&PathBuf::from("src/jobs/release_prep.yml")];
+        assert!(
+            job.contains("version_source_file:"),
+            "a workspace_sourced param must gain a '<key>_source_file' job parameter:\n{job}"
+        );
+    }
+
+    #[test]
+    fn workspace_sourced_param_env_var_and_source_file_default_to_empty() {
+        let (cli, config) = workspace_sourced_fixture();
+        let files = generate(&cli, &default_opts(), Some(&config));
+        let job = &files[&PathBuf::from("src/jobs/release_prep.yml")];
+        // Empty default means the feature is fully opt-in per invocation --
+        // omitting both keeps the job byte-for-byte behaviourally identical
+        // to a literal-only `version` consumer.
+        let env_var_pos = job.find("version_env_var:").unwrap();
+        let env_var_block = &job[env_var_pos..];
+        assert!(
+            env_var_block.contains("default: ''"),
+            "version_env_var must default to empty:\n{job}"
+        );
+    }
+
+    #[test]
+    fn workspace_sourced_resolve_step_is_conditional_on_env_var_param() {
+        let (cli, config) = workspace_sourced_fixture();
+        let files = generate(&cli, &default_opts(), Some(&config));
+        let job = &files[&PathBuf::from("src/jobs/release_prep.yml")];
+        assert!(
+            job.contains("condition: << parameters.version_env_var >>"),
+            "the resolve step must be gated on version_env_var being non-empty:\n{job}"
+        );
+    }
+
+    #[test]
+    fn workspace_sourced_resolve_step_appears_after_attach_workspace_step() {
+        let (cli, config) = workspace_sourced_fixture();
+        let files = generate(&cli, &default_opts(), Some(&config));
+        let job = &files[&PathBuf::from("src/jobs/release_prep.yml")];
+        let attach_pos = job
+            .find("condition: << parameters.attach_workspace >>")
+            .expect("attach_workspace step missing");
+        let resolve_pos = job
+            .find("condition: << parameters.version_env_var >>")
+            .expect("resolve step missing");
+        let invoke_pos = job.find("release_prep:").expect("invoke step missing");
+        assert!(
+            attach_pos < resolve_pos && resolve_pos < invoke_pos,
+            "resolve step must run after attach_workspace and before the invoke step:\n{job}"
+        );
+    }
+
+    #[test]
+    fn resolve_workspace_param_script_always_generated_when_used() {
+        let (cli, config) = workspace_sourced_fixture();
+        let files = generate(&cli, &default_opts(), Some(&config));
+        assert!(
+            files.contains_key(&PathBuf::from("src/scripts/resolve_workspace_param.sh")),
+            "resolve_workspace_param.sh must be generated when any param is workspace_sourced"
+        );
+    }
+
+    #[test]
+    fn resolve_workspace_param_script_sources_file_and_uses_bash_env() {
+        let (cli, config) = workspace_sourced_fixture();
+        let files = generate(&cli, &default_opts(), Some(&config));
+        let script = &files[&PathBuf::from("src/scripts/resolve_workspace_param.sh")];
+        assert!(
+            script.contains("GCO_TARGET_ENV_VAR"),
+            "script must read which variable to extract:\n{script}"
+        );
+        assert!(
+            script.contains("GCO_SOURCE_FILE"),
+            "script must read which file to source:\n{script}"
+        );
+        assert!(
+            script.contains("$BASH_ENV"),
+            "resolved value must be exported via $BASH_ENV to persist to later steps:\n{script}"
+        );
+    }
+
+    #[test]
+    fn command_script_falls_back_to_resolved_env_var_when_literal_is_empty() {
+        let (cli, config) = workspace_sourced_fixture();
+        let files = generate(&cli, &default_opts(), Some(&config));
+        let script = &files[&PathBuf::from("src/scripts/release_prep.sh")];
+        assert!(
+            script.contains("GCO_VERSION_RESOLVED"),
+            "script must fall back to the workspace-resolved value when the literal \
+             GCO_VERSION is empty:\n{script}"
+        );
+    }
+
+    #[test]
+    fn command_script_errors_when_neither_literal_nor_resolved_is_set() {
+        let (cli, config) = workspace_sourced_fixture();
+        let files = generate(&cli, &default_opts(), Some(&config));
+        let script = &files[&PathBuf::from("src/scripts/release_prep.sh")];
+        assert!(
+            script.contains("exit 1"),
+            "script must fail loudly when neither the literal nor the resolved value \
+             is available:\n{script}"
+        );
+    }
+
+    #[test]
+    fn non_workspace_sourced_subcommand_job_is_unaffected() {
+        // Regression guard: a subcommand with NO param flagged workspace_sourced
+        // must not gain any of the new job parameters or steps -- the
+        // overwhelming common case stays byte-for-byte unchanged.
+        let sub = make_leaf("generate", vec![]);
+        let cli = make_cli("mytool", vec![sub]);
+        let files = generate(&cli, &default_opts(), None);
+        let job = &files[&PathBuf::from("src/jobs/generate.yml")];
+        assert!(
+            !job.contains("_env_var:") && !job.contains("_source_file:"),
+            "a subcommand with no workspace_sourced param must not gain these parameters:\n{job}"
+        );
+        assert!(
+            !files.contains_key(&PathBuf::from("src/scripts/resolve_workspace_param.sh")),
+            "resolve_workspace_param.sh must not be generated when nothing uses it"
+        );
+    }
+
+    #[test]
+    fn workspace_sourced_required_param_job_parameter_gets_an_empty_default() {
+        // A required CLI param (release-prep's positional `version`)
+        // otherwise gets no `default:` at all, which makes CircleCI require
+        // it at job-invocation time too -- defeating the whole point of the
+        // runtime-resolution fallback, since a consumer relying on
+        // version_env_var could never omit the literal `version` parameter.
+        let (cli, config) = workspace_sourced_fixture();
+        let files = generate(&cli, &default_opts(), Some(&config));
+        let job = &files[&PathBuf::from("src/jobs/release_prep.yml")];
+        let version_pos = job.find("  version:").expect("version param missing");
+        let version_block = &job[version_pos..version_pos + 120];
+        assert!(
+            version_block.contains("default: ''"),
+            "a workspace_sourced required param's own job parameter must gain an \
+             empty default so it's no longer mandatory at invocation:\n{version_block}"
+        );
+    }
+
+    /// A subcommand with one OPTIONAL (`required: false`) param flagged
+    /// `workspace_sourced = true` — the `version` fixture is required, so
+    /// this covers the other branch of `render_command_script_content`'s
+    /// fallback codegen.
+    fn workspace_sourced_optional_fixture() -> (CliDefinition, OrbConfig) {
+        let params = vec![Parameter {
+            long_name: "tag".to_string(),
+            short: None,
+            kind: ParamKind::Long,
+            param_type: ParamType::String,
+            default: Some(String::new()),
+            required: false,
+            description: "Optional release tag.".to_string(),
+            ..Default::default()
+        }];
+        let sub = make_leaf("publish-record", params);
+        let cli = make_cli("mytool", vec![sub]);
+
+        let mut param_overrides = IndexMap::new();
+        param_overrides.insert(
+            "tag".to_string(),
+            crate::orb_config::ParamOverride {
+                default: None,
+                orb_name: None,
+                workspace_sourced: Some(true),
+            },
+        );
+        let mut subcommands = IndexMap::new();
+        subcommands.insert(
+            "publish-record".to_string(),
+            crate::orb_config::SubcommandConfig {
+                param: Some(param_overrides),
+                ..Default::default()
+            },
+        );
+        let config = OrbConfig {
+            subcommand: Some(subcommands),
+            ..Default::default()
+        };
+        (cli, config)
+    }
+
+    #[test]
+    fn workspace_sourced_optional_param_omits_flag_silently_when_unset() {
+        // Regression guard: workspace_sourced must not turn an OPTIONAL
+        // param mandatory. Unlike the required `version` fixture (which
+        // errors loudly when neither value is available), an optional param
+        // left unset by both means must simply omit the flag, exactly like
+        // its pre-existing (non-workspace_sourced) optional behavior.
+        let (cli, config) = workspace_sourced_optional_fixture();
+        let files = generate(&cli, &default_opts(), Some(&config));
+        let script = &files[&PathBuf::from("src/scripts/publish_record.sh")];
+        assert!(
+            !script.contains("exit 1"),
+            "an optional workspace_sourced param must not hard-error when unset:\n{script}"
+        );
+        assert!(
+            script.contains("[[ -n \"${GCO_TAG_VALUE}\" ]] && set -- \"$@\" --tag"),
+            "an optional workspace_sourced param must conditionally omit its flag, \
+             matching its pre-existing optional behavior:\n{script}"
+        );
+    }
+
     // ── set_https_remote command + script generation ────────────────────────
 
     #[test]
@@ -6058,6 +6597,7 @@ mod tests {
             crate::orb_config::ParamOverride {
                 default: None,
                 orb_name: Some("custom_name".to_string()),
+                workspace_sourced: None,
             },
         );
         let mut subcommands = IndexMap::new();
@@ -6137,6 +6677,7 @@ mod tests {
             crate::orb_config::ParamOverride {
                 default: None,
                 orb_name: Some("custom_name".to_string()),
+                workspace_sourced: None,
             },
         );
         let mut subcommands = IndexMap::new();
@@ -6372,6 +6913,7 @@ mod tests {
             ParamOverride {
                 default: Some("custom/@orb.yml".to_string()),
                 orb_name: None,
+                workspace_sourced: None,
             },
         );
         let mut subcommands = IndexMap::new();
@@ -6422,6 +6964,7 @@ mod tests {
             ParamOverride {
                 default: Some("true".to_string()),
                 orb_name: None,
+                workspace_sourced: None,
             },
         );
         let mut subcommands = IndexMap::new();
@@ -6472,6 +7015,7 @@ mod tests {
             ParamOverride {
                 default: Some("3".to_string()),
                 orb_name: None,
+                workspace_sourced: None,
             },
         );
         let mut subcommands = IndexMap::new();
