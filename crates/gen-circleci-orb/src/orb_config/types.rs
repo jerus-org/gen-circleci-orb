@@ -351,6 +351,16 @@ pub struct ParamOverride {
     /// (gen-circleci-orb#412) — always available via `gen-circleci-orb.toml`,
     /// even when the consumer doesn't control the underlying CLI.
     pub orb_name: Option<String>,
+    /// When true, this param's generated job gains a `<key>_env_var`/
+    /// `<key>_source_file` pair letting a consumer resolve its value at
+    /// runtime from an attached workspace file, instead of only a
+    /// pipeline-compile-time literal — for a param whose real value (e.g. a
+    /// release version) is only known once an earlier job in the same
+    /// pipeline has run. See `render::build_workspace_sourced_params` and
+    /// `render::render_command_script_content`'s fallback codegen for a
+    /// flagged param. Unset/false: no change to the existing, unconditional
+    /// literal-only behavior.
+    pub workspace_sourced: Option<bool>,
 }
 
 /// A composed job assembled from the tool's own generated commands plus optional

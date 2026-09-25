@@ -683,6 +683,7 @@ steps:
             ParamOverride {
                 default: Some("src/@orb.yml".to_string()),
                 orb_name: None,
+                workspace_sourced: None,
             },
         );
         subcommands.insert(
