@@ -1,6 +1,6 @@
 set -- fixture-cli build
 set -- "$@" --name "${GCO_BUILD_NAME}"
-[[ -n "${GCO_FORMAT:-}" ]] && set -- "$@" --format "${GCO_FORMAT}"
+[[ ! "${GCO_FORMAT:-}" =~ ^[[:space:]]*$ ]] && set -- "$@" --format "${GCO_FORMAT}"
 case "${GCO_LOG_LEVEL:-default}" in
   quiet) set -- "$@" --quiet ;;
   v) set -- "$@" --verbose ;;
