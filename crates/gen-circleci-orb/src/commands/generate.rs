@@ -1298,6 +1298,17 @@ impl Generate {
                 job_group_collisions.join("\n")
             );
         }
+        let job_group_type_errors = orb_generator::render::rich_job_group_type_errors(
+            &cli_def,
+            Some(&orb_config),
+            &effective_names,
+        );
+        if !job_group_type_errors.is_empty() {
+            anyhow::bail!(
+                "job group parameter type error(s):\n{}",
+                job_group_type_errors.join("\n")
+            );
+        }
 
         let opts = orb_generator::GenerateOpts {
             namespaces,

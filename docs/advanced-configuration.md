@@ -76,9 +76,30 @@ goal-oriented job. When `step` is present it takes precedence over `steps`.
 ```toml
 [[job_group.parameter]]
 name = "orb_path"
-param_type = "string"          # default: string
+type = "string"                # default: string
 default = "orb/src/@orb.yml"
 description = "Path to the orb source @orb.yml."
+```
+
+A parameter you pass into a command's **enum** argument must itself be an enum:
+CircleCI's orb validation rejects a string there ("Type error for argument …:
+expected type: enum"). List its values with `enum`, which implies `type = "enum"`;
+every value must be one the command accepts. Likewise a parameter passed into a
+**boolean** argument needs `type = "boolean"`. `generate` checks both, so the
+mismatch fails generation rather than `orb-tools/pack` later:
+
+```toml
+[[job_group.parameter]]
+name = "runner"
+enum = ["test", "nextest"]
+default = "test"
+description = "Test runner."
+
+[[job_group.step]]
+command = "report"
+
+[job_group.step.with]
+runner = "<< parameters.runner >>"
 ```
 
 **Steps** — one `[[job_group.step]]` each, in order. Exactly one discriminant field per step:
