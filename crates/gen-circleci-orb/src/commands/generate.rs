@@ -1298,6 +1298,17 @@ impl Generate {
                 job_group_collisions.join("\n")
             );
         }
+        let job_group_type_errors = orb_generator::render::rich_job_group_type_errors(
+            &cli_def,
+            Some(&orb_config),
+            &effective_names,
+        );
+        if !job_group_type_errors.is_empty() {
+            anyhow::bail!(
+                "job group parameter type error(s):\n{}",
+                job_group_type_errors.join("\n")
+            );
+        }
 
         let opts = orb_generator::GenerateOpts {
             namespaces,
@@ -1316,6 +1327,7 @@ impl Generate {
             apt_packages: resolve_apt_packages(&self.apt_packages, &orb_config),
             cargo_tools,
             crate_wait: resolve_crate_wait(&orb_config),
+            orb_version_pin: help_parser::binary_orb_version_pin(&introspect),
         };
 
         let files = orb_generator::generate(&cli_def, &opts, Some(&orb_config));

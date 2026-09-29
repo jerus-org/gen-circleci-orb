@@ -3,7 +3,7 @@ description: >
 usage:
   version: 2.1
   orbs:
-    fixture-cli: jerus-org/fixture-cli@1.0
+    fixture-cli: jerus-org/fixture-cli@volatile
   workflows:
     use-my-orb:
       jobs:

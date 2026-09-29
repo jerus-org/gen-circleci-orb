@@ -340,6 +340,11 @@ default = "./dist"
 `gen-circleci-orb config set-parameter-default --subcommand generate --parameter output --value ./dist`
 writes the same thing.
 
+The override also applies wherever that subcommand is a step of a simple-mode
+[`[[job_group]]`](advanced-configuration.md#composed-jobs-job_group), so a required option
+(which the group otherwise exposes as a required parameter) can be given a default there too.
+If two steps feed the same group parameter, the first step's override wins.
+
 The subcommand key matches the CLI's own subcommand name exactly, including hyphens (a
 multi-word subcommand like `release-prep` is `[subcommand.release-prep.param.<name>]`, not
 `release_prep`). The override value is validated against the target parameter's declared type at

@@ -405,6 +405,11 @@ pub struct JobGroupParam {
     pub param_type: Option<String>,
     pub default: Option<String>,
     pub description: Option<String>,
+    /// Allowed values, rendered as an `enum` parameter (implies
+    /// `type = "enum"` when `type` is unset). Needed to wire a job parameter
+    /// into a command's enum argument, which CircleCI type-checks (#457).
+    #[serde(rename = "enum", default, skip_serializing_if = "Option::is_none")]
+    pub enum_values: Option<Vec<String>>,
 }
 
 /// A single step in a rich-mode [`JobGroup`].

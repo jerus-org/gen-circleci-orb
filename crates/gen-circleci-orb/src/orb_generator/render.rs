@@ -40,6 +40,11 @@ pub struct GenerateOpts {
     /// How long the generated Dockerfile waits for crates.io to serve the
     /// version being released.
     pub crate_wait: CrateWait,
+    /// `major.minor` of the introspected binary, used to pin the orb in the
+    /// generated example (`namespace/binary@0.1`). `None` when the binary's
+    /// `--version` couldn't be read, in which case the example pins
+    /// `@volatile`.
+    pub orb_version_pin: Option<String>,
 }
 
 /// The generated Dockerfile's crates.io propagation gate.
@@ -1508,8 +1513,11 @@ fn render_example(cli: &CliDefinition, opts: &GenerateOpts, config: Option<&OrbC
         })
         .unwrap_or_default();
 
+    // #457: pin what the orb will actually publish (its binary's major.minor);
+    // `@volatile` when that's unknown, since it always resolves.
+    let pin = opts.orb_version_pin.as_deref().unwrap_or("volatile");
     let mut out = format!(
-        "description: >\n  Example usage of the {binary} orb.\nusage:\n  version: 2.1\n  orbs:\n    {binary}: {namespace}/{binary}@1.0\n  workflows:\n    use-my-orb:\n      jobs:\n"
+        "description: >\n  Example usage of the {binary} orb.\nusage:\n  version: 2.1\n  orbs:\n    {binary}: {namespace}/{binary}@{pin}\n  workflows:\n    use-my-orb:\n      jobs:\n"
     );
     if required_params.is_empty() {
         out.push_str(&format!("        - {binary}/{job_name}\n"));
@@ -2528,6 +2536,115 @@ fn build_custom_run_step(
     serde_yaml::Value::Mapping(m)
 }
 
+/// A declared rich-mode parameter's CircleCI type: explicit `type`, else
+/// `enum` when it lists `enum` values, else `string`.
+fn declared_param_type(p: &crate::orb_config::JobGroupParam) -> String {
+    p.param_type.clone().unwrap_or_else(|| {
+        if p.enum_values.is_some() {
+            "enum".to_string()
+        } else {
+            "string".to_string()
+        }
+    })
+}
+
+/// Every rich-mode `job_group` parameter that CircleCI's orb validation would
+/// reject (#457): a declared job parameter passed through `with` as
+/// `<< parameters.x >>` into a command's `enum` or `boolean` argument must
+/// match that type (an enum's values must be ones the argument accepts), and
+/// an `enum` parameter must list its values. Checked before rendering, so
+/// `generate` fails instead of `orb-tools/pack` failing later with "Type
+/// error for argument ...". Literal `with` values are left to CircleCI.
+pub(crate) fn rich_job_group_type_errors(
+    cli: &CliDefinition,
+    config: Option<&OrbConfig>,
+    effective_names: &HashMap<String, String>,
+) -> Vec<String> {
+    let cli = normalize_verbosity_flags(cli, config);
+    let mut errors = Vec::new();
+    for group in config
+        .and_then(|c| c.job_group.as_ref())
+        .into_iter()
+        .flatten()
+    {
+        let declared = group.parameter.as_deref().unwrap_or_default();
+        for p in declared {
+            if declared_param_type(p) == "enum" && p.enum_values.as_ref().is_none_or(Vec::is_empty)
+            {
+                errors.push(format!(
+                    "job group `{}`: parameter `{}` is type enum but lists no `enum` values",
+                    group.name, p.name
+                ));
+            }
+        }
+        for step in group.step.as_deref().unwrap_or_default() {
+            let (Some(command), Some(with)) = (&step.command, &step.with) else {
+                continue;
+            };
+            let Some((sub, effective_name)) = find_leaf_subcommand(&cli, command, effective_names)
+            else {
+                continue;
+            };
+            for (arg, value) in with {
+                let Some(job_param) = value
+                    .trim()
+                    .strip_prefix("<<")
+                    .and_then(|v| v.strip_suffix(">>"))
+                    .and_then(|v| v.trim().strip_prefix("parameters."))
+                    .map(str::trim)
+                else {
+                    continue;
+                };
+                let Some(declared) = declared.iter().find(|p| p.name == job_param) else {
+                    continue;
+                };
+                let Some(target) = sub.parameters.iter().find(|p| {
+                    resolve_param_orb_name(&sub.name, &effective_name, &p.long_name, config) == *arg
+                }) else {
+                    continue;
+                };
+                let job_type = declared_param_type(declared);
+                let context = format!(
+                    "job group `{}`, step `{command}`: `{arg}: << parameters.{job_param} >>`",
+                    group.name
+                );
+                match &target.param_type {
+                    ParamType::Enum(accepted) => {
+                        if job_type != "enum" {
+                            errors.push(format!(
+                                "{context} passes a {job_type} parameter to an enum argument \
+                                 ({}); declare `{job_param}` with `enum = [...]`",
+                                accepted.join(", ")
+                            ));
+                        } else {
+                            let stray: Vec<&str> = declared
+                                .enum_values
+                                .iter()
+                                .flatten()
+                                .filter(|v| !accepted.contains(v))
+                                .map(String::as_str)
+                                .collect();
+                            if !stray.is_empty() {
+                                errors.push(format!(
+                                    "{context}: enum value(s) {} not accepted by `{arg}` ({})",
+                                    stray.join(", "),
+                                    accepted.join(", ")
+                                ));
+                            }
+                        }
+                    }
+                    ParamType::Boolean if job_type != "boolean" => errors.push(format!(
+                        "{context} passes a {job_type} parameter to a boolean argument; \
+                         declare `{job_param}` with `type = \"boolean\"`"
+                    )),
+                    _ => {}
+                }
+            }
+        }
+    }
+    errors
+}
+
 /// Render a rich-mode job_group: explicit parameter declarations and an ordered,
 /// heterogeneous step list (built-ins, tool commands, third-party orb steps and
 /// custom run steps). The whole job is data declared in the config file.
@@ -2539,7 +2656,7 @@ fn render_rich_job_group(
     let mut parameters: IndexMap<String, OrbParameter> = IndexMap::new();
     if let Some(declared) = &group.parameter {
         for p in declared {
-            let param_type = p.param_type.clone().unwrap_or_else(|| "string".to_string());
+            let param_type = declared_param_type(p);
             parameters.insert(
                 p.name.clone(),
                 OrbParameter {
@@ -2549,7 +2666,7 @@ fn render_rich_job_group(
                         .map(|d| coerce_override_default(d, &param_type)),
                     param_type,
                     description: p.description.clone().unwrap_or_default(),
-                    enum_values: None,
+                    enum_values: p.enum_values.clone(),
                 },
             );
         }
@@ -2619,6 +2736,42 @@ fn render_rich_job_group(
     serde_yaml::to_string(&job).unwrap()
 }
 
+/// Carry `[subcommand.<step>.param.<flag>] default` overrides onto a
+/// simple-mode group's parameters, as `render_job` does for the standalone
+/// job (#457) — without this a required step parameter can't get a default in
+/// the group at all. Keyed by each step's effective name, like `render_job`.
+/// Where several steps feed one group key, the first step's override wins.
+fn apply_group_default_overrides(
+    parameters: &mut IndexMap<String, OrbParameter>,
+    keys: &HashMap<(usize, String), String>,
+    steps: &[ResolvedStep],
+    config: Option<&OrbConfig>,
+) {
+    let mut ordered: Vec<(&(usize, String), &String)> = keys.iter().collect();
+    ordered.sort_by_key(|((idx, _), _)| *idx);
+    let mut applied = std::collections::HashSet::new();
+    for ((idx, long_name), job_key) in ordered {
+        let Some((_, effective_name)) = steps.get(*idx) else {
+            continue;
+        };
+        let Some(new_default) = config
+            .and_then(|c| c.subcommand.as_ref())
+            .and_then(|sc| sc.get(effective_name))
+            .and_then(|sc_config| sc_config.param.as_ref())
+            .and_then(|overrides| overrides.get(long_name))
+            .and_then(|o| o.default.as_ref())
+        else {
+            continue;
+        };
+        if !applied.insert(job_key.clone()) {
+            continue;
+        }
+        if let Some(param) = parameters.get_mut(job_key) {
+            param.default = Some(coerce_override_default(new_default, &param.param_type));
+        }
+    }
+}
+
 fn render_job_group(
     group: &crate::orb_config::JobGroup,
     cli: &CliDefinition,
@@ -2641,6 +2794,7 @@ fn render_job_group(
         keys,
         ..
     } = build_job_group_params(group, &steps_resolved, config);
+    apply_group_default_overrides(&mut parameters, &keys, &steps_resolved, config);
 
     let (attach_param, root_param) = build_workspace_params();
     parameters.insert("attach_workspace".to_string(), attach_param);
@@ -2746,6 +2900,59 @@ mod tests {
             resolve_param_orb_name("release", "ci_release", "name", Some(&mk("release"))),
             "release_name",
             "a section keyed by the bare name must not apply to the qualified leaf"
+        );
+    }
+
+    #[test]
+    fn simple_job_group_applies_the_subcommand_param_default_override() {
+        // #457: a required step parameter becomes a required job-group
+        // parameter; `[subcommand.upload.param.file] default` must reach the
+        // group the same way it reaches the standalone `upload` job, or the
+        // group can't offer a default at all.
+        let upload = make_leaf(
+            "upload",
+            vec![Parameter {
+                long_name: "file".to_string(),
+                param_type: ParamType::String,
+                required: true,
+                description: "Coverage file.".to_string(),
+                ..Default::default()
+            }],
+        );
+        let cli = make_cli("mytool", vec![make_leaf("report", vec![]), upload]);
+        let mut param_overrides = IndexMap::new();
+        param_overrides.insert(
+            "file".to_string(),
+            crate::orb_config::ParamOverride {
+                default: Some("coverage/lcov.info".to_string()),
+                orb_name: None,
+                workspace_sourced: None,
+            },
+        );
+        let mut subcommands = IndexMap::new();
+        subcommands.insert(
+            "upload".to_string(),
+            crate::orb_config::SubcommandConfig {
+                param: Some(param_overrides),
+                ..Default::default()
+            },
+        );
+        let config = OrbConfig {
+            subcommand: Some(subcommands),
+            job_group: Some(vec![crate::orb_config::JobGroup {
+                name: "report_and_upload".to_string(),
+                steps: vec!["report".to_string(), "upload".to_string()],
+                ..Default::default()
+            }]),
+            ..Default::default()
+        };
+        let files = generate(&cli, &default_opts(), Some(&config));
+        let job = &files[&PathBuf::from("src/jobs/report_and_upload.yml")];
+        let parsed: serde_yaml::Value = serde_yaml::from_str(job).unwrap();
+        assert_eq!(
+            parsed["parameters"]["file"]["default"],
+            serde_yaml::Value::String("coverage/lcov.info".to_string()),
+            "group parameter must carry the override default:\n{job}"
         );
     }
 
@@ -2873,6 +3080,7 @@ mod tests {
             apt_packages: vec![],
             cargo_tools: vec![],
             crate_wait: CrateWait::default(),
+            orb_version_pin: None,
         }
     }
 
@@ -4019,6 +4227,40 @@ mod tests {
         assert!(
             example.contains("my-org/mytool"),
             "example must reference the orb:\n{example}"
+        );
+    }
+
+    #[test]
+    fn example_pins_orb_to_the_binary_major_minor() {
+        // #457: a hard-coded `@1.0` names a version a 0.x orb never publishes,
+        // so a consumer copying the example from the registry gets "orb not
+        // found". The pin follows the binary's own major.minor.
+        let sub = make_leaf("generate", vec![]);
+        let cli = make_cli("mytool", vec![sub]);
+        let opts = GenerateOpts {
+            orb_version_pin: Some("0.1".to_string()),
+            ..default_opts()
+        };
+        let files = generate(&cli, &opts, None);
+        let example = &files[&PathBuf::from("src/examples/example.yml")];
+        assert!(
+            example.contains("mytool: my-org/mytool@0.1\n"),
+            "example must pin the binary's major.minor:\n{example}"
+        );
+        assert!(!example.contains("@1.0"), "no hard-coded @1.0:\n{example}");
+    }
+
+    #[test]
+    fn example_pins_volatile_when_the_version_is_unknown() {
+        // Without a readable `--version`, no concrete pin can be named that is
+        // guaranteed to exist; `@volatile` always resolves to the latest.
+        let sub = make_leaf("generate", vec![]);
+        let cli = make_cli("mytool", vec![sub]);
+        let files = generate(&cli, &default_opts(), None);
+        let example = &files[&PathBuf::from("src/examples/example.yml")];
+        assert!(
+            example.contains("mytool: my-org/mytool@volatile\n"),
+            "unknown version must fall back to @volatile:\n{example}"
         );
     }
 
@@ -7935,6 +8177,180 @@ mod tests {
         };
         let files = generate(&cli, &default_opts(), Some(&config));
         files[&PathBuf::from("src/jobs/sync_and_publish.yml")].clone()
+    }
+
+    // ── rich-mode parameter types (#457) ─────────────────────────────────────
+
+    fn typed_cli() -> CliDefinition {
+        make_cli(
+            "mytool",
+            vec![make_leaf(
+                "report",
+                vec![
+                    Parameter {
+                        long_name: "runner".to_string(),
+                        param_type: ParamType::Enum(vec!["test".into(), "nextest".into()]),
+                        default: Some("test".to_string()),
+                        description: "Test runner.".to_string(),
+                        ..Default::default()
+                    },
+                    Parameter {
+                        long_name: "no_all_features".to_string(),
+                        param_type: ParamType::Boolean,
+                        default: Some("false".to_string()),
+                        description: "Disable all features.".to_string(),
+                        ..Default::default()
+                    },
+                ],
+            )],
+        )
+    }
+
+    /// A rich group with one declared job parameter `p` wired into
+    /// `report`'s `arg` via `with`.
+    fn typed_group(
+        param: crate::orb_config::JobGroupParam,
+        arg: &str,
+        value: &str,
+    ) -> crate::orb_config::OrbConfig {
+        use crate::orb_config::{JobGroup, JobGroupStep, OrbConfig};
+        let mut with = IndexMap::new();
+        with.insert(arg.to_string(), value.to_string());
+        OrbConfig {
+            job_group: Some(vec![JobGroup {
+                name: "cov".to_string(),
+                parameter: Some(vec![param]),
+                step: Some(vec![JobGroupStep {
+                    command: Some("report".to_string()),
+                    with: Some(with),
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            }]),
+            ..OrbConfig::default()
+        }
+    }
+
+    fn type_errors(config: &crate::orb_config::OrbConfig) -> Vec<String> {
+        rich_job_group_type_errors(&typed_cli(), Some(config), &HashMap::new())
+    }
+
+    #[test]
+    fn rich_param_with_enum_values_renders_as_an_enum() {
+        use crate::orb_config::JobGroupParam;
+        let config = typed_group(
+            JobGroupParam {
+                name: "runner".to_string(),
+                enum_values: Some(vec!["test".into(), "nextest".into()]),
+                default: Some("test".to_string()),
+                ..Default::default()
+            },
+            "runner",
+            "<< parameters.runner >>",
+        );
+        let files = generate(&typed_cli(), &default_opts(), Some(&config));
+        let job = &files[&PathBuf::from("src/jobs/cov.yml")];
+        assert!(
+            job.contains("type: enum"),
+            "enum values imply type enum:\n{job}"
+        );
+        assert!(job.contains("- nextest"), "enum values rendered:\n{job}");
+        assert!(
+            type_errors(&config).is_empty(),
+            "{:?}",
+            type_errors(&config)
+        );
+    }
+
+    #[test]
+    fn string_param_wired_to_an_enum_argument_is_rejected() {
+        // CircleCI's orb validation fails this with "Type error for argument
+        // runner: expected type: enum" — catch it at generate time instead.
+        use crate::orb_config::JobGroupParam;
+        let config = typed_group(
+            JobGroupParam {
+                name: "runner".to_string(),
+                default: Some("test".to_string()),
+                ..Default::default()
+            },
+            "runner",
+            "<< parameters.runner >>",
+        );
+        let errors = type_errors(&config);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(
+            errors[0].contains("cov") && errors[0].contains("runner") && errors[0].contains("enum"),
+            "error names the group, argument and expected type: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn enum_param_with_values_the_argument_rejects_is_rejected() {
+        use crate::orb_config::JobGroupParam;
+        let config = typed_group(
+            JobGroupParam {
+                name: "runner".to_string(),
+                enum_values: Some(vec!["test".into(), "bogus".into()]),
+                ..Default::default()
+            },
+            "runner",
+            "<< parameters.runner >>",
+        );
+        let errors = type_errors(&config);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(
+            errors[0].contains("bogus"),
+            "names the stray value: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn string_param_wired_to_a_boolean_argument_is_rejected() {
+        use crate::orb_config::JobGroupParam;
+        let config = typed_group(
+            JobGroupParam {
+                name: "naf".to_string(),
+                ..Default::default()
+            },
+            "no_all_features",
+            "<< parameters.naf >>",
+        );
+        let errors = type_errors(&config);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("boolean"), "{errors:?}");
+    }
+
+    #[test]
+    fn literal_with_values_are_not_type_checked_here() {
+        use crate::orb_config::JobGroupParam;
+        let config = typed_group(
+            JobGroupParam {
+                name: "unused".to_string(),
+                ..Default::default()
+            },
+            "runner",
+            "nextest",
+        );
+        assert!(type_errors(&config).is_empty());
+    }
+
+    #[test]
+    fn enum_type_without_values_is_rejected() {
+        use crate::orb_config::JobGroupParam;
+        let config = typed_group(
+            JobGroupParam {
+                name: "runner".to_string(),
+                param_type: Some("enum".to_string()),
+                ..Default::default()
+            },
+            "runner",
+            "<< parameters.runner >>",
+        );
+        let errors = type_errors(&config);
+        assert!(
+            errors.iter().any(|e| e.contains("no `enum` values")),
+            "{errors:?}"
+        );
     }
 
     #[test]

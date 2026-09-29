@@ -1069,7 +1069,16 @@ fn find_workflow_jobs_bounds(lines: &[String], workflow: &str) -> Option<(usize,
             return Some((jobs_start, i));
         }
     }
-    Some((jobs_start, lines.len()))
+    // The list runs to end of file: end after its last non-blank line, not
+    // after trailing blanks. `strip_managed` drops a trailing blank that
+    // follows a managed block, so inserting after one made the first `update`
+    // differ from every re-sync of it (#457). Only this EOF case: when a
+    // section follows, existing consumers' committed layout must not move.
+    let mut end = lines.len();
+    while end > jobs_start + 1 && lines[end - 1].trim().is_empty() {
+        end -= 1;
+    }
+    Some((jobs_start, end))
 }
 
 /// Whether build-binary/regenerate-orb should run at all: either there's a
@@ -3095,6 +3104,33 @@ workflows:
             !output.contains("destination-orb-path"),
             "must not use deprecated destination-orb-path:\n{output}"
         );
+    }
+
+    #[test]
+    fn first_resync_on_a_trailing_blank_workflow_is_stable() {
+        // #457: a validation workflow whose job list ends in a blank line
+        // (e.g. the last line of the file). The first wiring must already be
+        // in the form a re-sync produces, or `update --check` straight after
+        // `update` fails with an empty diff.
+        let fresh = concat!(
+            "version: 2.1\n",
+            "\n",
+            "orbs:\n",
+            "  toolkit: my-org/toolkit@2.9.1\n",
+            "\n",
+            "workflows:\n",
+            "  validation:\n",
+            "    jobs:\n",
+            "      - common-tests\n",
+            "      - lint:\n",
+            "          filters:\n",
+            "            branches:\n",
+            "              ignore: main\n",
+            "\n",
+        );
+        let (first, _) = resync_build_composed(fresh, &make_opts());
+        let (second, _) = resync_build_composed(&first, &make_opts());
+        assert_eq!(first, second, "first update was not stable under re-sync");
     }
 
     #[test]
