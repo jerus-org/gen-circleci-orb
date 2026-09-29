@@ -2736,6 +2736,42 @@ fn render_rich_job_group(
     serde_yaml::to_string(&job).unwrap()
 }
 
+/// Carry `[subcommand.<step>.param.<flag>] default` overrides onto a
+/// simple-mode group's parameters, as `render_job` does for the standalone
+/// job (#457) — without this a required step parameter can't get a default in
+/// the group at all. Keyed by each step's effective name, like `render_job`.
+/// Where several steps feed one group key, the first step's override wins.
+fn apply_group_default_overrides(
+    parameters: &mut IndexMap<String, OrbParameter>,
+    keys: &HashMap<(usize, String), String>,
+    steps: &[ResolvedStep],
+    config: Option<&OrbConfig>,
+) {
+    let mut ordered: Vec<(&(usize, String), &String)> = keys.iter().collect();
+    ordered.sort_by_key(|((idx, _), _)| *idx);
+    let mut applied = std::collections::HashSet::new();
+    for ((idx, long_name), job_key) in ordered {
+        let Some((_, effective_name)) = steps.get(*idx) else {
+            continue;
+        };
+        let Some(new_default) = config
+            .and_then(|c| c.subcommand.as_ref())
+            .and_then(|sc| sc.get(effective_name))
+            .and_then(|sc_config| sc_config.param.as_ref())
+            .and_then(|overrides| overrides.get(long_name))
+            .and_then(|o| o.default.as_ref())
+        else {
+            continue;
+        };
+        if !applied.insert(job_key.clone()) {
+            continue;
+        }
+        if let Some(param) = parameters.get_mut(job_key) {
+            param.default = Some(coerce_override_default(new_default, &param.param_type));
+        }
+    }
+}
+
 fn render_job_group(
     group: &crate::orb_config::JobGroup,
     cli: &CliDefinition,
@@ -2758,6 +2794,7 @@ fn render_job_group(
         keys,
         ..
     } = build_job_group_params(group, &steps_resolved, config);
+    apply_group_default_overrides(&mut parameters, &keys, &steps_resolved, config);
 
     let (attach_param, root_param) = build_workspace_params();
     parameters.insert("attach_workspace".to_string(), attach_param);
@@ -2863,6 +2900,59 @@ mod tests {
             resolve_param_orb_name("release", "ci_release", "name", Some(&mk("release"))),
             "release_name",
             "a section keyed by the bare name must not apply to the qualified leaf"
+        );
+    }
+
+    #[test]
+    fn simple_job_group_applies_the_subcommand_param_default_override() {
+        // #457: a required step parameter becomes a required job-group
+        // parameter; `[subcommand.upload.param.file] default` must reach the
+        // group the same way it reaches the standalone `upload` job, or the
+        // group can't offer a default at all.
+        let upload = make_leaf(
+            "upload",
+            vec![Parameter {
+                long_name: "file".to_string(),
+                param_type: ParamType::String,
+                required: true,
+                description: "Coverage file.".to_string(),
+                ..Default::default()
+            }],
+        );
+        let cli = make_cli("mytool", vec![make_leaf("report", vec![]), upload]);
+        let mut param_overrides = IndexMap::new();
+        param_overrides.insert(
+            "file".to_string(),
+            crate::orb_config::ParamOverride {
+                default: Some("coverage/lcov.info".to_string()),
+                orb_name: None,
+                workspace_sourced: None,
+            },
+        );
+        let mut subcommands = IndexMap::new();
+        subcommands.insert(
+            "upload".to_string(),
+            crate::orb_config::SubcommandConfig {
+                param: Some(param_overrides),
+                ..Default::default()
+            },
+        );
+        let config = OrbConfig {
+            subcommand: Some(subcommands),
+            job_group: Some(vec![crate::orb_config::JobGroup {
+                name: "report_and_upload".to_string(),
+                steps: vec!["report".to_string(), "upload".to_string()],
+                ..Default::default()
+            }]),
+            ..Default::default()
+        };
+        let files = generate(&cli, &default_opts(), Some(&config));
+        let job = &files[&PathBuf::from("src/jobs/report_and_upload.yml")];
+        let parsed: serde_yaml::Value = serde_yaml::from_str(job).unwrap();
+        assert_eq!(
+            parsed["parameters"]["file"]["default"],
+            serde_yaml::Value::String("coverage/lcov.info".to_string()),
+            "group parameter must carry the override default:\n{job}"
         );
     }
 
