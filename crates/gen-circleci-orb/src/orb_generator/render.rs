@@ -40,6 +40,11 @@ pub struct GenerateOpts {
     /// How long the generated Dockerfile waits for crates.io to serve the
     /// version being released.
     pub crate_wait: CrateWait,
+    /// `major.minor` of the introspected binary, used to pin the orb in the
+    /// generated example (`namespace/binary@0.1`). `None` when the binary's
+    /// `--version` couldn't be read, in which case the example pins
+    /// `@volatile`.
+    pub orb_version_pin: Option<String>,
 }
 
 /// The generated Dockerfile's crates.io propagation gate.
@@ -1508,8 +1513,11 @@ fn render_example(cli: &CliDefinition, opts: &GenerateOpts, config: Option<&OrbC
         })
         .unwrap_or_default();
 
+    // #457: pin what the orb will actually publish (its binary's major.minor);
+    // `@volatile` when that's unknown, since it always resolves.
+    let pin = opts.orb_version_pin.as_deref().unwrap_or("volatile");
     let mut out = format!(
-        "description: >\n  Example usage of the {binary} orb.\nusage:\n  version: 2.1\n  orbs:\n    {binary}: {namespace}/{binary}@1.0\n  workflows:\n    use-my-orb:\n      jobs:\n"
+        "description: >\n  Example usage of the {binary} orb.\nusage:\n  version: 2.1\n  orbs:\n    {binary}: {namespace}/{binary}@{pin}\n  workflows:\n    use-my-orb:\n      jobs:\n"
     );
     if required_params.is_empty() {
         out.push_str(&format!("        - {binary}/{job_name}\n"));
@@ -2873,6 +2881,7 @@ mod tests {
             apt_packages: vec![],
             cargo_tools: vec![],
             crate_wait: CrateWait::default(),
+            orb_version_pin: None,
         }
     }
 
@@ -4019,6 +4028,40 @@ mod tests {
         assert!(
             example.contains("my-org/mytool"),
             "example must reference the orb:\n{example}"
+        );
+    }
+
+    #[test]
+    fn example_pins_orb_to_the_binary_major_minor() {
+        // #457: a hard-coded `@1.0` names a version a 0.x orb never publishes,
+        // so a consumer copying the example from the registry gets "orb not
+        // found". The pin follows the binary's own major.minor.
+        let sub = make_leaf("generate", vec![]);
+        let cli = make_cli("mytool", vec![sub]);
+        let opts = GenerateOpts {
+            orb_version_pin: Some("0.1".to_string()),
+            ..default_opts()
+        };
+        let files = generate(&cli, &opts, None);
+        let example = &files[&PathBuf::from("src/examples/example.yml")];
+        assert!(
+            example.contains("mytool: my-org/mytool@0.1\n"),
+            "example must pin the binary's major.minor:\n{example}"
+        );
+        assert!(!example.contains("@1.0"), "no hard-coded @1.0:\n{example}");
+    }
+
+    #[test]
+    fn example_pins_volatile_when_the_version_is_unknown() {
+        // Without a readable `--version`, no concrete pin can be named that is
+        // guaranteed to exist; `@volatile` always resolves to the latest.
+        let sub = make_leaf("generate", vec![]);
+        let cli = make_cli("mytool", vec![sub]);
+        let files = generate(&cli, &default_opts(), None);
+        let example = &files[&PathBuf::from("src/examples/example.yml")];
+        assert!(
+            example.contains("mytool: my-org/mytool@volatile\n"),
+            "unknown version must fall back to @volatile:\n{example}"
         );
     }
 

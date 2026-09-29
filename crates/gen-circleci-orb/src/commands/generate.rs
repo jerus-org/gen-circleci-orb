@@ -1316,6 +1316,7 @@ impl Generate {
             apt_packages: resolve_apt_packages(&self.apt_packages, &orb_config),
             cargo_tools,
             crate_wait: resolve_crate_wait(&orb_config),
+            orb_version_pin: help_parser::binary_orb_version_pin(&introspect),
         };
 
         let files = orb_generator::generate(&cli_def, &opts, Some(&orb_config));
