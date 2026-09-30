@@ -37,6 +37,10 @@ workflows:
           crate_tag_prefix: gen-circleci-orb-v
           build_binary: true
           binary_name: gen-circleci-orb
+          # Install the latest pcu before releasing. pcu >= 0.6.37 fails the
+          # push when GitHub rejects a ref (jerus-org/pcu#1090); the image's
+          # older pcu reported the rejected 0.2.0 push as a success.
+          update_pcu: true
           context:
             - release
             - bot-check
