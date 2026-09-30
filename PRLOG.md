@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - chore-regenerate orb source missed post-merge(pr [#464])
+- ci-install latest pcu for the crate release(pr [#469])
 
 ### Fixed
 
@@ -1304,6 +1305,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#468]: https://github.com/jerus-org/gen-circleci-orb/pull/468
 [#466]: https://github.com/jerus-org/gen-circleci-orb/pull/466
 [#467]: https://github.com/jerus-org/gen-circleci-orb/pull/467
+[#469]: https://github.com/jerus-org/gen-circleci-orb/pull/469
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.28...HEAD
 [0.1.28]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.27...v0.1.28
 [0.1.27]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.26...v0.1.27
