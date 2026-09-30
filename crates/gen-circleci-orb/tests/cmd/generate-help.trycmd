@@ -140,12 +140,11 @@ Behavior:
           published.
 
       --allow-main-record
-          Allow auto-record to push to `main`.
+          Deprecated: allow auto-record to push to `main`.
           
-          A narrow, explicit relaxation of the default main-exclusion (see
-          `should_record_on_branch`) — only for the post-merge-regen chain
-          (gen-circleci-orb#328), which has already switched CIRCLE_BRANCH
-          onto `main` itself via `--target-branch`. Never set this for an
-          ordinary `generate --record` run.
+          CI no longer commits to `main` (the post-merge chain is
+          check-only, gen-circleci-orb#462); regenerated orb source reaches
+          `main` through a reviewed PR. Still honoured, with a warning,
+          until it is removed.
 
 ```

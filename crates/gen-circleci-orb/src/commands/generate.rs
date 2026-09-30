@@ -185,13 +185,11 @@ pub struct Generate {
     #[arg(long, conflicts_with = "dry_run", help_heading = "Behavior")]
     pub check: bool,
 
-    /// Allow auto-record to push to `main`.
+    /// Deprecated: allow auto-record to push to `main`.
     ///
-    /// A narrow, explicit relaxation of
-    /// the default main-exclusion (see `should_record_on_branch`) — only for
-    /// the post-merge-regen chain (gen-circleci-orb#328), which has already
-    /// switched CIRCLE_BRANCH onto `main` itself via `--target-branch`.
-    /// Never set this for an ordinary `generate --record` run.
+    /// CI no longer commits to `main` (the post-merge chain is check-only,
+    /// gen-circleci-orb#462); regenerated orb source reaches `main` through a
+    /// reviewed PR. Still honoured, with a warning, until it is removed.
     #[arg(long, help_heading = "Behavior")]
     pub allow_main_record: bool,
 }
@@ -1198,8 +1196,14 @@ impl Generate {
         let config_path = resolve_config_path(self.config.as_ref(), &self.output);
         let orb_config = orb_config::load_config(&config_path)?;
 
+        if orb_config.effective_post_merge_check().is_some() {
+            println!("{}", post_merge_check_trigger_reminder());
+        }
         if orb_config.post_merge_regen.is_some() {
-            println!("{}", post_merge_regen_trigger_reminder());
+            eprintln!("warning: {}", post_merge_regen_deprecation());
+        }
+        if self.allow_main_record {
+            eprintln!("warning: {}", ALLOW_MAIN_RECORD_DEPRECATION);
         }
 
         // Resolve fields that may come from config when not provided on CLI.
@@ -1479,12 +1483,13 @@ fn read_record_env(
     })
 }
 
-/// Reminder printed when `[post_merge_regen]` is configured: the CircleCI
-/// "PR merged" trigger it depends on is a project setting, not something this
-/// tool can commit for the consumer — see
+/// Reminder printed when `[post_merge_check]` (or the deprecated
+/// `[post_merge_regen]`) is configured: the CircleCI "PR merged" trigger it
+/// depends on is a project setting, not something this tool can commit for the
+/// consumer — see
 /// docs/post-merge-regeneration.md#prerequisite-you-must-configure-the-circleci-trigger-yourself.
-pub(crate) fn post_merge_regen_trigger_reminder() -> String {
-    "[post_merge_regen] is configured — this relocates regen+record for a qualifying PR, \
+pub(crate) fn post_merge_check_trigger_reminder() -> String {
+    "A post-merge check is configured — it checks each qualifying merged PR, \
      but only fires if CircleCI's \"PR merged\" trigger is configured for this project. \
      That trigger is a CircleCI project setting, not something this tool can commit for \
      you. If you have not set it up yet, see:\n  \
@@ -1494,6 +1499,21 @@ pub(crate) fn post_merge_regen_trigger_reminder() -> String {
      (the Config File Path field, if your workflow lives outside config.yml)"
         .to_string()
 }
+
+/// Warning printed when the deprecated `[post_merge_regen]` section is used.
+pub(crate) fn post_merge_regen_deprecation() -> String {
+    "[post_merge_regen] is deprecated: rename it to [post_merge_check]. It now \
+     emits the check-only post-merge chain (build, generate --check, pack, review; \
+     no record or push to main). See docs/post-merge-regeneration.md and \
+     gen-circleci-orb#462."
+        .to_string()
+}
+
+/// Warning printed when the deprecated `--allow-main-record` flag is passed.
+pub(crate) const ALLOW_MAIN_RECORD_DEPRECATION: &str =
+    "--allow-main-record is deprecated and will be removed: CI no longer commits \
+     to main (the post-merge chain is check-only; gen-circleci-orb#462). Regenerated \
+     orb source reaches main through a reviewed PR.";
 
 /// Build the educational message shown when the ambient push is rejected.
 ///
@@ -1825,15 +1845,15 @@ mod tests {
         );
     }
 
-    // ── post_merge_regen_trigger_reminder ───────────────────────────────────
+    // ── post_merge_check_trigger_reminder ───────────────────────────────────
 
-    /// A consumer who configures `[post_merge_regen]` must be told, in the
+    /// A consumer who configures `[post_merge_check]` must be told, in the
     /// tool's own output (not only a doc they may never open), that CircleCI's
     /// "PR merged" trigger is a project setting they must configure
     /// themselves — with both real doc links, so it's actionable immediately.
     #[test]
-    fn post_merge_regen_trigger_reminder_names_prerequisite_and_links_docs() {
-        let msg = post_merge_regen_trigger_reminder();
+    fn post_merge_check_trigger_reminder_names_prerequisite_and_links_docs() {
+        let msg = post_merge_check_trigger_reminder();
         assert!(
             msg.to_lowercase().contains("pr merged"),
             "must name the CircleCI trigger event: {msg}"
