@@ -96,4 +96,4 @@ bin-dir = "{ bin }{ binary-ext }"
 # See docs/RELEASING.md.
 [package.metadata.binstall.signing]
 algorithm = "minisign"
-pubkey = "RWT7tmJx+AsiouyzSmfetl4gQe1Yi1yVerrCGPs0yVlfWi5PaQc1m4tj"
+pubkey = "RWQvqIyhxa0JAbBNTHy9+krvO8Abk4JhQ6jM4Uwc9FOtkqeH4MV2X/Sl"
