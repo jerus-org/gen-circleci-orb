@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- BREAKING: check-only post-merge chain, release gate(pr [#465])
+
 ### Changed
 
 - chore-regenerate orb source missed post-merge(pr [#464])
@@ -1293,6 +1297,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#460]: https://github.com/jerus-org/gen-circleci-orb/pull/460
 [#461]: https://github.com/jerus-org/gen-circleci-orb/pull/461
 [#464]: https://github.com/jerus-org/gen-circleci-orb/pull/464
+[#465]: https://github.com/jerus-org/gen-circleci-orb/pull/465
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.28...HEAD
 [0.1.28]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.27...v0.1.28
 [0.1.27]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.26...v0.1.27
