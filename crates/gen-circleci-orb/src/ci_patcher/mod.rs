@@ -73,13 +73,22 @@ pub struct PatchOpts {
     /// neither `[record]` nor `test_generation` enabled sees the whole
     /// chain drop to `check-ci-wiring` alone. See gen-circleci-orb#367.
     pub test_generation: bool,
-    /// Bash-glob branch-name pattern(s) qualifying a PR whose regen+record
-    /// (and, per `test_generation`, pack/review) is relocated off its own
-    /// branch into `post_merge_workflow`/`post_merge_ci_file` instead of
-    /// running in `build_workflow`. Empty disables the feature entirely —
-    /// zero behavior change from today. See gen-circleci-orb#328.
+    /// Bash-glob branch-name pattern(s) selecting which merged PRs get the
+    /// check-only post-merge chain in `post_merge_workflow`/
+    /// `post_merge_ci_file` (build, `generate --check`, pack, review; never a
+    /// record or push). Empty disables the post-merge chain entirely. See
+    /// gen-circleci-orb#462.
     pub post_merge_branch_patterns: Vec<String>,
-    /// Name of the workflow (within `post_merge_ci_file`) the relocated
+    /// Bash-glob pattern(s) for PR branches on which the validation
+    /// workflow's build-binary/regenerate-orb/pack-orb/review-orb are skipped
+    /// through branch `filters:` (no container starts), because the
+    /// post-merge check covers them. Empty skips nothing.
+    pub validation_skip_patterns: Vec<String>,
+    /// Job in `release_workflow` (release.yml) that must require the managed
+    /// release gate (build, `generate --check`, pack, review). Empty leaves
+    /// release.yml untouched. See gen-circleci-orb#462 (D5).
+    pub release_gate_before: String,
+    /// Name of the workflow (within `post_merge_ci_file`) the check-only
     /// jobs are added to. Only meaningful when
     /// `post_merge_branch_patterns` is non-empty.
     pub post_merge_workflow: String,
@@ -87,10 +96,10 @@ pub struct PatchOpts {
     /// `post_merge_workflow`. Only meaningful when
     /// `post_merge_branch_patterns` is non-empty.
     pub post_merge_ci_file: String,
-    /// Explicit job name(s) for the relocated chain's first job to wait on,
+    /// Explicit job name(s) for the post-merge chain's first job to wait on,
     /// overriding the `pre_existing_job_names` auto-detect (which requires
     /// EVERY job currently in the workflow — wrong the moment a consumer
-    /// places a job after the relocated chain that must instead run after
+    /// places a job after the post-merge chain that must instead run after
     /// it, e.g. a Renovate-PR-rebase-label step gated on the chain's own
     /// push). Empty keeps the auto-detect default.
     pub post_merge_requires: Vec<String>,
@@ -365,6 +374,7 @@ fn block_is_managed_validation(block: &[&str]) -> bool {
         MANAGED_VALIDATION_JOBS
             .iter()
             .chain(MANAGED_POST_MERGE_REGEN_JOBS)
+            .chain(MANAGED_RELEASE_GATE_JOBS)
             .any(|n| t == format!("name: {n}"))
     })
 }
@@ -501,17 +511,35 @@ fn patch_step5_orb_release_workflow(
 /// (via `managed_item_end`) alongside `MANAGED_VALIDATION_JOBS`, so a re-sync
 /// removes and re-inserts them cleanly whether they live in a dedicated file or
 /// (composed) inside `config.yml` alongside the validation block.
+/// `post-merge-regenerate-orb` is the recording job the chain emitted before it
+/// became check-only (gen-circleci-orb#462); it stays listed so `update` removes
+/// it from existing configs.
 const MANAGED_POST_MERGE_REGEN_JOBS: &[&str] = &[
     "post-merge-build-binary",
+    "post-merge-check-orb",
     "post-merge-regenerate-orb",
     "post-merge-pack-orb",
     "post-merge-review-orb",
 ];
 
-/// Patch an arbitrary CircleCI config string, relocating regen+record (and, per
-/// `test_generation`, pack/review) into `opts.post_merge_workflow` — the
-/// workflow a qualifying bot-authored PR's chain runs in post-merge instead of
-/// on its own branch. See gen-circleci-orb#328.
+/// Job names emitted by `patch_release` for the release gate, recognised by
+/// `strip_managed` so a re-sync of release.yml replaces them cleanly.
+const MANAGED_RELEASE_GATE_JOBS: &[&str] = &[
+    "release-gate-build-binary",
+    "release-gate-check-orb",
+    "release-gate-pack-orb",
+    "release-gate-review-orb",
+];
+
+/// The release gate's last job: `[ci].release_gate_before` is made to require it.
+const RELEASE_GATE_FINAL_JOB: &str = "release-gate-review-orb";
+
+/// Patch an arbitrary CircleCI config string, adding the check-only post-merge
+/// chain to `opts.post_merge_workflow`: build the binary, `generate --check`
+/// against `main`, then pack and review the committed orb. It runs once, after
+/// a qualifying PR merges, and never records or pushes — CI does not commit to
+/// `main` (gen-circleci-orb#462). Drift fails the chain, and the fix reaches
+/// `main` through a reviewed PR.
 ///
 /// No-ops when `opts.post_merge_branch_patterns` is empty (feature off).
 /// Idempotent: skips re-inserting when the block is already present.
@@ -519,7 +547,7 @@ const MANAGED_POST_MERGE_REGEN_JOBS: &[&str] = &[
 /// Most consumers do not already run a post-merge workflow (see the
 /// prerequisite in docs/post-merge-regeneration.md), so `content` may be
 /// empty (a brand-new dedicated file), or already valid but missing the
-/// named `workflow` or the orb pins the relocated jobs need — all three are
+/// named `workflow` or the orb pins the post-merge jobs need — all three are
 /// created/added here rather than left as a silent no-op.
 pub fn patch_post_merge_regen(content: &str, opts: &PatchOpts) -> (String, PatchReport) {
     let mut report = PatchReport {
@@ -533,7 +561,7 @@ pub fn patch_post_merge_regen(content: &str, opts: &PatchOpts) -> (String, Patch
     if content.contains("name: post-merge-build-binary") {
         report
             .skipped
-            .push("post-merge-regen workflow steps".to_string());
+            .push("post-merge check workflow steps".to_string());
         return (content.to_string(), report);
     }
     let is_fresh_file = content.trim().is_empty();
@@ -543,9 +571,11 @@ pub fn patch_post_merge_regen(content: &str, opts: &PatchOpts) -> (String, Patch
         content.lines().map(ToString::to_string).collect()
     };
 
-    ensure_post_merge_regen_orb_pins(content, &mut lines, opts, &mut report);
+    // pack/review always run in the check-only chain, so orb-tools is always
+    // needed.
+    ensure_orb_pins(content, &mut lines, opts, true, &mut report);
     ensure_workflow_exists(&mut lines, &opts.post_merge_workflow);
-    // Ensure the relocated chain runs after every job already in the
+    // Ensure the post-merge chain runs after every job already in the
     // workflow, without editing any of their blocks — unless
     // post_merge_requires overrides that (see its doc comment).
     let pre_existing = if opts.post_merge_requires.is_empty() {
@@ -559,7 +589,7 @@ pub fn patch_post_merge_regen(content: &str, opts: &PatchOpts) -> (String, Patch
     insert_block_at(&mut lines, pos, &step_block);
     report
         .insertions
-        .push("post-merge-regen workflow steps".to_string());
+        .push("post-merge check workflow steps".to_string());
 
     let mut output = lines.join("\n");
     if is_fresh_file || content.ends_with('\n') {
@@ -570,7 +600,7 @@ pub fn patch_post_merge_regen(content: &str, opts: &PatchOpts) -> (String, Patch
 
 /// Effective job names (an explicit `name:` override when present, else the
 /// job reference itself) of every job already in `workflow`, in document
-/// order. Read-only: used so the relocated chain can require these jobs,
+/// order. Read-only: used so the post-merge chain can require these jobs,
 /// never to edit them.
 fn pre_existing_job_names(lines: &[String], workflow: &str) -> Vec<String> {
     job_entries_with_end(lines, workflow)
@@ -585,6 +615,15 @@ fn pre_existing_job_names(lines: &[String], workflow: &str) -> Vec<String> {
 /// Shared with `insertion_point_after_required`, which needs a specific
 /// entry's end rather than just its name.
 fn job_entries_with_end(lines: &[String], workflow: &str) -> Vec<(String, usize)> {
+    job_entries(lines, workflow)
+        .into_iter()
+        .map(|(name, _, end)| (name, end))
+        .collect()
+}
+
+/// `(effective name, start, end)` for every job entry in `workflow`'s job
+/// list: `start` is the entry's `- ` line, `end` one past its last line.
+fn job_entries(lines: &[String], workflow: &str) -> Vec<(String, usize, usize)> {
     let Some((jobs_start, jobs_end)) = find_workflow_jobs_bounds(lines, workflow) else {
         return Vec::new();
     };
@@ -617,7 +656,7 @@ fn job_entries_with_end(lines: &[String], workflow: &str) -> Vec<(String, usize)
                     .map(|s| strip_trailing_comment(s.trim()).to_string())
             });
             let name = explicit_name.unwrap_or_else(|| job_name_from_dash_line(&lines[i]));
-            entries.push((name, end));
+            entries.push((name, i, end));
             i = end;
         } else {
             i += 1;
@@ -626,7 +665,7 @@ fn job_entries_with_end(lines: &[String], workflow: &str) -> Vec<(String, usize)
     entries
 }
 
-/// Where the relocated chain's managed block belongs: right after the last
+/// Where the post-merge chain's managed block belongs: right after the last
 /// (by document position) job named in `required`. When `required` is
 /// empty — the workflow had no jobs yet, so `post_merge_requires` fell back
 /// to an empty auto-detect (see `patch_post_merge_regen`) — or names no job
@@ -705,18 +744,18 @@ fn ensure_workflow_exists(lines: &mut Vec<String>, workflow: &str) {
     insert_block_at(lines, pos, &block);
 }
 
-/// Ensure `orbs:` declares `gen-circleci-orb` (always — every relocated job
-/// references it) and `orb-tools` (only when `opts.test_generation`, since
-/// only then do `post-merge-pack-orb`/`review-orb` exist to need it) —
-/// creating the `orbs:` section itself first when the target file doesn't
-/// have one yet. Checks against `content` (the pre-mutation string), so a
+/// Ensure `orbs:` declares `gen-circleci-orb` (always — every managed job in
+/// the file references it) and, when `with_orb_tools`, `orb-tools` (for the
+/// pack/review jobs) — creating the `orbs:` section itself first when the
+/// target file doesn't have one yet. Checks against `content` (the pre-mutation string), so a
 /// pin already declared — hand-authored, or Renovate-owned — is respected
 /// and never overwritten, matching `patch_step0_gen_circleci_orb_orb` /
 /// `patch_step1_orb_tools`'s behaviour for `config.yml`.
-fn ensure_post_merge_regen_orb_pins(
+fn ensure_orb_pins(
     content: &str,
     lines: &mut Vec<String>,
     opts: &PatchOpts,
+    with_orb_tools: bool,
     report: &mut PatchReport,
 ) {
     // Order matters, and must match patch_build's (patch_step1_orb_tools then
@@ -728,7 +767,7 @@ fn ensure_post_merge_regen_orb_pins(
     // order is non-idempotent: the first patch (orb-tools absent yet) and
     // every resync after it (orb-tools already present) would place the
     // gen-circleci-orb block on opposite sides of the orb-tools line.
-    if opts.test_generation {
+    if with_orb_tools {
         if content.contains("orb-tools:") {
             report.skipped.push("orb-tools orb".to_string());
         } else {
@@ -769,7 +808,7 @@ pub fn resync_post_merge_regen(content: &str, opts: &PatchOpts) -> (String, Patc
 /// steps) unless `CIRCLE_BRANCH` matches one of `patterns`. Branch filters are
 /// blocked entirely on a "pr merged" pipeline (see gen-circleci-orb#328's
 /// design notes), so this pre-step is the only way to keep a non-qualifying
-/// merge a no-op — every relocated job carries its own copy, since a halted
+/// merge a no-op — every post-merge job carries its own copy, since a halted
 /// job is still reported successful and would not otherwise block jobs that
 /// `requires:` it.
 fn qualifying_branch_guard_steps(patterns: &[String]) -> Vec<String> {
@@ -807,62 +846,58 @@ fn qualifying_branch_guard_run_step(patterns: &[String]) -> Vec<String> {
     ]
 }
 
-/// Bash `case` guard for the VALIDATION workflow's own build-binary/
-/// regenerate-orb/pack-orb/review-orb: the inverse of
-/// `qualifying_branch_guard_run_step`. When `[post_merge_regen]` is
-/// configured, a branch matching `patterns` is handled entirely by the
-/// relocated post-merge chain instead — so the original chain must halt on
-/// exactly those branches (rather than run and push a regen commit there,
-/// which is the Renovate-freeze bug #328 exists to fix). Every branch NOT
-/// matching `patterns` is unaffected, including `main` (`push_branch_ignore`
-/// already excludes that separately).
-fn post_merge_regen_excluded_branch_guard_steps(patterns: &[String]) -> Vec<String> {
-    let mut steps = vec!["          pre-steps:".to_string()];
-    steps.extend(post_merge_regen_excluded_branch_guard_run_step(patterns));
-    steps
+/// A branch-name bash glob (`*` and `?` wildcards, as in the post-merge guard's
+/// `case` arm) as a CircleCI branch-filter regex, e.g. `renovate/*` ->
+/// `/^renovate\/.*$/`. Every other character matches literally.
+fn branch_glob_to_filter_regex(glob: &str) -> String {
+    let mut re = String::from("/^");
+    for c in glob.chars() {
+        match c {
+            '*' => re.push_str(".*"),
+            '?' => re.push('.'),
+            '\\' | '.' | '+' | '(' | ')' | '[' | ']' | '{' | '}' | '^' | '$' | '|' | '/' => {
+                re.push('\\');
+                re.push(c);
+            }
+            _ => re.push(c),
+        }
+    }
+    re.push_str("$/");
+    re
 }
 
-/// As `post_merge_regen_excluded_branch_guard_steps`, but folded into a
-/// single `pre-steps:` list alongside `attach_workspace` — `pack-orb`/
-/// `review-orb` already carry their own `pre-steps:`, and YAML forbids a
-/// duplicate `pre-steps:` key on the same job invocation. Without this guard
-/// too, a halted (still "successful") build-binary/regenerate-orb would
-/// leave pack-orb/review-orb still running with no workspace ever persisted
-/// — failing outright rather than cleanly no-opping.
-fn post_merge_regen_excluded_branch_guard_pre_steps_with_attach_workspace(
-    patterns: &[String],
-) -> Vec<String> {
-    let mut steps = vec!["          pre-steps:".to_string()];
-    steps.extend(post_merge_regen_excluded_branch_guard_run_step(patterns));
-    steps.push("            - attach_workspace:".to_string());
-    steps.push("                at: .".to_string());
-    steps
+/// Branch-filter entries for `opts.validation_skip_patterns`, as regexes.
+fn validation_skip_filters(opts: &PatchOpts) -> Vec<String> {
+    opts.validation_skip_patterns
+        .iter()
+        .map(|p| branch_glob_to_filter_regex(p))
+        .collect()
 }
 
-/// The `run:` step itself, shared by both wrapping functions above.
-fn post_merge_regen_excluded_branch_guard_run_step(patterns: &[String]) -> Vec<String> {
-    let pattern_arm = patterns.join("|");
-    vec![
-        "            - run:".to_string(),
-        "                name: Check post-merge-regen branch".to_string(),
-        "                command: |".to_string(),
-        "                  case \"$CIRCLE_BRANCH\" in".to_string(),
-        format!(
-            "                    {pattern_arm}) echo \"Relocated to post-merge regen ($CIRCLE_BRANCH) - nothing to do here.\"; circleci-agent step halt ;;"
-        ),
-        "                    *) ;;".to_string(),
-        "                  esac".to_string(),
-    ]
+/// `filters: branches: ignore:` for a validation-workflow orb job: `extra`
+/// (e.g. `main`) plus the skip patterns. Filters stop the job before any
+/// container starts, unlike the `pre-steps` halt the post-merge chain has to
+/// use (filters are unavailable on a "PR merged" pipeline). Emits nothing when
+/// both are empty.
+fn push_validation_branch_ignore(steps: &mut Vec<String>, opts: &PatchOpts, extra: &[&str]) {
+    let skips = validation_skip_filters(opts);
+    let mut ignored: Vec<&str> = extra.to_vec();
+    ignored.extend(skips.iter().map(String::as_str));
+    if !ignored.is_empty() {
+        push_branch_ignore(steps, &ignored);
+    }
 }
 
-/// The relocated post-merge-regen job chain: `post-merge-build-binary` ->
-/// `post-merge-regenerate-orb` (switching onto `main` and allowed to record
-/// there) -> (if `test_generation`) `post-merge-pack-orb` ->
-/// `post-merge-review-orb`. Every job carries the qualifying-branch guard and
-/// no `filters:` block (filters are blocked on a "pr merged" pipeline).
-/// `[record].enabled` is a hard prerequisite of `[post_merge_regen]`
-/// (validated at config-load time), so — unlike `push_build_and_regenerate_steps`
-/// — there is no no-record fallback here.
+/// The check-only post-merge chain: `post-merge-build-binary` ->
+/// `post-merge-check-orb` (`generate --check` on `main`, persisting the
+/// committed orb) -> `post-merge-pack-orb` -> `post-merge-review-orb`. Every
+/// job carries the qualifying-branch guard and no `filters:` block (filters are
+/// blocked on a "PR merged" pipeline). Nothing here records, pushes, loads a
+/// write key or attaches a signing context: a failure means the committed orb
+/// needs a reviewed regeneration PR (gen-circleci-orb#462).
+///
+/// Pack and review always run, whatever `test_generation` says: this is the
+/// one place each merge's orb is packed and reviewed.
 fn post_merge_regen_steps(opts: &PatchOpts, pre_existing: &[String]) -> Vec<String> {
     let orb_dir = &opts.orb_dir;
     let binary = &opts.binary;
@@ -874,8 +909,8 @@ fn post_merge_regen_steps(opts: &PatchOpts, pre_existing: &[String]) -> Vec<Stri
     if !opts.build_executor.is_empty() {
         steps.push(format!("          executor: {}", opts.build_executor));
     }
-    // Run the relocated chain last, after every job already in the
-    // workflow (see pre_existing_job_names).
+    // Run the chain last, after every job already in the workflow (see
+    // pre_existing_job_names).
     if !pre_existing.is_empty() {
         steps.push(format!("          requires: [{}]", pre_existing.join(", ")));
     }
@@ -883,8 +918,10 @@ fn post_merge_regen_steps(opts: &PatchOpts, pre_existing: &[String]) -> Vec<Stri
         &opts.post_merge_branch_patterns,
     ));
 
+    // On a "PR merged" pipeline `checkout` lands on the merged PR's head, so
+    // switch onto `main`: the check is of what landed there.
     steps.push("      - gen-circleci-orb/generate:".to_string());
-    steps.push("          name: post-merge-regenerate-orb".to_string());
+    steps.push("          name: post-merge-check-orb".to_string());
     steps.push(format!("          binary: {binary}"));
     for ns in &opts.namespaces {
         steps.push(format!("          orb_namespace: {ns}"));
@@ -892,59 +929,257 @@ fn post_merge_regen_steps(opts: &PatchOpts, pre_existing: &[String]) -> Vec<Stri
     steps.push(format!("          orb_dir: {orb_dir}"));
     steps.push("          attach_workspace: true".to_string());
     steps.push("          target_branch: main".to_string());
-    steps.push("          allow_main_record: true".to_string());
-    if !opts.record_push_ssh_fingerprint.is_empty() {
-        steps.push(format!(
-            "          ssh_fingerprint: \"{}\"",
-            opts.record_push_ssh_fingerprint
-        ));
-    }
+    steps.push("          check: true".to_string());
     steps.push("          persist_orb_workspace: true".to_string());
-    steps.push(format!(
-        "          context: [{}]",
-        opts.record_contexts.join(", ")
-    ));
     steps.push("          requires: [post-merge-build-binary]".to_string());
     steps.extend(qualifying_branch_guard_steps(
         &opts.post_merge_branch_patterns,
     ));
 
-    if opts.test_generation {
-        steps.push("      - orb-tools/pack:".to_string());
-        steps.push("          name: post-merge-pack-orb".to_string());
-        steps.push("          checkout: false".to_string());
-        steps.push(format!("          source_dir: {orb_dir}/src"));
-        steps.extend(qualifying_branch_guard_pre_steps_with_attach_workspace(
-            &opts.post_merge_branch_patterns,
-        ));
-        steps.push("          requires: [post-merge-regenerate-orb]".to_string());
+    steps.push("      - orb-tools/pack:".to_string());
+    steps.push("          name: post-merge-pack-orb".to_string());
+    steps.push("          checkout: false".to_string());
+    steps.push(format!("          source_dir: {orb_dir}/src"));
+    steps.extend(qualifying_branch_guard_pre_steps_with_attach_workspace(
+        &opts.post_merge_branch_patterns,
+    ));
+    steps.push("          requires: [post-merge-check-orb]".to_string());
 
-        steps.push("      - orb-tools/review:".to_string());
-        steps.push("          name: post-merge-review-orb".to_string());
-        steps.push("          checkout: false".to_string());
-        steps.push(format!("          source_dir: {orb_dir}/src"));
-        steps.extend(qualifying_branch_guard_pre_steps_with_attach_workspace(
-            &opts.post_merge_branch_patterns,
-        ));
-        steps.push("          requires: [post-merge-pack-orb]".to_string());
-    }
+    steps.push("      - orb-tools/review:".to_string());
+    steps.push("          name: post-merge-review-orb".to_string());
+    steps.push("          checkout: false".to_string());
+    steps.push(format!("          source_dir: {orb_dir}/src"));
+    steps.extend(qualifying_branch_guard_pre_steps_with_attach_workspace(
+        &opts.post_merge_branch_patterns,
+    ));
+    steps.push("          requires: [post-merge-pack-orb]".to_string());
 
     steps.push(managed_end("      "));
     steps
 }
 
-/// Patch a release CircleCI config string.
+/// The release gate: `release-gate-build-binary` -> `release-gate-check-orb`
+/// (`generate --check` against the release commit) -> `release-gate-pack-orb`
+/// -> `release-gate-review-orb`. `[ci].release_gate_before` (normally the
+/// approval) is made to require the last of these, so a release that would
+/// publish an out-of-sync or invalid orb stops before anything is published
+/// (gen-circleci-orb#462, D5).
+fn release_gate_steps(opts: &PatchOpts) -> Vec<String> {
+    let orb_dir = &opts.orb_dir;
+    let binary = &opts.binary;
+    let mut steps = vec![managed_begin("      ")];
+
+    steps.push("      - gen-circleci-orb/build_rust_binary:".to_string());
+    steps.push("          name: release-gate-build-binary".to_string());
+    steps.push(format!("          package: {binary}"));
+    if !opts.build_executor.is_empty() {
+        steps.push(format!("          executor: {}", opts.build_executor));
+    }
+
+    steps.push("      - gen-circleci-orb/generate:".to_string());
+    steps.push("          name: release-gate-check-orb".to_string());
+    steps.push(format!("          binary: {binary}"));
+    for ns in &opts.namespaces {
+        steps.push(format!("          orb_namespace: {ns}"));
+    }
+    steps.push(format!("          orb_dir: {orb_dir}"));
+    steps.push("          attach_workspace: true".to_string());
+    steps.push("          check: true".to_string());
+    steps.push("          persist_orb_workspace: true".to_string());
+    steps.push("          requires: [release-gate-build-binary]".to_string());
+
+    steps.push("      - orb-tools/pack:".to_string());
+    steps.push("          name: release-gate-pack-orb".to_string());
+    steps.push("          checkout: false".to_string());
+    steps.push(format!("          source_dir: {orb_dir}/src"));
+    steps.push("          pre-steps:".to_string());
+    steps.push("            - attach_workspace:".to_string());
+    steps.push("                at: .".to_string());
+    steps.push("          requires: [release-gate-check-orb]".to_string());
+
+    steps.push("      - orb-tools/review:".to_string());
+    steps.push(format!("          name: {RELEASE_GATE_FINAL_JOB}"));
+    steps.push("          checkout: false".to_string());
+    steps.push(format!("          source_dir: {orb_dir}/src"));
+    steps.push("          pre-steps:".to_string());
+    steps.push("            - attach_workspace:".to_string());
+    steps.push("                at: .".to_string());
+    steps.push("          requires: [release-gate-pack-orb]".to_string());
+
+    steps.push(managed_end("      "));
+    steps
+}
+
+/// Patch a release CircleCI config string: add the release gate to
+/// `opts.release_workflow` and make `opts.release_gate_before` require it.
 ///
-/// The orb release pipeline (Docker build, orb pack, orb publish) is now wired into
-/// `config.yml` as a tag-triggered `orb-release:` workflow by `patch_build`. Nothing
-/// needs to be added to `release.yml`, so this function is a no-op.
-pub fn patch_release(content: &str, _opts: &PatchOpts) -> (String, PatchReport) {
-    let report = PatchReport {
+/// No-ops when `opts.release_gate_before` is empty. The orb release pipeline
+/// itself (Docker build, orb pack, orb publish) lives in `config.yml` as the
+/// tag-triggered `orb-release:` workflow (see `patch_build`); the gate runs
+/// earlier, in the crate release, before its approval.
+pub fn patch_release(content: &str, opts: &PatchOpts) -> (String, PatchReport) {
+    let mut report = PatchReport {
         insertions: vec![],
         skipped: vec![],
         warnings: vec![],
     };
-    (content.to_string(), report)
+    if opts.release_gate_before.is_empty() {
+        return (content.to_string(), report);
+    }
+    if content.contains("name: release-gate-build-binary") {
+        report.skipped.push("release gate".to_string());
+        return (content.to_string(), report);
+    }
+    let mut lines: Vec<String> = content.lines().map(ToString::to_string).collect();
+    let Some(pos) = find_workflow_jobs_end(&lines, &opts.release_workflow) else {
+        report.warnings.push(format!(
+            "release gate not added: workflow `{}` (with a `jobs:` list) not found in \
+             release.yml — check [ci].release_workflow",
+            opts.release_workflow
+        ));
+        return (content.to_string(), report);
+    };
+    insert_block_at(&mut lines, pos, &release_gate_steps(opts));
+    if !add_requirement(
+        &mut lines,
+        &opts.release_workflow,
+        &opts.release_gate_before,
+        RELEASE_GATE_FINAL_JOB,
+    ) {
+        report.warnings.push(format!(
+            "release gate added, but no job named `{}` was found in workflow `{}` to \
+             require it — nothing waits on the gate; check [ci].release_gate_before",
+            opts.release_gate_before, opts.release_workflow
+        ));
+    }
+    // Pins go in last: they only add lines above `workflows:`, so the
+    // workflow lookups above see the file as the consumer wrote it.
+    ensure_orb_pins(content, &mut lines, opts, true, &mut report);
+    report.insertions.push("release gate".to_string());
+
+    let mut output = lines.join("\n");
+    if content.ends_with('\n') {
+        output.push('\n');
+    }
+    (output, report)
+}
+
+/// Re-sync release.yml's release gate: strip the managed gate (jobs, the
+/// managed gen-circleci-orb pin, and the gate requirement added to
+/// `release_gate_before`) and re-insert it via `patch_release`.
+pub fn resync_release(content: &str, opts: &PatchOpts) -> (String, PatchReport) {
+    let without_requirement = remove_requirement(content, RELEASE_GATE_FINAL_JOB);
+    let (stripped, warnings) = strip_managed(&without_requirement);
+    let (out, mut report) = patch_release(&stripped, opts);
+    report.warnings.extend(warnings);
+    (out, report)
+}
+
+/// Make the job named `job` in `workflow` require `required`, editing only its
+/// `requires:`: appended to an inline `[..]` list or a block list, or added as
+/// a new `requires: [required]` line when the job has none. Returns `false`
+/// when no such job exists. A no-op (returning `true`) when it already
+/// requires `required`.
+fn add_requirement(lines: &mut Vec<String>, workflow: &str, job: &str, required: &str) -> bool {
+    let Some((jobs_start, _)) = find_workflow_jobs_bounds(lines, workflow) else {
+        return false;
+    };
+    let Some((start, end)) = job_entries(lines, workflow)
+        .into_iter()
+        .find(|(name, _, _)| name == job)
+        .map(|(_, start, end)| (start, end))
+    else {
+        return false;
+    };
+    let param_indent = indent_of(&lines[jobs_start]) + 6;
+    let pad = " ".repeat(param_indent);
+    let requires_at = (start + 1..end).find(|&j| {
+        indent_of(&lines[j]) == param_indent && lines[j].trim_start().starts_with("requires:")
+    });
+    let Some(r) = requires_at else {
+        // A bare `- job` entry has no mapping to add a key to; turn it into one.
+        if !lines[start].trim_end().ends_with(':') {
+            let dash = lines[start].trim_end().to_string();
+            lines[start] = format!("{dash}:");
+        }
+        lines.insert(start + 1, format!("{pad}requires: [{required}]"));
+        return true;
+    };
+    let value = lines[r].trim_start()["requires:".len()..]
+        .trim()
+        .to_string();
+    if let Some(inner) = value.strip_prefix('[').and_then(|v| v.strip_suffix(']')) {
+        let mut items: Vec<String> = inner
+            .split(',')
+            .map(|i| i.trim().to_string())
+            .filter(|i| !i.is_empty())
+            .collect();
+        if !items.iter().any(|i| i == required) {
+            items.push(required.to_string());
+        }
+        lines[r] = format!("{pad}requires: [{}]", items.join(", "));
+        return true;
+    }
+    // Block list: items follow at a deeper indent.
+    let mut last = r;
+    let mut item_indent = param_indent + 2;
+    for (j, line) in lines.iter().enumerate().take(end).skip(r + 1) {
+        if line.trim().is_empty() {
+            continue;
+        }
+        if indent_of(line) <= param_indent || !line.trim_start().starts_with("- ") {
+            break;
+        }
+        if line.trim_start() == format!("- {required}") {
+            return true;
+        }
+        item_indent = indent_of(line);
+        last = j;
+    }
+    lines.insert(last + 1, format!("{}- {required}", " ".repeat(item_indent)));
+    true
+}
+
+/// Remove every reference to `required` from `requires:` lists — the inverse
+/// of `add_requirement`, keyed on the gate job's own (managed) name rather
+/// than on any position. An inline list emptied by the removal is dropped
+/// whole, since the line was ours.
+fn remove_requirement(content: &str, required: &str) -> String {
+    let mut out: Vec<String> = Vec::new();
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+        if trimmed == format!("- {required}") {
+            continue;
+        }
+        if let Some(value) = trimmed.strip_prefix("requires:") {
+            if let Some(inner) = value
+                .trim()
+                .strip_prefix('[')
+                .and_then(|v| v.strip_suffix(']'))
+            {
+                let items: Vec<&str> = inner
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|i| !i.is_empty())
+                    .collect();
+                if items.contains(&required) {
+                    let kept: Vec<&str> = items.into_iter().filter(|i| *i != required).collect();
+                    if kept.is_empty() {
+                        continue;
+                    }
+                    let pad = &line[..line.len() - trimmed.len()];
+                    out.push(format!("{pad}requires: [{}]", kept.join(", ")));
+                    continue;
+                }
+            }
+        }
+        out.push(line.to_string());
+    }
+    let mut s = out.join("\n");
+    if content.ends_with('\n') {
+        s.push('\n');
+    }
+    s
 }
 
 /// Apply patches to CI config files on disk. Under `WriteMode::Preview` or
@@ -1123,11 +1358,7 @@ fn push_build_and_regenerate_steps(steps: &mut Vec<String>, opts: &PatchOpts) {
     if !opts.build_executor.is_empty() {
         steps.push(format!("          executor: {}", opts.build_executor));
     }
-    if !opts.post_merge_branch_patterns.is_empty() {
-        steps.extend(post_merge_regen_excluded_branch_guard_steps(
-            &opts.post_merge_branch_patterns,
-        ));
-    }
+    push_validation_branch_ignore(steps, opts, &[]);
 
     // regenerate-orb — regenerate the orb from the freshly-built binary.
     //
@@ -1177,12 +1408,8 @@ fn push_build_and_regenerate_steps(steps: &mut Vec<String>, opts: &PatchOpts) {
     // The orb chain is a no-op on `main` (can't push; the orb-release verify gate
     // covers publish-time drift). Run on PR branches only; the regen still
     // validates on forked PRs (the binary's branch guard skips the push there).
-    push_branch_ignore(steps, &["main"]);
-    if !opts.post_merge_branch_patterns.is_empty() {
-        steps.extend(post_merge_regen_excluded_branch_guard_steps(
-            &opts.post_merge_branch_patterns,
-        ));
-    }
+    // Skip-pattern branches (e.g. Renovate) are left to the post-merge check.
+    push_validation_branch_ignore(steps, opts, &["main"]);
 }
 
 /// check-ci-wiring — the self-pin wiring check, isolated in its own job so it
@@ -1198,24 +1425,14 @@ fn push_check_ci_wiring_step(steps: &mut Vec<String>) {
     push_branch_ignore(steps, &["main"]);
 }
 
-/// `pre-steps:` for a validation-workflow job that attaches the workspace
-/// (`pack-orb`/`review-orb`): plain `attach_workspace` when
-/// `[post_merge_regen]` is off, or that folded in with the exclusion guard
-/// (see `post_merge_regen_excluded_branch_guard_steps`'s doc comment) when
-/// it's on — shared so `pack-orb` and `review-orb` don't each hand-roll the
-/// same two-way branch.
-fn pack_review_pre_steps(opts: &PatchOpts) -> Vec<String> {
-    if opts.post_merge_branch_patterns.is_empty() {
-        vec![
-            "          pre-steps:".to_string(),
-            "            - attach_workspace:".to_string(),
-            "                at: .".to_string(),
-        ]
-    } else {
-        post_merge_regen_excluded_branch_guard_pre_steps_with_attach_workspace(
-            &opts.post_merge_branch_patterns,
-        )
-    }
+/// `pre-steps:` for a validation-workflow job that reads the workspace
+/// (`pack-orb`/`review-orb`).
+fn pack_review_pre_steps() -> Vec<String> {
+    vec![
+        "          pre-steps:".to_string(),
+        "            - attach_workspace:".to_string(),
+        "                at: .".to_string(),
+    ]
 }
 
 /// pack-orb/review-orb reading the freshly-generated workspace artifact.
@@ -1230,18 +1447,18 @@ fn push_live_pack_and_review_steps(steps: &mut Vec<String>, opts: &PatchOpts) {
     steps.push("          name: pack-orb".to_string());
     steps.push("          checkout: false".to_string());
     steps.push(format!("          source_dir: {orb_dir}/src"));
-    steps.extend(pack_review_pre_steps(opts));
+    steps.extend(pack_review_pre_steps());
     steps.push("          requires: [regenerate-orb]".to_string());
-    push_branch_ignore(steps, &["main"]);
+    push_validation_branch_ignore(steps, opts, &["main"]);
 
     // orb-tools/review (best-practice review of the regenerated, packed orb)
     steps.push("      - orb-tools/review:".to_string());
     steps.push("          name: review-orb".to_string());
     steps.push("          checkout: false".to_string());
     steps.push(format!("          source_dir: {orb_dir}/src"));
-    steps.extend(pack_review_pre_steps(opts));
+    steps.extend(pack_review_pre_steps());
     steps.push("          requires: [pack-orb]".to_string());
-    push_branch_ignore(steps, &["main"]);
+    push_validation_branch_ignore(steps, opts, &["main"]);
 }
 
 // ── orb-release helpers (tag-triggered, lives in config.yml) ─────────────────
@@ -1446,6 +1663,8 @@ mod tests {
             post_merge_workflow: String::new(),
             post_merge_ci_file: String::new(),
             post_merge_requires: vec![],
+            validation_skip_patterns: vec![],
+            release_gate_before: String::new(),
         }
     }
 
@@ -1777,7 +1996,7 @@ mod tests {
     // approval-triggered inline jobs that were previously added to release.yml.
 
     #[test]
-    fn patch_release_is_noop() {
+    fn patch_release_is_noop_without_a_release_gate() {
         let fixture = RELEASE_FIXTURE;
         let (output, report) = patch_release(fixture, &make_opts());
         assert_eq!(
@@ -1794,6 +2013,139 @@ mod tests {
             "patch_release must report nothing skipped: {:?}",
             report.skipped
         );
+    }
+
+    // ── patch_release: release gate (gen-circleci-orb#462, D5) ────────────────
+
+    const GATED_RELEASE_FIXTURE: &str = "\
+version: 2.1
+
+orbs:
+  toolkit: jerus-org/circleci-toolkit@8.0.1
+
+workflows:
+  release:
+    jobs:
+      - toolkit/calculate_versions:
+          name: calculate-versions
+
+      - approve-release:
+          type: approval
+          requires: [calculate-versions]
+
+      - toolkit/release_crate:
+          name: release-mytool
+          requires: [approve-release]
+";
+
+    fn gated_opts() -> PatchOpts {
+        PatchOpts {
+            release_gate_before: "approve-release".to_string(),
+            ..make_opts()
+        }
+    }
+
+    #[test]
+    fn patch_release_adds_the_gate_before_the_approval() {
+        let (output, report) = patch_release(GATED_RELEASE_FIXTURE, &gated_opts());
+        assert!(report.insertions.contains(&"release gate".to_string()));
+        assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+        for job in MANAGED_RELEASE_GATE_JOBS {
+            assert!(output.contains(&format!("name: {job}")), "{job}:\n{output}");
+        }
+        assert!(
+            output.contains("      - approve-release:\n          type: approval\n          requires: [calculate-versions, release-gate-review-orb]"),
+            "the approval must wait on the gate:\n{output}"
+        );
+        assert!(output.contains("          check: true"), "{output}");
+        assert!(
+            output.contains("orb-tools: circleci/orb-tools@"),
+            "{output}"
+        );
+        assert!(
+            output.contains("gen-circleci-orb: jerus-org/gen-circleci-orb@"),
+            "{output}"
+        );
+        // The release itself is untouched: it still requires only the approval.
+        assert!(output.contains("name: release-mytool\n          requires: [approve-release]"));
+    }
+
+    #[test]
+    fn patch_release_gate_never_records_or_pushes() {
+        let opts = PatchOpts {
+            record_contexts: vec!["release".to_string()],
+            record_push_ssh_fingerprint: "SHA256:abc".to_string(),
+            ..gated_opts()
+        };
+        let (output, _) = patch_release(GATED_RELEASE_FIXTURE, &opts);
+        let gate = &output[output.find("release-gate-build-binary").unwrap()..];
+        for forbidden in ["ssh_fingerprint", "allow_main_record", "context:"] {
+            assert!(!gate.contains(forbidden), "`{forbidden}` in gate:\n{gate}");
+        }
+    }
+
+    #[rstest]
+    #[case::block_list(
+        "      - approve-release:\n          type: approval\n          requires:\n            - calculate-versions\n",
+        "          requires:\n            - calculate-versions\n            - release-gate-review-orb\n"
+    )]
+    #[case::no_requires(
+        "      - approve-release:\n          type: approval\n",
+        "      - approve-release:\n          requires: [release-gate-review-orb]\n          type: approval\n"
+    )]
+    fn patch_release_adds_the_requirement_to_any_requires_shape(
+        #[case] job: &str,
+        #[case] expected: &str,
+    ) {
+        let content = format!(
+            "version: 2.1\n\norbs:\n  toolkit: jerus-org/circleci-toolkit@8.0.1\n\nworkflows:\n  release:\n    jobs:\n      - toolkit/calculate_versions:\n          name: calculate-versions\n{job}"
+        );
+        let (output, _) = patch_release(&content, &gated_opts());
+        assert!(output.contains(expected), "{output}");
+        let (resynced, _) = resync_release(&output, &gated_opts());
+        assert_eq!(resynced, output, "resync must reproduce the same file");
+    }
+
+    #[test]
+    fn resync_release_is_idempotent_and_reversible() {
+        let opts = gated_opts();
+        let (once, _) = resync_release(GATED_RELEASE_FIXTURE, &opts);
+        let (twice, report) = resync_release(&once, &opts);
+        assert_eq!(once, twice, "a second resync must be a no-op");
+        assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+        // Stripping the gate restores the approval's own requires exactly.
+        let stripped = strip_managed(&remove_requirement(&once, RELEASE_GATE_FINAL_JOB)).0;
+        assert!(
+            stripped
+                .contains("          type: approval\n          requires: [calculate-versions]\n"),
+            "{stripped}"
+        );
+        assert!(!stripped.contains("release-gate"), "{stripped}");
+    }
+
+    #[test]
+    fn patch_release_warns_when_the_gated_job_is_missing() {
+        let opts = PatchOpts {
+            release_gate_before: "approve-it".to_string(),
+            ..make_opts()
+        };
+        let (_, report) = patch_release(GATED_RELEASE_FIXTURE, &opts);
+        assert!(
+            report.warnings.iter().any(|w| w.contains("approve-it")),
+            "{:?}",
+            report.warnings
+        );
+    }
+
+    #[test]
+    fn patch_release_warns_and_changes_nothing_when_the_workflow_is_missing() {
+        let opts = PatchOpts {
+            release_workflow: "publish".to_string(),
+            ..gated_opts()
+        };
+        let (output, report) = patch_release(GATED_RELEASE_FIXTURE, &opts);
+        assert_eq!(output, GATED_RELEASE_FIXTURE);
+        assert!(report.warnings.iter().any(|w| w.contains("publish")));
     }
 
     // ── patch_build: orb-release jobs in config.yml ───────────────────────────
@@ -2907,72 +3259,82 @@ workflows:
         );
     }
 
-    // ── patch_build excludes post_merge_regen branches from validation ─────────
+    // ── patch_build skips the validation chain on skip-pattern branches ────────
 
+    /// The validation chain's copy of the orb jobs is skipped on a
+    /// skip-pattern branch (e.g. Renovate) by branch `filters:`, so no
+    /// container starts — not by a `pre-steps` halt, which still paid for
+    /// spin-up on every job (gen-circleci-orb#462, step 0 baseline).
     #[test]
-    fn patch_build_guards_validation_regen_against_post_merge_regen_branches() {
-        // gen-circleci-orb#328 follow-up: patch_post_merge_regen relocates the
-        // regen+record chain into the post-merge workflow, but until now
-        // push_build_and_regenerate_steps (the VALIDATION workflow's own
-        // build-binary/regenerate-orb) had no awareness of
-        // post_merge_branch_patterns at all — it only excluded `main`. That
-        // left the original chain still running (and still pushing) on a
-        // qualifying branch (e.g. renovate/*), so the Renovate-freeze bug
-        // this feature exists to fix was never actually fixed, only
-        // duplicated by a redundant post-merge run.
+    fn patch_build_skips_validation_regen_on_skip_branches_with_filters() {
         let opts = PatchOpts {
-            post_merge_branch_patterns: vec!["renovate/*".to_string()],
-            post_merge_workflow: "update_prlog".to_string(),
-            post_merge_ci_file: "update_prlog.yml".to_string(),
-            // needs_generation_regen must stay true (via record_contexts)
-            // with test_generation off, so this test isolates
-            // build-binary/regenerate-orb from pack-orb/review-orb (covered
-            // separately below).
+            validation_skip_patterns: vec!["renovate/*".to_string()],
+            // needs_generation_regen stays true (via record_contexts) with
+            // test_generation off, isolating build-binary/regenerate-orb.
             record_contexts: vec!["release".to_string()],
             test_generation: false,
             ..make_opts()
         };
         let (output, _report) = patch_build(BUILD_FIXTURE_NO_JOBS, &opts);
-        let halt_count = output.matches("circleci-agent step halt").count();
-        assert_eq!(
-            halt_count, 2,
-            "expected a qualifying-branch halt guard on both build-binary \
-             and regenerate-orb (the validation chain's own copy, mirroring \
-             the relocated post-merge chain's per-job guards), got \
-             {halt_count} in:\n{output}"
+        assert!(
+            !output.contains("circleci-agent step halt"),
+            "the validation chain must not use a pre-steps halt:\n{output}"
         );
-        let pattern_count = output.matches("renovate/*").count();
+        let filter_count = output.matches(r"- /^renovate\/.*$/").count();
         assert_eq!(
-            pattern_count, 2,
-            "expected the configured post_merge_branch_patterns to appear \
-             in both jobs' guards, got {pattern_count} in:\n{output}"
+            filter_count, 2,
+            "expected the skip pattern as a branch-ignore filter on both \
+             build-binary and regenerate-orb, got {filter_count} in:\n{output}"
         );
     }
 
     #[test]
-    fn patch_build_guards_pack_and_review_against_post_merge_regen_branches() {
-        // Code-review finding on this fix (2026-09-14): pack-orb/review-orb
-        // (push_live_pack_and_review_steps, only emitted when
-        // opts.test_generation is true) were left unguarded. Since they
-        // `requires: [regenerate-orb]`/`requires: [pack-orb]` and a halted
-        // job reports success, they would still run on a qualifying branch
-        // after their upstream halted — with no workspace persisted and no
-        // checkout, failing outright rather than cleanly no-opping.
+    fn patch_build_skips_pack_and_review_on_skip_branches_with_filters() {
         let opts = PatchOpts {
-            post_merge_branch_patterns: vec!["renovate/*".to_string()],
+            validation_skip_patterns: vec!["renovate/*".to_string()],
+            test_generation: true,
+            ..make_opts()
+        };
+        let (output, _report) = patch_build(BUILD_FIXTURE_NO_JOBS, &opts);
+        let filter_count = output.matches(r"- /^renovate\/.*$/").count();
+        assert_eq!(
+            filter_count, 4,
+            "expected the skip filter on all four validation-chain jobs \
+             (build-binary, regenerate-orb, pack-orb, review-orb), got \
+             {filter_count} in:\n{output}"
+        );
+        assert!(
+            !output.contains("circleci-agent step halt"),
+            "pack-orb/review-orb must not carry a halt guard:\n{output}"
+        );
+    }
+
+    /// The post-merge check's branch patterns don't skip anything in the
+    /// validation workflow by themselves: `["*"]` checks every merge while
+    /// every PR is still regenerated and recorded on its own branch.
+    #[test]
+    fn patch_build_post_merge_patterns_alone_skip_nothing() {
+        let opts = PatchOpts {
+            post_merge_branch_patterns: vec!["*".to_string()],
             post_merge_workflow: "update_prlog".to_string(),
             post_merge_ci_file: "update_prlog.yml".to_string(),
             test_generation: true,
             ..make_opts()
         };
         let (output, _report) = patch_build(BUILD_FIXTURE_NO_JOBS, &opts);
-        let halt_count = output.matches("circleci-agent step halt").count();
-        assert_eq!(
-            halt_count, 4,
-            "expected a halt guard on all four validation-chain jobs \
-             (build-binary, regenerate-orb, pack-orb, review-orb) when \
-             test_generation is true, got {halt_count} in:\n{output}"
+        assert!(
+            !output.contains("                - /^"),
+            "no skip filter expected without validation_skip_patterns:\n{output}"
         );
+        assert!(!output.contains("circleci-agent step halt"), "{output}");
+    }
+
+    #[rstest]
+    #[case("renovate/*", r"/^renovate\/.*$/")]
+    #[case("dependabot/*", r"/^dependabot\/.*$/")]
+    #[case("release-?.x", r"/^release-.\.x$/")]
+    fn branch_glob_to_filter_regex_translates_wildcards(#[case] glob: &str, #[case] regex: &str) {
+        assert_eq!(branch_glob_to_filter_regex(glob), regex);
     }
 
     #[test]
@@ -3496,7 +3858,7 @@ workflows:
         assert!(
             summary
                 .iter()
-                .any(|s| s.contains("update_prlog.yml") && s.contains("post-merge-regen")),
+                .any(|s| s.contains("update_prlog.yml") && s.contains("post-merge check")),
             "summary must report the new file: {summary:?}"
         );
         let written = std::fs::read_to_string(dir.path().join("update_prlog.yml")).unwrap();
@@ -3542,28 +3904,55 @@ workflows:
     }
 
     #[test]
-    fn patch_post_merge_regen_inserts_relocated_chain_into_named_workflow() {
+    fn patch_post_merge_regen_inserts_check_only_chain_into_named_workflow() {
         let opts = opts_with_post_merge_regen();
         let (output, report) = patch_post_merge_regen(UPDATE_PRLOG_FIXTURE, &opts);
         assert!(!report.insertions.is_empty());
-        assert!(
-            output.contains("name: post-merge-build-binary"),
-            "must insert the relocated build-binary job:\n{output}"
-        );
-        assert!(
-            output.contains("name: post-merge-regenerate-orb"),
-            "must insert the relocated generate job:\n{output}"
-        );
+        for job in [
+            "post-merge-build-binary",
+            "post-merge-check-orb",
+            "post-merge-pack-orb",
+            "post-merge-review-orb",
+        ] {
+            assert!(
+                output.contains(&format!("name: {job}")),
+                "must insert {job}:\n{output}"
+            );
+        }
         assert!(
             output.contains("target_branch: main"),
-            "the relocated generate job must switch onto main:\n{output}"
+            "the check must run against main:\n{output}"
         );
         assert!(
-            output.contains("allow_main_record: true"),
-            "the relocated generate job must allow recording on main:\n{output}"
+            output.contains("          check: true"),
+            "the generate job must run in check mode:\n{output}"
         );
         // The pre-existing job in the workflow must be preserved untouched.
         assert!(output.contains("toolkit/update_prlog:"));
+    }
+
+    /// CI never commits to main (gen-circleci-orb#462, D1): nothing in the
+    /// post-merge chain records, loads a write key or attaches the signing
+    /// context, even with `[record]` fully configured.
+    #[test]
+    fn patch_post_merge_regen_chain_never_records_or_pushes() {
+        let opts = PatchOpts {
+            record_push_ssh_fingerprint: "SHA256:abc".to_string(),
+            ..opts_with_post_merge_regen()
+        };
+        let (output, _) = patch_post_merge_regen(UPDATE_PRLOG_FIXTURE, &opts);
+        for forbidden in [
+            "allow_main_record",
+            "ssh_fingerprint",
+            "context: [release]",
+            "post-merge-regenerate-orb",
+            "no_record",
+        ] {
+            assert!(
+                !output.contains(forbidden),
+                "post-merge chain must not contain `{forbidden}`:\n{output}"
+            );
+        }
     }
 
     #[test]
@@ -3773,7 +4162,7 @@ workflows:
           context: [pcu-app]
       - toolkit/label:
           name: label-oldest-renovate-pr
-          requires: [post-merge-regenerate-orb]
+          requires: [post-merge-check-orb]
 ";
         let opts = PatchOpts {
             post_merge_requires: vec!["update-prlog-on-main".to_string()],
@@ -3788,10 +4177,10 @@ workflows:
         assert!(
             !output.contains("requires: [update-prlog-on-main, label-oldest-renovate-pr]"),
             "must not fold the trailing job into requires: (that would be \
-             circular — it itself requires post-merge-regenerate-orb):\n{output}"
+             circular — it itself requires post-merge-check-orb):\n{output}"
         );
         // The trailing job is preserved untouched.
-        assert!(output.contains("requires: [post-merge-regenerate-orb]"));
+        assert!(output.contains("requires: [post-merge-check-orb]"));
         // PR #405 review finding: the managed block must land right after
         // the job(s) named in post_merge_requires, not unconditionally at
         // the absolute end of the job list — otherwise a hand-added
@@ -3838,7 +4227,7 @@ workflows:
         };
         let (first, _) = resync_post_merge_regen(content, &opts);
         let with_trailing_job = format!(
-            "{first}      - toolkit/label:\n          name: label-oldest-renovate-pr\n          requires: [post-merge-regenerate-orb]\n"
+            "{first}      - toolkit/label:\n          name: label-oldest-renovate-pr\n          requires: [post-merge-check-orb]\n"
         );
         let (resynced, _) = resync_post_merge_regen(&with_trailing_job, &opts);
         let block_pos = resynced
@@ -3910,7 +4299,7 @@ workflows:
     fn patch_post_merge_regen_leaves_relocated_jobs_own_internal_requires_untouched() {
         // The wiring only touches post-merge-build-binary's own requires: —
         // never rewrites the chain's other internal requires: (e.g.
-        // post-merge-regenerate-orb requiring post-merge-build-binary).
+        // post-merge-check-orb requiring post-merge-build-binary).
         let opts = opts_with_post_merge_regen();
         let (output, _) = patch_post_merge_regen(UPDATE_PRLOG_FIXTURE, &opts);
         assert_eq!(
@@ -3938,32 +4327,24 @@ workflows:
         );
     }
 
+    /// Pack and review run in every post-merge check — it is the one place a
+    /// merge's orb is packed and reviewed — so orb-tools is always declared,
+    /// whatever `test_generation` says.
     #[rstest]
     #[case::test_generation_true(true)]
     #[case::test_generation_false(false)]
-    fn patch_post_merge_regen_orb_tools_pin_follows_test_generation(#[case] test_generation: bool) {
-        // A single real input (test_generation) determines pin presence —
-        // there is no second, independently-settable variable here, so the
-        // expectation is derived from that one input directly rather than
-        // hand-picked per case. That removes the possibility PR #402 review
-        // flagged: a prior version of this test took `expect_pin` as its own
-        // #[case] parameter, which implied test_generation and pin presence
-        // could vary independently (four combinations) when in fact only two
-        // states exist — the other two were never reachable, not merely
-        // untested.
+    fn patch_post_merge_regen_always_declares_orb_tools(#[case] test_generation: bool) {
         let opts = PatchOpts {
             test_generation,
             ..opts_with_post_merge_regen()
         };
         let (output, _) = patch_post_merge_regen(UPDATE_PRLOG_FIXTURE, &opts);
-        let has_pin = output.contains(&format!(
-            "orb-tools: circleci/orb-tools@{}",
-            opts.orb_tools_version
-        ));
-        assert_eq!(
-            has_pin, test_generation,
-            "post-merge-pack-orb/review-orb need orb-tools declared only when \
-             test_generation is true:\n{output}"
+        assert!(
+            output.contains(&format!(
+                "orb-tools: circleci/orb-tools@{}",
+                opts.orb_tools_version
+            )),
+            "post-merge-pack-orb/review-orb need orb-tools declared:\n{output}"
         );
     }
 
@@ -4024,8 +4405,8 @@ workflows:
         let guard_count = output.matches("circleci-agent step halt").count();
         assert_eq!(
             guard_count, 4,
-            "every relocated job (build-binary, regenerate-orb, pack-orb, \
-             review-orb — test_generation defaults true) must carry its own \
+            "every post-merge job (build-binary, check-orb, pack-orb, \
+             review-orb) must carry its own \
              qualifying-branch guard, not just the first:\n{output}"
         );
         assert!(output.contains("case \"$CIRCLE_BRANCH\" in"));
@@ -4035,25 +4416,59 @@ workflows:
     #[rstest]
     #[case::test_generation_false(false)]
     #[case::test_generation_true(true)]
-    fn patch_post_merge_regen_pack_review_follows_test_generation(#[case] test_generation: bool) {
-        // Same fix as the orb-tools-pin test above (PR #402 review): derive
-        // expected presence from the one real input instead of a second,
-        // independently-chosen #[case] parameter that implied a 4-state
-        // matrix which doesn't actually exist.
+    fn patch_post_merge_regen_always_packs_and_reviews(#[case] test_generation: bool) {
         let opts = PatchOpts {
             test_generation,
             ..opts_with_post_merge_regen()
         };
         let (output, _) = patch_post_merge_regen(UPDATE_PRLOG_FIXTURE, &opts);
-        assert_eq!(
-            output.contains("name: post-merge-pack-orb"),
-            test_generation,
-            "post-merge-pack-orb presence must follow test_generation:\n{output}"
+        assert!(output.contains("name: post-merge-pack-orb"), "{output}");
+        assert!(output.contains("name: post-merge-review-orb"), "{output}");
+    }
+
+    /// A config wired by an earlier release carries the recording chain
+    /// (`post-merge-regenerate-orb` with `allow_main_record`); `update`
+    /// replaces it with the check-only chain.
+    #[test]
+    fn resync_post_merge_regen_replaces_the_old_recording_chain() {
+        let old = format!(
+            "{UPDATE_PRLOG_FIXTURE}      # >>> gen-circleci-orb (managed — edits overwritten by 'gen-circleci-orb update')
+      - gen-circleci-orb/build_rust_binary:
+          name: post-merge-build-binary
+          package: mytool
+          requires: [toolkit/update_prlog]
+      - gen-circleci-orb/generate:
+          name: post-merge-regenerate-orb
+          binary: mytool
+          target_branch: main
+          allow_main_record: true
+          context: [release]
+          requires: [post-merge-build-binary]
+      # <<< gen-circleci-orb
+"
         );
+        let opts = opts_with_post_merge_regen();
+        let (resynced, _) = resync_post_merge_regen(&old, &opts);
+        assert!(
+            !resynced.contains("post-merge-regenerate-orb"),
+            "{resynced}"
+        );
+        assert!(!resynced.contains("allow_main_record"), "{resynced}");
+        assert!(
+            resynced.contains("name: post-merge-check-orb"),
+            "{resynced}"
+        );
+        let (fresh, _) = resync_post_merge_regen(UPDATE_PRLOG_FIXTURE, &opts);
         assert_eq!(
-            output.contains("name: post-merge-review-orb"),
-            test_generation,
-            "post-merge-review-orb presence must follow test_generation:\n{output}"
+            resynced
+                .lines()
+                .filter(|l| !l.contains("orbs") && !l.contains("@"))
+                .collect::<Vec<_>>(),
+            fresh
+                .lines()
+                .filter(|l| !l.contains("orbs") && !l.contains("@"))
+                .collect::<Vec<_>>(),
+            "the resynced workflow must match a fresh insertion"
         );
     }
 
@@ -4095,7 +4510,7 @@ workflows:
         // Simulate a consumer hand-adding a trailing job after the block,
         // then resyncing again (e.g. via `gen-circleci-orb update`).
         let with_trailing_job = format!(
-            "{first}      - toolkit/label:\n          name: label-oldest-renovate-pr\n          requires: [post-merge-regenerate-orb]\n"
+            "{first}      - toolkit/label:\n          name: label-oldest-renovate-pr\n          requires: [post-merge-check-orb]\n"
         );
         let (resynced, _) = resync_post_merge_regen(&with_trailing_job, &opts);
         assert!(
@@ -4109,41 +4524,6 @@ workflows:
         assert!(
             resynced.contains("label-oldest-renovate-pr"),
             "the trailing job itself must be preserved:\n{resynced}"
-        );
-    }
-
-    #[test]
-    fn resync_post_merge_regen_toggles_pack_review_when_test_generation_flips() {
-        // PR #402 review question: the two rstest cases above only exercise
-        // patch_post_merge_regen fresh, from opts alone — they don't say
-        // what happens to an ALREADY-wired file when test_generation flips
-        // later. The managed block (post-merge-build-binary through
-        // post-merge-review-orb) sits entirely between markers, so a resync
-        // (strip then re-patch) correctly rebuilds it from the new opts:
-        // pack/review appear or disappear across the flip, not just at
-        // first-insert time.
-        let on = PatchOpts {
-            test_generation: true,
-            ..opts_with_post_merge_regen()
-        };
-        let off = PatchOpts {
-            test_generation: false,
-            ..opts_with_post_merge_regen()
-        };
-
-        let (with_pack_review, _) = resync_post_merge_regen(UPDATE_PRLOG_FIXTURE, &on);
-        assert!(with_pack_review.contains("name: post-merge-pack-orb"));
-
-        let (flipped_off, _) = resync_post_merge_regen(&with_pack_review, &off);
-        assert!(
-            !flipped_off.contains("post-merge-pack-orb"),
-            "resync must remove pack/review once test_generation flips false:\n{flipped_off}"
-        );
-
-        let (flipped_back_on, _) = resync_post_merge_regen(&flipped_off, &on);
-        assert!(
-            flipped_back_on.contains("name: post-merge-pack-orb"),
-            "resync must re-add pack/review once test_generation flips back true:\n{flipped_back_on}"
         );
     }
 

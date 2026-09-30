@@ -15,7 +15,7 @@ single complex job from several commands, see the
 | `[orb]` | The orb's own source and container |
 | `[ci]` | Workflow and job wiring for the release pipeline |
 | `[record]` | Optional auto-record of the regenerated orb source |
-| `[post_merge_regen]` | Optional: relocate regen+record for a qualifying bot PR into a post-merge workflow |
+| `[post_merge_check]` | Optional: check each qualifying merged PR's orb once, after merge (check-only; replaces the deprecated `[post_merge_regen]`) |
 
 ## `[orb]` — the orb's source and container
 
@@ -209,7 +209,14 @@ docker_context = "docker-credentials"   # context holding Docker Hub creds
 orb_context = "orb-publishing"          # context holding orb publish creds
 build_executor = "toolkit/rust_env_rolling"   # executor the build-binary job compiles in
 test_generation = true             # run the full generation self-test chain in CI (default)
+release_gate_before = "approve-release"   # optional: gate this release-workflow job on the orb
 ```
+
+`release_gate_before` names a job in `release_workflow` (in `release.yml`), normally the release
+approval. When set, `update` adds a release gate — build the binary, `generate --check`, pack and
+review — and makes that job require it, so a release can't be approved while the committed orb
+is out of sync or fails pack or review. Unset leaves `release.yml` alone. See the
+[Post-merge check guide](post-merge-regeneration.md#release-gate).
 
 `build_executor` sets the CircleCI executor the `build-binary` job compiles in — a named
 executor reference (e.g. an executor exposed by an orb you already depend on), not a raw image
@@ -253,27 +260,28 @@ push_ssh_fingerprint = "SHA256:…"  # a public key hash, not a secret
 contexts = ["my-release-context"]
 ```
 
-## `[post_merge_regen]` — relocate regen+record for a qualifying bot PR
+## `[post_merge_check]` — check each qualifying merged PR once
 
-Optional, and requires `[record].enabled = true`. Auto-record normally runs on every PR branch,
-including a bot-authored one (Renovate, Dependabot, ...) — and a bot generally treats any
-foreign commit pushed to its own branch as manual intervention, permanently freezing that PR.
-`[post_merge_regen]` fixes this by relocating the regen+record chain (and, per
-`[ci].test_generation`, the pack/review self-test) off a *qualifying* branch entirely, into a
-CI-managed workflow that runs on `main` after the PR has already merged:
+Optional. After a qualifying PR merges, a CI-managed workflow builds the binary, runs
+`generate --check` against `main`, then packs and reviews the committed orb. It never records or
+pushes: CI doesn't commit to `main`, and a failure means the orb needs a reviewed regeneration
+PR. PR branches matching the skip patterns (by default the same patterns) skip the validation
+workflow's orb jobs, which the post-merge check covers — useful for dependency bumps such as
+Renovate's, which rarely change the orb and freeze if a regen commit lands on their branch:
 
 ```toml
-[post_merge_regen]
-branch_patterns = ["renovate/*"]     # bash-glob branch name pattern(s) that qualify
-workflow = "update_prlog"            # workflow (within `file`) to add the relocated jobs to
+[post_merge_check]
+branch_patterns = ["renovate/*"]     # merged PR branches to check (["*"] = every merge)
+workflow = "update_prlog"            # workflow (within `file`) to add the check jobs to
 file = "update_prlog.yml"            # CI file containing that workflow; defaults to config.yml
+# skip_branch_patterns = [...]       # PR branches to skip in validation; defaults to branch_patterns
 ```
 
 **You must configure the CircleCI "PR merged" trigger yourself** — it's a CircleCI project
 setting, not something this tool can commit for you. See the
-[Post-merge regeneration guide](post-merge-regeneration.md#prerequisite-you-must-configure-the-circleci-trigger-yourself)
-for the full mechanism, the two CircleCI doc pages describing that trigger, and a known ordering
-limitation when your target workflow already has another job that pushes to `main`.
+[Post-merge check guide](post-merge-regeneration.md#prerequisite-you-must-configure-the-circleci-trigger-yourself)
+for the mechanism, job ordering, the release gate and migrating from the deprecated
+`[post_merge_regen]` (still read, with a warning, as `[post_merge_check]`).
 
 ## How CLI inputs become orb parameters
 
@@ -487,5 +495,5 @@ steps, see the [Advanced Configuration Guide](advanced-configuration.md).
 
 - [Advanced Configuration Guide](advanced-configuration.md) — composing a single complex job
 - [Getting Started](getting-started.md) — install to running pipeline
-- [Post-merge regeneration](post-merge-regeneration.md) — relocating regen+record for a
-  qualifying bot PR (`[post_merge_regen]`)
+- [Post-merge check and release gate](post-merge-regeneration.md) — checking each qualifying
+  merged PR once (`[post_merge_check]`), and gating the release approval on the orb

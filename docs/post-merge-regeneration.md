@@ -1,150 +1,134 @@
-# Post-merge regeneration (`[post_merge_regen]`)
+# Post-merge check (`[post_merge_check]`) and release gate
 
-`[post_merge_regen]` relocates the regen+record job chain — and, when `[ci].test_generation`
-is on, the pack/review self-test — off a *qualifying* PR's own branch and into a CI-managed
-workflow that runs after merge instead. It exists to fix one specific failure mode: auto-record
-freezing a bot-authored PR (Renovate, Dependabot, ...) that it was never meant to touch.
+Generated orb source reaches `main` only through a reviewed PR. CI never commits to `main`. Two
+opt-in checks make sure what lands on `main`, and what is released from it, is what the pinned
+generator produces and passes pack and review:
 
-This is an advanced, opt-in feature. Most consumers of `[record]` never need it — read the
-[Problem](#the-problem-it-solves) section below to check whether it applies to you before adding
-it.
+- **`[post_merge_check]`** runs once after a qualifying PR merges: build the binary,
+  `generate --check` against `main`, then pack and review the committed orb. It records nothing
+  and pushes nothing. It also lets PR branches that match its patterns (e.g. Renovate's) skip the
+  validation workflow's orb jobs, since the post-merge check covers them.
+- **The release gate** (`[ci].release_gate_before`) runs the same check, pack and review in the
+  crate release workflow **before its approval**, so a release can't publish a crate whose orb
+  would fail.
 
-## The problem it solves
+When either fails, the committed orb is out of step with the generator. Regenerate it and open a
+PR; the code owner reviews and merges it like any other change.
 
-With `[record].enabled = true`, the `build-binary` → `regenerate-orb` chain runs on every
-non-`main` branch, including a Renovate branch. When regeneration produces a diff — for
-example, a Renovate-driven bump to `[orb].circleci_cli_version` or a pinned image digest changes
-what the generated orb looks like — `regenerate-orb` GPG-signs and pushes a
-`chore: regenerate orb` commit straight onto that branch.
+The design is tracked in [gen-circleci-orb#462](https://github.com/jerus-org/gen-circleci-orb/issues/462).
+`[post_merge_check]` replaces `[post_merge_regen]` (see [Migrating](#migrating-from-post_merge_regen)).
 
-Renovate treats any commit it did not author on its own branch as manual intervention, and
-**permanently stops rebasing or re-resolving that PR**. The fix (bumping the offending pin
-again) triggers another auto-record push, so the PR stays stuck. This was reproduced on
-gen-circleci-orb#326 with a stale `circleci-cli` pin.
+## Why check after merge
 
-The regen itself is not optional — see [`[record]`](configuration-guide.md#record--auto-record-the-regenerated-orb)
-and [gen-circleci-orb#382](https://github.com/jerus-org/gen-circleci-orb/issues/382): it is the
-only mechanism keeping `orb/src` in sync with the CLI and reviewable pre-merge. Simply skipping
-auto-record on bot branches would silently reintroduce that bug, with no replacement path for
-the change to land. `[post_merge_regen]` instead moves the same chain to a place where it can
-never touch a live bot branch: a workflow that runs on `main`, after the PR has already merged.
+The validation workflow's `build-binary` → `regenerate-orb` chain regenerates the orb on each PR
+branch and, with `[record]` enabled, commits the result back to that branch for review. Two kinds
+of PR don't suit that:
 
-## The mechanism
+- **Dependency bumps (Renovate, Dependabot).** Most don't change the CLI's `--help`, so
+  regenerating, packing and reviewing on every push is redundant work. And when a bump *does*
+  change the orb (the gen-circleci-orb pin, an image digest, a `cargo_tools` pin), a regen commit
+  on the bot's branch makes Renovate treat the PR as manually edited and stop rebasing it
+  (gen-circleci-orb#326).
+- **Repeated pushes to one PR.** Packing and reviewing on each push repeats the same validation.
+  Doing it once, on what actually merged, is enough (see `[ci].test_generation`).
 
-1. **Qualifying-branch guard.** Every relocated job's first step is a `pre-steps` guard that
-   inspects `CIRCLE_BRANCH` against `branch_patterns` (a bash `case` statement) and halts the
-   job (`circleci-agent step halt`) — a fast no-op — when it does not match. Every relocated job
-   carries its own copy of this guard, not just the first: a halted job is still reported
-   successful, so a job `requires:`-ing it would otherwise run anyway.
+`[post_merge_check]` skips those jobs on matching PR branches and checks the result once, after
+merge. The residual risk — a dependency that changes the help output without anyone noticing — is
+exactly what the fresh-build check catches.
 
-   This guard is necessary because CircleCI blocks ordinary `filters: branches:` entirely on a
-   "PR merged"-triggered pipeline — see [Prerequisite](#prerequisite-you-must-configure-the-circleci-trigger-yourself)
-   below. `CIRCLE_BRANCH` is still reliably set to the merged PR's original branch name at job
-   start, before anything overrides it, which is what makes the pattern match possible.
+## The post-merge chain
 
-2. **Switching onto the real target branch.** On a "PR merged" pipeline, `checkout` lands on the
-   now-deleted PR branch, and `CIRCLE_BRANCH` stays stale at that name even after `checkout`
-   runs. The relocated `generate` job's `target_branch` parameter (set to `main`) adds a step
-   right after `checkout` that does the plain-git equivalent of switching branches — fetch,
-   checkout, and an explicit `CIRCLE_BRANCH` override in `$BASH_ENV` — so the generate invocation,
-   and any commit it makes, targets the right branch.
+The chain is four managed jobs added to the workflow you name:
 
-3. **Recording on `main`, deliberately and narrowly.** `generate`'s auto-record logic normally
-   refuses to push to `main` at all — a push there would otherwise need a branch-protection
-   bypass this tool deliberately does not use. The relocated chain passes `--allow-main-record`
-   (only after step 2 has switched onto `main` itself), a narrow, explicit opt-in that skips
-   *only* the `main` exclusion. The forked-PR and empty-branch exclusions stay unconditional, and
-   an ordinary `generate --record` run (in `validation`, or a developer's local run) never sees
-   this flag.
+1. `post-merge-build-binary` builds the binary fresh. A dependency such as `clap` can change the
+   interface `generate` introspects even when the repository's own source is unchanged; only a
+   fresh build captures that.
+2. `post-merge-check-orb` switches onto `main` (`target_branch: main`) and runs
+   `generate --check`: it regenerates in memory, compares against the committed orb and fails on
+   any difference. It writes nothing and never records. It persists the committed orb to the
+   workspace for the next two jobs.
+3. `post-merge-pack-orb` and `post-merge-review-orb` pack and review that committed orb. They run
+   whatever `[ci].test_generation` says: this is the one place each merge's orb is packed and
+   reviewed.
 
-4. **A fresh binary build, every time.** The relocated chain always compiles a fresh binary
-   (`build-binary`) rather than reusing the container's own published CLI. A Renovate bump to a
-   dependency shaping the binary's `--help` output — `clap` itself, or anything else — can change
-   the interface `generate` introspects, even though the repository's own source is untouched by
-   a dependency-only PR. Only a fresh build reliably captures that.
+Nothing in the chain loads a write key, attaches a signing context or pushes.
 
-5. **The original chain steps aside on a qualifying branch.** `[post_merge_regen]` relocates the
-   chain — it does not merely duplicate it. `build-binary`/`regenerate-orb` (and, per
-   `[ci].test_generation`, `pack-orb`/`review-orb`) in the ordinary `[ci].build_workflow` (the
-   workflow that runs on every push, including a Renovate branch) each carry their own
-   `pre-steps` guard: the inverse of the relocated chain's own guard, it halts when
-   `CIRCLE_BRANCH` *does* match `branch_patterns`, since that branch is now handled entirely by
-   the relocated chain instead. Without this, the original chain would still run — and still push
-   a regen commit — on the very branches `[post_merge_regen]` exists to protect, silently
-   defeating the whole feature by running both copies. A downstream job (`pack-orb`/`review-orb`)
-   needs its own copy of the guard too: a halted job still reports success, so a job that
-   `requires:` it would otherwise run anyway — with no workspace ever persisted upstream.
+**Qualifying-branch guard.** Each job starts with a `pre-steps` guard that compares
+`CIRCLE_BRANCH` (still the merged PR's branch at job start) with `branch_patterns` and halts the
+job (`circleci-agent step halt`) when it doesn't match. Every job carries its own copy, because a
+halted job still reports success and a job that `requires:` it would otherwise run. The guard is
+needed because CircleCI doesn't allow `filters: branches:` on a "PR merged" pipeline.
+
+**The validation side.** For PR branches matching the skip patterns, the validation workflow's
+`build-binary`, `regenerate-orb`, `pack-orb` and `review-orb` get a branch `filters: ignore` entry
+(a bash glob such as `renovate/*` becomes the regex `/^renovate\/.*$/`). Filters stop the job
+before a container starts, so a skipped job costs nothing — unlike the `pre-steps` halt, which
+still pays for container spin-up.
 
 ## Prerequisite: you must configure the CircleCI trigger yourself
 
-`[post_merge_regen]` only controls **what jobs run and where** — it does not, and cannot, make
-CircleCI actually invoke your chosen workflow/file after a PR merges. That trigger is a CircleCI
-**project setting**, not repo-committable YAML:
+`[post_merge_check]` only controls **what jobs run and where**. It can't make CircleCI run your
+workflow after a PR merges. That trigger is a CircleCI **project setting**, not repo-committable
+YAML:
 
 - [GitHub trigger event options](https://circleci.com/docs/guides/orchestrate/github-trigger-event-options/)
-  documents the "PR merged" trigger itself: Project Settings → "GitHub trigger +" → choose the
-  "PR merged" event.
+  documents the "PR merged" trigger: Project Settings → "GitHub trigger +" → the "PR merged"
+  event.
 - [Pipelines and triggers overview](https://circleci.com/docs/guides/orchestrate/pipelines/)
-  documents the accompanying **Config File Path** field — it defaults to `.circleci/config.yml`,
-  but you can point it at a different file (matching `[post_merge_regen].file` below).
+  documents the **Config File Path** field. It defaults to `.circleci/config.yml`; point it at the
+  file named in `[post_merge_check].file`.
 
-If you have never set this up before, do it **before** adding `[post_merge_regen]` — otherwise
-the generated jobs are correct but nothing ever triggers them. `init` and `generate` print a
-reminder with both links above the first time they see `[post_merge_regen]` configured.
+Set this up **before** adding `[post_merge_check]`, or the generated jobs are correct but nothing
+runs them. `init` and `generate` print a reminder with both links while the section is configured.
 
-Some organizations already run a post-merge workflow for other administrative purposes and can
-simply add the relocated chain to that existing workflow/file. If you don't already have one, you
-will need to create it and wire up the trigger yourself first.
+If you already run a post-merge workflow (for example one that updates `PRLOG.md`), add the chain
+to it.
 
 ## Configuration
 
 ```toml
-[post_merge_regen]
-branch_patterns = ["renovate/*"]     # bash-glob branch name pattern(s) that qualify
-workflow = "update_prlog"            # workflow (within `file`) to add the relocated jobs to
-file = "update_prlog.yml"            # CI file containing that workflow; defaults to config.yml
-requires = ["update-prlog-on-main"]  # optional; see "Job ordering" below
+[post_merge_check]
+branch_patterns = ["renovate/*"]        # merged PR branches to check
+# skip_branch_patterns = ["renovate/*"] # PR branches whose validation orb jobs are skipped
+workflow = "update_prlog"               # workflow (within `file`) to add the chain to
+file = "update_prlog.yml"               # CI file containing that workflow; defaults to config.yml
+requires = ["update-prlog-on-main"]     # optional; see "Job ordering" below
 ```
 
-- `branch_patterns` — one or more bash-glob patterns (e.g. `["renovate/*", "dependabot/*"]`).
-  Any PR branch matching any pattern qualifies; every other merge is a fast no-op.
-- `workflow` — the name of the workflow the relocated jobs are inserted into.
-- `file` — the CI file (relative to your CI directory) containing that workflow. Optional;
-  defaults to `config.yml`. Only set this when the target workflow lives in a dedicated file, as
-  it typically will for a "PR merged" trigger (see the prerequisite above) — you generally do not
-  want an ordinary push-triggered pipeline evaluating the same workflow.
-- `requires` — job name(s) already in `workflow` for the relocated chain's first job to wait on.
-  Optional; see "Job ordering" below.
+- `branch_patterns`: bash-glob pattern(s) (`*` and `?`) selecting which merged PRs are checked.
+  `["*"]` checks every merge.
+- `skip_branch_patterns`: bash-glob pattern(s) for PR branches whose validation-workflow orb jobs
+  are skipped. Defaults to `branch_patterns`. Set it explicitly when `branch_patterns` is `["*"]`:
+  every PR must still be validated somewhere, so `update` refuses a skip pattern that matches every
+  branch. `[]` skips nothing.
+- `workflow`: the workflow the chain is added to. Created if it doesn't exist.
+- `file`: the CI file (relative to the CI directory) containing that workflow. Defaults to
+  `config.yml`. For a "PR merged" trigger it is usually a dedicated file, so ordinary
+  push-triggered pipelines don't evaluate the workflow.
+- `requires`: job name(s) already in `workflow` for the chain's first job to wait on. See below.
 
-`[post_merge_regen]` requires `[record].enabled = true` — `update`/`init` refuse to proceed
-otherwise, since there is nothing to relocate without auto-record enabled in the first place.
+`[post_merge_check]` doesn't need `[record]`.
+
+Typical settings:
+
+| Repository | `branch_patterns` | `skip_branch_patterns` |
+|---|---|---|
+| A consumer whose orb changes with its own CLI | `["renovate/*"]` | (default) |
+| gen-circleci-orb itself, where generation logic changes in ordinary PRs | `["*"]` | `["renovate/*"]` |
 
 ## Job ordering within the target workflow
 
-A dedicated post-merge workflow commonly exists specifically to push administrative changes to
-`main`. To avoid racing one of those pushes against the relocated chain's own push, the generator
-by default makes the relocated chain run **last**: its first job automatically requires every job
-already in the workflow, using each job's effective name (an explicit `name:` override when it has
-one, else the job reference itself).
+By default the chain runs **last**: its first job requires every job already in the workflow, by
+effective name (an explicit `name:` override when there is one, else the job reference). The
+generator only edits its own jobs, never a job you own.
 
-This edit is made only on the relocated chain's own job — never by rewriting a pre-existing,
-customer-owned job block. Even inside a file this feature otherwise manages, editing someone
-else's job is out of scope for a generator.
+An override inside an inline flow mapping (`- job: {name: x, ...}`) isn't parsed; that job is
+required by its bare reference, which fails loudly (a CircleCI "job not found" error) in the rare
+case it matters.
 
-An override embedded in an inline flow-mapping entry (`- job: {name: x, ...}`) is not parsed; that
-job is required by its bare reference instead, which fails loudly (a CircleCI "job not found"
-error) rather than silently, in the rare case that matters.
-
-Requiring **every** pre-existing job also means one that is itself excluded by its own `filters:`
-on a given trigger silently keeps the relocated chain from running on that trigger too — and it
-cannot distinguish a job meant to run *after* the relocated chain from one meant to run before it.
-Set `requires` explicitly to name only the job(s) that should precede the relocated chain when
-either of these applies, especially when a job in the workflow itself depends on the relocated
-chain having already run. A concrete example: a workflow whose first job both updates PRLOG.md
-*and* labels the oldest open Renovate PR for rebase (`toolkit/update_prlog`'s `run_label`) should
-not let that label fire before the relocated chain's own regen commit lands — the labeled PR would
-be rebased against a `main` that's about to change again, one commit stale. The fix is to split
-the two concerns and order them correctly:
+Requiring every job has two drawbacks: a job excluded by its own `filters:` on a trigger stops the
+chain running on that trigger, and a job meant to run *after* the chain can't be told apart. Set
+`requires` to name only the job(s) that should come first:
 
 ```yaml
 workflows:
@@ -152,43 +136,74 @@ workflows:
     jobs:
       - toolkit/update_prlog:
           name: update-prlog-on-main
-          run_label: false   # disable the built-in (premature) label step
-          # ... other params unchanged
       # >>> gen-circleci-orb (managed — edits overwritten by 'gen-circleci-orb update')
-      # ... the relocated chain, requires: [update-prlog-on-main] via [post_merge_regen].requires
+      # ... the chain, requires: [update-prlog-on-main] via [post_merge_check].requires
       # <<< gen-circleci-orb
       - toolkit/label:
           name: label-oldest-renovate-pr
-          requires: [post-merge-regenerate-orb]   # the chain's own last job
+          requires: [post-merge-review-orb]   # the chain's last job
 ```
 
-`update` inserts the managed block immediately after the last job named in `[post_merge_regen].requires`
-— not necessarily the absolute end of the workflow's `jobs:` list. With `requires` set as above, the
-block lands right after `update-prlog-on-main`, so a hand-added trailing job like `toolkit/label` stays
-positioned after the block, exactly as written. `update --check` enforces this exact position — an
-unrelated job placed even later in the file (not named in `requires`) is left untouched wherever it is.
+`update` inserts the managed block right after the last job named in `requires`, so a hand-added
+trailing job stays after it. Without `requires`, the auto-detect default would require the
+trailing job too; since that job requires the chain, CircleCI would reject the circular
+`requires:`.
 
-With `[post_merge_regen].requires = ["update-prlog-on-main"]` set, the relocated chain's first job
-waits only on `update-prlog-on-main` — never on `label-oldest-renovate-pr`, even though it's also
-"already in the workflow." Without `requires` set, the auto-detect default would instead require
-*both* jobs, including the trailing one — and since `label-oldest-renovate-pr` itself requires the
-relocated chain's last job, that produces a circular `requires:` CircleCI rejects outright.
+## Release gate
+
+```toml
+[ci]
+release_workflow = "release"
+release_gate_before = "approve-release"
+```
+
+With `release_gate_before` set, `update` manages `release.yml` as well:
+
+- It adds `release-gate-build-binary` → `release-gate-check-orb` (`generate --check` against the
+  release commit) → `release-gate-pack-orb` → `release-gate-review-orb` to `release_workflow`,
+  plus the `gen-circleci-orb` and `orb-tools` orb pins they need.
+- It adds `release-gate-review-orb` to the `requires:` of the job named by `release_gate_before`
+  (normally the approval), whether that job lists its requirements inline, as a block list, or not
+  at all. That entry is the only change made to a job you own; `update` removes and re-adds it by
+  name.
+
+The approval therefore can't be given until the orb about to be released has been checked, packed
+and reviewed, and a failure stops the release before anything is published. The gate uses the
+generator pinned in CI, run against a freshly built binary; it never records.
+
+If the named job or workflow isn't found, `update` warns and says so rather than guessing.
+
+## Migrating from `[post_merge_regen]`
+
+`[post_merge_regen]` relocated regen+record to a post-merge workflow that committed to `main`.
+Branch protection rejects those pushes (and pcu used to report them as successful,
+jerus-org/pcu#1089), so the regenerated source never landed. It is deprecated:
+
+- It is read as `[post_merge_check]`, with its `branch_patterns` also used as the skip patterns,
+  and emits the check-only chain. `update` warns until you rename it.
+- Rename the section to `[post_merge_check]`; the keys are the same. Having both is an error.
+- `update` replaces the old managed jobs (`post-merge-regenerate-orb`, with `allow_main_record` and
+  the signing context) with the check-only chain, and moves the validation-side skip from
+  `pre-steps` halts to branch filters.
+- If a hand-added job required `post-merge-regenerate-orb`, point it at `post-merge-review-orb`.
+- `generate --allow-main-record` (the orb job's `allow_main_record` parameter) is deprecated and
+  warns when used.
+- `init`'s `--post-merge-regen*` flags are aliases of the `--post-merge-check*` flags.
 
 ## Verifying it live
 
-Because this changes where a real GPG-signed push lands, verify it against a real (or
-deliberately staged) qualifying merge before trusting it:
-
-1. Confirm a merge on a **non-qualifying** branch leaves the relocated jobs halted (check the
-   job logs for "Not a qualifying branch").
-2. Confirm a merge on a **qualifying** branch (e.g. a real Renovate PR) runs the relocated chain
-   to completion and pushes the regenerated orb to `main`.
-3. Confirm a Renovate PR that previously froze under the old (non-relocated) behavior is no
-   longer frozen after adopting `[post_merge_regen]`.
+1. Merge a PR on a branch that doesn't match `branch_patterns`: the chain's jobs halt with "Not a
+   qualifying branch".
+2. Merge a qualifying PR that doesn't change the orb: the chain runs green and nothing is
+   committed to `main`.
+3. Merge a change that alters generated output without regenerating: `post-merge-check-orb`
+   fails. Regenerate and open a PR.
+4. Run a release: the gate jobs pass before the approval is offered, then the orb publishes.
 
 ## See also
 
 - [`[record]` — auto-record the regenerated orb](configuration-guide.md#record--auto-record-the-regenerated-orb)
 - [Configuration Guide](configuration-guide.md)
-- [gen-circleci-orb#328](https://github.com/jerus-org/gen-circleci-orb/issues/328) — the issue
-  this feature addresses
+- [gen-circleci-orb#462](https://github.com/jerus-org/gen-circleci-orb/issues/462): the design
+- [gen-circleci-orb#328](https://github.com/jerus-org/gen-circleci-orb/issues/328): the original
+  Renovate-freeze problem

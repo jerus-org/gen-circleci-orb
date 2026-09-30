@@ -54,6 +54,6 @@ Behavior:
           Verify mode: regenerate the orb and compare it to the committed
           files, writing nothing and never recording
       --allow-main-record
-          Allow auto-record to push to `main`
+          Deprecated: allow auto-record to push to `main`
 
 ```

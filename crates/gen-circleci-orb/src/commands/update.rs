@@ -305,9 +305,10 @@ fn ci_yaml_files(dir: &std::path::Path) -> Result<Vec<PathBuf>> {
 }
 
 /// Files (relative to `ci_dir`) `update` resyncs, and the function that
-/// resyncs each — always `config.yml`, plus `[post_merge_regen]`'s named file
+/// resyncs each — always `config.yml`, plus the post-merge check's named file
 /// when it differs from `config.yml` (the same-file case is folded into
-/// `config.yml`'s own resync via `resync_build_composed`).
+/// `config.yml`'s own resync via `resync_build_composed`), plus `release.yml`
+/// when `[ci].release_gate_before` is set.
 fn resync_targets(opts: &ci_patcher::PatchOpts) -> Vec<(String, ci_patcher::PatchFn)> {
     let mut targets: Vec<(String, ci_patcher::PatchFn)> =
         vec![("config.yml".to_string(), ci_patcher::resync_build_composed)];
@@ -316,6 +317,9 @@ fn resync_targets(opts: &ci_patcher::PatchOpts) -> Vec<(String, ci_patcher::Patc
             opts.post_merge_ci_file.clone(),
             ci_patcher::resync_post_merge_regen,
         ));
+    }
+    if !opts.release_gate_before.is_empty() {
+        targets.push(("release.yml".to_string(), ci_patcher::resync_release));
     }
     targets
 }
@@ -392,28 +396,50 @@ fn validate_config_completeness(config: &orb_config::OrbConfig) -> Result<Vec<St
                 .to_string(),
         );
     }
-    if let Some(post_merge_regen) = config.post_merge_regen.as_ref() {
-        let record_enabled = config.record.as_ref().is_some_and(|r| r.enabled);
-        if !record_enabled {
+    if config.post_merge_regen.is_some() && config.post_merge_check.is_some() {
+        anyhow::bail!(
+            "gen-circleci-orb.toml has both [post_merge_check] and the deprecated \
+             [post_merge_regen] — keep only [post_merge_check]."
+        );
+    }
+    if config.post_merge_regen.is_some() {
+        warnings.push(crate::commands::generate::post_merge_regen_deprecation());
+    }
+    let section = if config.post_merge_check.is_some() {
+        "[post_merge_check]"
+    } else {
+        "[post_merge_regen]"
+    };
+    if let Some(post_merge) = config.effective_post_merge_check() {
+        if post_merge.requires.iter().any(|r| r.trim().is_empty()) {
             anyhow::bail!(
-                "gen-circleci-orb.toml has a [post_merge_regen] section but \
-                 [record].enabled is not true — [post_merge_regen] relocates \
-                 regen+record, and there is nothing to relocate without \
-                 [record] enabled. Either enable [record] or remove \
-                 [post_merge_regen]."
-            );
-        }
-        if post_merge_regen
-            .requires
-            .iter()
-            .any(|r| r.trim().is_empty())
-        {
-            anyhow::bail!(
-                "[post_merge_regen].requires has a blank entry — every job \
+                "{section}.requires has a blank entry — every job \
                  name in the list must be non-empty. Remove the blank entry \
                  or fix the typo (e.g. a trailing comma)."
             );
         }
+        if post_merge
+            .effective_skip_branch_patterns()
+            .iter()
+            .any(|p| p.trim().is_empty() || p.chars().all(|c| c == '*'))
+        {
+            anyhow::bail!(
+                "{section} would skip the validation workflow's orb jobs on every \
+                 PR branch (a blank or `*` skip pattern). Every PR must still be \
+                 validated somewhere: set [post_merge_check].skip_branch_patterns \
+                 explicitly (e.g. [\"renovate/*\"]) when branch_patterns is [\"*\"]."
+            );
+        }
+    }
+    if ci
+        .release_gate_before
+        .as_deref()
+        .is_some_and(|j| j.trim().is_empty())
+    {
+        anyhow::bail!(
+            "[ci].release_gate_before is blank — name the release-workflow job \
+             (normally the approval) that must wait on the release gate, or remove it."
+        );
     }
 
     if ci.mcp.unwrap_or(false) {
@@ -442,7 +468,8 @@ fn opts_from_config(config: &orb_config::OrbConfig) -> ci_patcher::PatchOpts {
     let orb = config.orb.as_ref();
     let ci = config.ci.as_ref();
     let record = config.record.as_ref();
-    let post_merge_regen = config.post_merge_regen.as_ref();
+    let post_merge = config.effective_post_merge_check();
+    let post_merge = post_merge.as_ref();
     ci_patcher::PatchOpts {
         binary: orb.and_then(|o| o.binary.clone()).unwrap_or_default(),
         build_executor: ci
@@ -490,15 +517,17 @@ fn opts_from_config(config: &orb_config::OrbConfig) -> ci_patcher::PatchOpts {
             .map(|r| r.push_ssh_fingerprint.clone())
             .unwrap_or_default(),
         test_generation: ci.and_then(|c| c.test_generation).unwrap_or(true),
-        post_merge_branch_patterns: post_merge_regen
+        post_merge_branch_patterns: post_merge
             .map(|p| p.branch_patterns.clone())
             .unwrap_or_default(),
-        post_merge_workflow: post_merge_regen
-            .map(|p| p.workflow.clone())
+        post_merge_workflow: post_merge.map(|p| p.workflow.clone()).unwrap_or_default(),
+        post_merge_ci_file: post_merge.map(|p| p.file.clone()).unwrap_or_default(),
+        post_merge_requires: post_merge.map(|p| p.requires.clone()).unwrap_or_default(),
+        validation_skip_patterns: post_merge
+            .map(|p| p.effective_skip_branch_patterns())
             .unwrap_or_default(),
-        post_merge_ci_file: post_merge_regen.map(|p| p.file.clone()).unwrap_or_default(),
-        post_merge_requires: post_merge_regen
-            .map(|p| p.requires.clone())
+        release_gate_before: ci
+            .and_then(|c| c.release_gate_before.clone())
             .unwrap_or_default(),
     }
 }
@@ -549,7 +578,9 @@ fn line_diff(current: &str, would_be: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::orb_config::{CiSection, OrbConfig, OrbSection, PostMergeRegenConfig, RecordConfig};
+    use crate::orb_config::{
+        CiSection, OrbConfig, OrbSection, PostMergeCheckConfig, PostMergeRegenConfig, RecordConfig,
+    };
     use pretty_assertions::assert_eq;
 
     // ── config completeness (#155): update must rely on init-captured config ──
@@ -682,48 +713,33 @@ mod tests {
         );
     }
 
-    #[test]
-    fn validate_fails_when_post_merge_regen_present_without_record_enabled() {
-        // [post_merge_regen] relocates regen+record — nothing to relocate
-        // without [record].enabled = true. gen-circleci-orb#328.
-        let config = OrbConfig {
-            record: None,
-            post_merge_regen: Some(PostMergeRegenConfig {
-                branch_patterns: vec!["renovate/*".to_string()],
-                workflow: "update_prlog".to_string(),
-                file: "update_prlog.yml".to_string(),
-                ..PostMergeRegenConfig::default()
-            }),
-            ..complete_config()
-        };
-        let err = validate_config_completeness(&config).unwrap_err();
-        assert!(
-            err.to_string().contains("[post_merge_regen]") && err.to_string().contains("[record]"),
-            "error must name both sections: {err}"
-        );
+    fn renovate_check() -> PostMergeCheckConfig {
+        PostMergeCheckConfig {
+            branch_patterns: vec!["renovate/*".to_string()],
+            workflow: "update_prlog".to_string(),
+            file: "update_prlog.yml".to_string(),
+            ..PostMergeCheckConfig::default()
+        }
     }
 
+    /// The post-merge chain is check-only (gen-circleci-orb#462): it records
+    /// nothing, so it no longer needs `[record]`.
     #[test]
-    fn validate_fails_when_post_merge_regen_present_with_record_disabled() {
+    fn validate_passes_post_merge_check_without_record() {
         let config = OrbConfig {
             record: Some(RecordConfig {
                 enabled: false,
                 ..RecordConfig::default()
             }),
-            post_merge_regen: Some(PostMergeRegenConfig {
-                branch_patterns: vec!["renovate/*".to_string()],
-                workflow: "update_prlog".to_string(),
-                file: "update_prlog.yml".to_string(),
-                ..PostMergeRegenConfig::default()
-            }),
+            post_merge_check: Some(renovate_check()),
             ..complete_config()
         };
-        let err = validate_config_completeness(&config).unwrap_err();
-        assert!(err.to_string().contains("[post_merge_regen]"));
+        let warnings = validate_config_completeness(&config).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
     }
 
     #[test]
-    fn validate_passes_when_post_merge_regen_present_with_record_enabled() {
+    fn validate_warns_that_post_merge_regen_is_deprecated() {
         let config = OrbConfig {
             post_merge_regen: Some(PostMergeRegenConfig {
                 branch_patterns: vec!["renovate/*".to_string()],
@@ -735,9 +751,58 @@ mod tests {
         };
         let warnings = validate_config_completeness(&config).unwrap();
         assert!(
-            warnings.is_empty(),
-            "a complete config with valid post_merge_regen must produce no warnings: {warnings:?}"
+            warnings
+                .iter()
+                .any(|w| w.contains("deprecated") && w.contains("[post_merge_check]")),
+            "must point at the replacement section: {warnings:?}"
         );
+    }
+
+    #[test]
+    fn validate_fails_when_both_post_merge_sections_present() {
+        let config = OrbConfig {
+            post_merge_regen: Some(PostMergeRegenConfig::default()),
+            post_merge_check: Some(renovate_check()),
+            ..complete_config()
+        };
+        let err = validate_config_completeness(&config).unwrap_err();
+        assert!(err.to_string().contains("both"), "{err}");
+    }
+
+    /// `["*"]` checks every merge; left to default, it would also skip the
+    /// validation chain on every PR, leaving nothing validated pre-merge.
+    #[test]
+    fn validate_fails_when_the_skip_patterns_match_every_branch() {
+        let config = OrbConfig {
+            post_merge_check: Some(PostMergeCheckConfig {
+                branch_patterns: vec!["*".to_string()],
+                ..renovate_check()
+            }),
+            ..complete_config()
+        };
+        let err = validate_config_completeness(&config).unwrap_err();
+        assert!(err.to_string().contains("skip_branch_patterns"), "{err}");
+    }
+
+    #[test]
+    fn validate_passes_every_merge_check_with_explicit_skip_patterns() {
+        let config = OrbConfig {
+            post_merge_check: Some(PostMergeCheckConfig {
+                branch_patterns: vec!["*".to_string()],
+                skip_branch_patterns: Some(vec!["renovate/*".to_string()]),
+                ..renovate_check()
+            }),
+            ..complete_config()
+        };
+        assert!(validate_config_completeness(&config).is_ok());
+    }
+
+    #[test]
+    fn validate_fails_when_release_gate_before_is_blank() {
+        let mut config = complete_config();
+        config.ci.as_mut().unwrap().release_gate_before = Some(" ".to_string());
+        let err = validate_config_completeness(&config).unwrap_err();
+        assert!(err.to_string().contains("release_gate_before"), "{err}");
     }
 
     #[test]
@@ -912,6 +977,54 @@ workflows:
         );
         assert_eq!(opts.post_merge_workflow, "update_prlog");
         assert_eq!(opts.post_merge_ci_file, "update_prlog.yml");
+    }
+
+    /// The deprecated section reads as `[post_merge_check]` with its branch
+    /// patterns also skipping the validation chain on those PRs.
+    #[test]
+    fn opts_from_config_deprecated_post_merge_regen_skips_its_own_patterns() {
+        let toml_with_pmr = format!(
+            "{TOML}\n[post_merge_regen]\nbranch_patterns = [\"renovate/*\"]\nworkflow = \"update_prlog\"\n"
+        );
+        let config: orb_config::OrbConfig = toml::from_str(&toml_with_pmr).unwrap();
+        let opts = opts_from_config(&config);
+        assert_eq!(
+            opts.validation_skip_patterns,
+            vec!["renovate/*".to_string()]
+        );
+    }
+
+    #[test]
+    fn opts_from_config_maps_post_merge_check_section() {
+        let toml_with_pmc = format!(
+            "{TOML}\n[post_merge_check]\nbranch_patterns = [\"*\"]\nskip_branch_patterns = [\"renovate/*\"]\nworkflow = \"update_prlog\"\nfile = \"update_prlog.yml\"\n"
+        );
+        let config: orb_config::OrbConfig = toml::from_str(&toml_with_pmc).unwrap();
+        let opts = opts_from_config(&config);
+        assert_eq!(opts.post_merge_branch_patterns, vec!["*".to_string()]);
+        assert_eq!(
+            opts.validation_skip_patterns,
+            vec!["renovate/*".to_string()]
+        );
+        assert_eq!(opts.post_merge_workflow, "update_prlog");
+        assert_eq!(opts.post_merge_ci_file, "update_prlog.yml");
+    }
+
+    #[test]
+    fn opts_from_config_maps_release_gate_before_and_resyncs_release_yml() {
+        let mut config: orb_config::OrbConfig = toml::from_str(TOML).unwrap();
+        assert!(
+            !resync_targets(&opts_from_config(&config))
+                .iter()
+                .any(|(f, _)| f == "release.yml"),
+            "release.yml is left alone without a gate"
+        );
+        config.ci.as_mut().unwrap().release_gate_before = Some("approve-release".to_string());
+        let opts = opts_from_config(&config);
+        assert_eq!(opts.release_gate_before, "approve-release");
+        assert!(resync_targets(&opts)
+            .iter()
+            .any(|(f, _)| f == "release.yml"));
     }
 
     #[test]

@@ -10,7 +10,84 @@ pub struct OrbConfig {
     pub job_group: Option<Vec<JobGroup>>,
     pub extra_job: Option<Vec<ExtraJob>>,
     pub record: Option<RecordConfig>,
+    /// Deprecated: superseded by `post_merge_check`, and emits the same
+    /// check-only chain. See [`PostMergeRegenConfig`].
     pub post_merge_regen: Option<PostMergeRegenConfig>,
+    pub post_merge_check: Option<PostMergeCheckConfig>,
+}
+
+impl OrbConfig {
+    /// The post-merge check in force: `[post_merge_check]`, or the deprecated
+    /// `[post_merge_regen]` read as one (its `branch_patterns` both select the
+    /// merges to check and skip the validation chain on those PR branches).
+    /// `None` when neither section is present.
+    pub fn effective_post_merge_check(&self) -> Option<PostMergeCheckConfig> {
+        if let Some(check) = &self.post_merge_check {
+            return Some(check.clone());
+        }
+        self.post_merge_regen
+            .as_ref()
+            .map(|regen| PostMergeCheckConfig {
+                branch_patterns: regen.branch_patterns.clone(),
+                skip_branch_patterns: None,
+                workflow: regen.workflow.clone(),
+                file: regen.file.clone(),
+                requires: regen.requires.clone(),
+            })
+    }
+}
+
+/// Check-only post-merge validation, run in a "PR merged"-triggered workflow
+/// after a qualifying PR merges: build the binary, `generate --check` against
+/// `main`, then pack and review the committed orb. It never records or pushes;
+/// when it finds drift it fails, and the fix reaches `main` through a reviewed
+/// PR. See gen-circleci-orb#462 and docs/post-merge-regeneration.md.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(default)]
+pub struct PostMergeCheckConfig {
+    /// Bash-glob branch-name pattern(s) selecting which merged PRs get the
+    /// check (e.g. `["renovate/*"]`, or `["*"]` for every merge). A branch
+    /// matching any pattern qualifies.
+    pub branch_patterns: Vec<String>,
+    /// Bash-glob pattern(s) for PR branches whose validation-workflow
+    /// build/regenerate/pack/review jobs are skipped (through branch
+    /// `filters:`, so they cost nothing), because the post-merge check covers
+    /// them. Unset means the same as `branch_patterns`; set it explicitly
+    /// when `branch_patterns` is `["*"]`, since every PR must still be
+    /// validated somewhere. `[]` skips nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skip_branch_patterns: Option<Vec<String>>,
+    /// Name of the workflow (within `file`) the check jobs are added to.
+    pub workflow: String,
+    /// CI file (relative to the CI directory) containing `workflow`.
+    /// Defaults to `config.yml`.
+    #[serde(default = "default_post_merge_regen_file")]
+    pub file: String,
+    /// Job name(s) already in `workflow` for the check chain's first job to
+    /// wait on. Empty requires every job already in the workflow.
+    #[serde(default)]
+    pub requires: Vec<String>,
+}
+
+impl PostMergeCheckConfig {
+    /// The PR branch patterns whose validation chain is skipped.
+    pub fn effective_skip_branch_patterns(&self) -> Vec<String> {
+        self.skip_branch_patterns
+            .clone()
+            .unwrap_or_else(|| self.branch_patterns.clone())
+    }
+}
+
+impl Default for PostMergeCheckConfig {
+    fn default() -> Self {
+        Self {
+            branch_patterns: Vec::new(),
+            skip_branch_patterns: None,
+            workflow: String::new(),
+            file: default_post_merge_regen_file(),
+            requires: Vec::new(),
+        }
+    }
 }
 
 /// Auto-record configuration: after `generate`, commit the regenerated orb
@@ -61,10 +138,12 @@ pub struct RecordConfig {
     pub contexts: Vec<String>,
 }
 
-/// Relocates regen+record (and, per `[ci].test_generation`, the pack/review
-/// self-test) off a qualifying PR branch into a CI-managed post-merge
-/// workflow — see gen-circleci-orb#328. Depends on `[record]` being enabled;
-/// there is nothing to relocate otherwise.
+/// Deprecated: use [`PostMergeCheckConfig`] (`[post_merge_check]`).
+///
+/// Originally relocated regen+record off a qualifying PR branch into a
+/// post-merge workflow that committed to `main` (gen-circleci-orb#328). CI no
+/// longer commits to `main` (gen-circleci-orb#462), so this section is read as
+/// `[post_merge_check]` and emits the check-only chain.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(default)]
 pub struct PostMergeRegenConfig {
@@ -146,6 +225,14 @@ pub struct CiSection {
     /// preserving today's live-dogfood behavior for every existing consumer
     /// with zero action required. See gen-circleci-orb#367.
     pub test_generation: Option<bool>,
+    /// Name of a job in `release_workflow` (in `release.yml`), normally the
+    /// release approval, that must wait on the managed release gate. When
+    /// set, `update` adds the gate (build the binary, `generate --check`,
+    /// pack, review) to `release_workflow` and makes this job require it, so
+    /// the release can't be approved, and the crate can't be published, while
+    /// the committed orb source is out of sync or fails pack or review.
+    /// Unset leaves `release.yml` untouched. See gen-circleci-orb#462 (D5).
+    pub release_gate_before: Option<String>,
 }
 
 /// Default number of `cargo install` attempts in the generated Dockerfile's

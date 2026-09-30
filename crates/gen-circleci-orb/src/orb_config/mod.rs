@@ -2,9 +2,10 @@ mod types;
 
 pub use types::{
     CiSection, ExtraJob, JobGroup, JobGroupParam, JobGroupStep, OrbConfig, OrbSection,
-    ParamOverride, PostMergeRegenConfig, RecordConfig, SubcommandConfig, DEFAULT_BASE_IMAGE,
-    DEFAULT_BUILDER_IMAGE, DEFAULT_CRATE_WAIT_ATTEMPTS, DEFAULT_CRATE_WAIT_SECONDS,
-    DEFAULT_INSTALL_METHOD, DEFAULT_ORB_DIR, MAX_CRATE_WAIT_ATTEMPTS, MCP_DEFAULT_BASE_IMAGE,
+    ParamOverride, PostMergeCheckConfig, PostMergeRegenConfig, RecordConfig, SubcommandConfig,
+    DEFAULT_BASE_IMAGE, DEFAULT_BUILDER_IMAGE, DEFAULT_CRATE_WAIT_ATTEMPTS,
+    DEFAULT_CRATE_WAIT_SECONDS, DEFAULT_INSTALL_METHOD, DEFAULT_ORB_DIR, MAX_CRATE_WAIT_ATTEMPTS,
+    MCP_DEFAULT_BASE_IMAGE,
 };
 
 use anyhow::{Context, Result};
@@ -725,6 +726,7 @@ steps:
             extra_job: None,
             record: None,
             post_merge_regen: None,
+            post_merge_check: None,
         };
 
         save_config(&path, &original).unwrap();
