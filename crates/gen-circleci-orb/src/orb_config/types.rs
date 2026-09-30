@@ -228,9 +228,11 @@ pub struct CiSection {
     /// Name of a job in `release_workflow` (in `release.yml`), normally the
     /// release approval, that must wait on the managed release gate. When
     /// set, `update` adds the gate (build the binary, `generate --check`,
-    /// pack, review) to `release_workflow` and makes this job require it, so
-    /// the release can't be approved, and the crate can't be published, while
-    /// the committed orb source is out of sync or fails pack or review.
+    /// pack, review) to `release_workflow`. The consumer makes this job
+    /// require the gate's last job, `release-gate-review-orb`; `update` never
+    /// edits it, and fails (as does `update --check`) until it's wired. The
+    /// release then can't be approved, and the crate can't be published,
+    /// while the committed orb source is out of sync or fails pack or review.
     /// Unset leaves `release.yml` untouched. See gen-circleci-orb#462 (D5).
     pub release_gate_before: Option<String>,
 }

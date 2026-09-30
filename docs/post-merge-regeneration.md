@@ -12,8 +12,12 @@ generator produces and passes pack and review:
   crate release workflow **before its approval**, so a release can't publish a crate whose orb
   would fail.
 
-When either fails, the committed orb is out of step with the generator. Regenerate it and open a
-PR; the code owner reviews and merges it like any other change.
+You manage the binary's source; CI does the regeneration. On every PR branch it doesn't skip,
+`regenerate-orb` regenerates the orb and records it on the branch, so the code owner reviews it
+with the rest of the PR. Drift can only reach `main` through a skipped merge, such as a Renovate
+bump that changes the generator's output. When either check then fails, the fix is a PR branch
+that CI regenerates and records onto; nobody runs `generate` by hand. Having CI open that PR
+itself is tracked as future work (#462, D4).
 
 The design is tracked in [gen-circleci-orb#462](https://github.com/jerus-org/gen-circleci-orb/issues/462).
 `[post_merge_check]` replaces `[post_merge_regen]` (see [Migrating](#migrating-from-post_merge_regen)).
@@ -45,8 +49,10 @@ The chain is four managed jobs added to the workflow you name:
    fresh build captures that.
 2. `post-merge-check-orb` switches onto `main` (`target_branch: main`) and runs
    `generate --check`: it regenerates in memory, compares against the committed orb and fails on
-   any difference. It writes nothing and never records. It persists the committed orb to the
-   workspace for the next two jobs.
+   any difference. It writes nothing and never records. On a "PR merged" pipeline `checkout`
+   lands on the merged PR's head, and this is the only job that switches onto `main`, so it
+   persists `main`'s committed orb (unchanged) to the workspace: that is how the next two jobs,
+   which can't switch branches, get the exact files the check verified.
 3. `post-merge-pack-orb` and `post-merge-review-orb` pack and review that committed orb. They run
    whatever `[ci].test_generation` says: this is the one place each merge's orb is packed and
    reviewed.
@@ -162,16 +168,23 @@ With `release_gate_before` set, `update` manages `release.yml` as well:
 - It adds `release-gate-build-binary` → `release-gate-check-orb` (`generate --check` against the
   release commit) → `release-gate-pack-orb` → `release-gate-review-orb` to `release_workflow`,
   plus the `gen-circleci-orb` and `orb-tools` orb pins they need.
-- It adds `release-gate-review-orb` to the `requires:` of the job named by `release_gate_before`
-  (normally the approval), whether that job lists its requirements inline, as a block list, or not
-  at all. That entry is the only change made to a job you own; `update` removes and re-adds it by
-  name.
+- It never edits your own jobs. You wire the gate in once, by adding `release-gate-review-orb` to
+  the `requires:` of the job named by `release_gate_before` (normally the approval):
 
-The approval therefore can't be given until the orb about to be released has been checked, packed
-and reviewed, and a failure stops the release before anything is published. The gate uses the
+  ```yaml
+      - approve-release:
+          type: approval
+          requires: [calculate-versions, release-gate-review-orb]
+  ```
+
+  Until you do, `update` and `update --check` fail, naming the job and the line to write. They
+  fail the same way if the named job isn't in the workflow.
+
+The approval then can't be given until the orb about to be released has been checked, packed and
+reviewed, and a failure stops the release before anything is published. The gate uses the
 generator pinned in CI, run against a freshly built binary; it never records.
 
-If the named job or workflow isn't found, `update` warns and says so rather than guessing.
+If the workflow itself isn't found, `update` warns and adds nothing.
 
 ## Migrating from `[post_merge_regen]`
 
@@ -196,8 +209,9 @@ jerus-org/pcu#1089), so the regenerated source never landed. It is deprecated:
    qualifying branch".
 2. Merge a qualifying PR that doesn't change the orb: the chain runs green and nothing is
    committed to `main`.
-3. Merge a change that alters generated output without regenerating: `post-merge-check-orb`
-   fails. Regenerate and open a PR.
+3. Merge a skipped PR that alters generated output (e.g. a generator pin bump):
+   `post-merge-check-orb` fails. Open a PR branch; CI regenerates and records the orb on it for
+   review.
 4. Run a release: the gate jobs pass before the approval is offered, then the orb publishes.
 
 ## See also
