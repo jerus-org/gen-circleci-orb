@@ -985,38 +985,35 @@ fn release_gate_steps(opts: &PatchOpts) -> Vec<String> {
     steps.push(format!("          orb_dir: {orb_dir}"));
     steps.push("          attach_workspace: true".to_string());
     steps.push("          check: true".to_string());
-    steps.push("          persist_orb_workspace: true".to_string());
     steps.push("          requires: [release-gate-build-binary]".to_string());
 
+    // Pack and review check out the release commit themselves: unlike the
+    // post-merge chain, there is no branch switch to hand on, so nothing is
+    // persisted between jobs.
     steps.push("      - orb-tools/pack:".to_string());
     steps.push("          name: release-gate-pack-orb".to_string());
-    steps.push("          checkout: false".to_string());
     steps.push(format!("          source_dir: {orb_dir}/src"));
-    steps.push("          pre-steps:".to_string());
-    steps.push("            - attach_workspace:".to_string());
-    steps.push("                at: .".to_string());
     steps.push("          requires: [release-gate-check-orb]".to_string());
 
     steps.push("      - orb-tools/review:".to_string());
     steps.push(format!("          name: {RELEASE_GATE_FINAL_JOB}"));
-    steps.push("          checkout: false".to_string());
     steps.push(format!("          source_dir: {orb_dir}/src"));
-    steps.push("          pre-steps:".to_string());
-    steps.push("            - attach_workspace:".to_string());
-    steps.push("                at: .".to_string());
     steps.push("          requires: [release-gate-pack-orb]".to_string());
 
     steps.push(managed_end("      "));
     steps
 }
 
-/// Patch a release CircleCI config string: add the release gate to
-/// `opts.release_workflow` and make `opts.release_gate_before` require it.
+/// Patch a release CircleCI config string: add the managed release gate jobs
+/// to `opts.release_workflow`.
 ///
-/// No-ops when `opts.release_gate_before` is empty. The orb release pipeline
-/// itself (Docker build, orb pack, orb publish) lives in `config.yml` as the
-/// tag-triggered `orb-release:` workflow (see `patch_build`); the gate runs
-/// earlier, in the crate release, before its approval.
+/// No-ops when `opts.release_gate_before` is empty. The gate only works once
+/// `opts.release_gate_before` (normally the approval) requires its last job;
+/// that job belongs to the consumer, so this never edits it —
+/// `release_gate_problems` reports when the requirement is missing. The orb
+/// release pipeline itself (Docker build, orb pack, orb publish) lives in
+/// `config.yml` as the tag-triggered `orb-release:` workflow (see
+/// `patch_build`); the gate runs earlier, in the crate release.
 pub fn patch_release(content: &str, opts: &PatchOpts) -> (String, PatchReport) {
     let mut report = PatchReport {
         insertions: vec![],
@@ -1040,20 +1037,8 @@ pub fn patch_release(content: &str, opts: &PatchOpts) -> (String, PatchReport) {
         return (content.to_string(), report);
     };
     insert_block_at(&mut lines, pos, &release_gate_steps(opts));
-    if !add_requirement(
-        &mut lines,
-        &opts.release_workflow,
-        &opts.release_gate_before,
-        RELEASE_GATE_FINAL_JOB,
-    ) {
-        report.warnings.push(format!(
-            "release gate added, but no job named `{}` was found in workflow `{}` to \
-             require it — nothing waits on the gate; check [ci].release_gate_before",
-            opts.release_gate_before, opts.release_workflow
-        ));
-    }
     // Pins go in last: they only add lines above `workflows:`, so the
-    // workflow lookups above see the file as the consumer wrote it.
+    // workflow lookup above sees the file as the consumer wrote it.
     ensure_orb_pins(content, &mut lines, opts, true, &mut report);
     report.insertions.push("release gate".to_string());
 
@@ -1064,122 +1049,83 @@ pub fn patch_release(content: &str, opts: &PatchOpts) -> (String, PatchReport) {
     (output, report)
 }
 
-/// Re-sync release.yml's release gate: strip the managed gate (jobs, the
-/// managed gen-circleci-orb pin, and the gate requirement added to
-/// `release_gate_before`) and re-insert it via `patch_release`.
+/// Re-sync release.yml's release gate: strip the managed gate (its jobs and
+/// the managed gen-circleci-orb pin) and re-insert it via `patch_release`.
 pub fn resync_release(content: &str, opts: &PatchOpts) -> (String, PatchReport) {
-    let without_requirement = remove_requirement(content, RELEASE_GATE_FINAL_JOB);
-    let (stripped, warnings) = strip_managed(&without_requirement);
+    let (stripped, warnings) = strip_managed(content);
     let (out, mut report) = patch_release(&stripped, opts);
     report.warnings.extend(warnings);
     (out, report)
 }
 
-/// Make the job named `job` in `workflow` require `required`, editing only its
-/// `requires:`: appended to an inline `[..]` list or a block list, or added as
-/// a new `requires: [required]` line when the job has none. Returns `false`
-/// when no such job exists. A no-op (returning `true`) when it already
-/// requires `required`.
-fn add_requirement(lines: &mut Vec<String>, workflow: &str, job: &str, required: &str) -> bool {
-    let Some((jobs_start, _)) = find_workflow_jobs_bounds(lines, workflow) else {
-        return false;
-    };
-    let Some((start, end)) = job_entries(lines, workflow)
-        .into_iter()
-        .find(|(name, _, _)| name == job)
-        .map(|(_, start, end)| (start, end))
-    else {
-        return false;
-    };
-    let param_indent = indent_of(&lines[jobs_start]) + 6;
-    let pad = " ".repeat(param_indent);
-    let requires_at = (start + 1..end).find(|&j| {
-        indent_of(&lines[j]) == param_indent && lines[j].trim_start().starts_with("requires:")
-    });
-    let Some(r) = requires_at else {
-        // A bare `- job` entry has no mapping to add a key to; turn it into one.
-        if !lines[start].trim_end().ends_with(':') {
-            let dash = lines[start].trim_end().to_string();
-            lines[start] = format!("{dash}:");
-        }
-        lines.insert(start + 1, format!("{pad}requires: [{required}]"));
-        return true;
-    };
-    let value = lines[r].trim_start()["requires:".len()..]
-        .trim()
-        .to_string();
-    if let Some(inner) = value.strip_prefix('[').and_then(|v| v.strip_suffix(']')) {
-        let mut items: Vec<String> = inner
-            .split(',')
-            .map(|i| i.trim().to_string())
-            .filter(|i| !i.is_empty())
-            .collect();
-        if !items.iter().any(|i| i == required) {
-            items.push(required.to_string());
-        }
-        lines[r] = format!("{pad}requires: [{}]", items.join(", "));
-        return true;
+/// What stops the release gate gating anything, in release.yml `content`:
+/// `opts.release_gate_before` missing from `opts.release_workflow`, or not
+/// requiring the gate's last job. Each entry says what to change. Empty when
+/// the gate is off or wired correctly. The consumer owns that job, so `update`
+/// reports this (and `update --check` fails on it) rather than editing it.
+pub fn release_gate_problems(content: &str, opts: &PatchOpts) -> Vec<String> {
+    if opts.release_gate_before.is_empty() {
+        return Vec::new();
     }
-    // Block list: items follow at a deeper indent.
-    let mut last = r;
-    let mut item_indent = param_indent + 2;
-    for (j, line) in lines.iter().enumerate().take(end).skip(r + 1) {
-        if line.trim().is_empty() {
-            continue;
+    let lines: Vec<String> = content.lines().map(ToString::to_string).collect();
+    let job = &opts.release_gate_before;
+    let workflow = &opts.release_workflow;
+    match job_requires(&lines, workflow, job) {
+        None => vec![format!(
+            "[ci].release_gate_before names `{job}`, but workflow `{workflow}` in release.yml \
+             has no such job — nothing waits on the release gate"
+        )],
+        Some(requires) if !requires.iter().any(|r| r == RELEASE_GATE_FINAL_JOB) => {
+            vec![format!(
+                "`{job}` in workflow `{workflow}` (release.yml) doesn't wait on the release \
+                 gate — add `{RELEASE_GATE_FINAL_JOB}` to its `requires:`, e.g. \
+                 `requires: [{}]`",
+                requires
+                    .iter()
+                    .map(String::as_str)
+                    .chain([RELEASE_GATE_FINAL_JOB])
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )]
         }
-        if indent_of(line) <= param_indent || !line.trim_start().starts_with("- ") {
-            break;
-        }
-        if line.trim_start() == format!("- {required}") {
-            return true;
-        }
-        item_indent = indent_of(line);
-        last = j;
+        Some(_) => Vec::new(),
     }
-    lines.insert(last + 1, format!("{}- {required}", " ".repeat(item_indent)));
-    true
 }
 
-/// Remove every reference to `required` from `requires:` lists — the inverse
-/// of `add_requirement`, keyed on the gate job's own (managed) name rather
-/// than on any position. An inline list emptied by the removal is dropped
-/// whole, since the line was ours.
-fn remove_requirement(content: &str, required: &str) -> String {
-    let mut out: Vec<String> = Vec::new();
-    for line in content.lines() {
-        let trimmed = line.trim_start();
-        if trimmed == format!("- {required}") {
-            continue;
-        }
-        if let Some(value) = trimmed.strip_prefix("requires:") {
-            if let Some(inner) = value
-                .trim()
-                .strip_prefix('[')
-                .and_then(|v| v.strip_suffix(']'))
-            {
-                let items: Vec<&str> = inner
-                    .split(',')
-                    .map(str::trim)
-                    .filter(|i| !i.is_empty())
-                    .collect();
-                if items.contains(&required) {
-                    let kept: Vec<&str> = items.into_iter().filter(|i| *i != required).collect();
-                    if kept.is_empty() {
-                        continue;
-                    }
-                    let pad = &line[..line.len() - trimmed.len()];
-                    out.push(format!("{pad}requires: [{}]", kept.join(", ")));
-                    continue;
-                }
-            }
-        }
-        out.push(line.to_string());
+/// The `requires:` of the job named `job` in `workflow`, from an inline `[..]`
+/// list or a block list (empty when it has none). `None` when there is no such
+/// job.
+fn job_requires(lines: &[String], workflow: &str, job: &str) -> Option<Vec<String>> {
+    let (jobs_start, _) = find_workflow_jobs_bounds(lines, workflow)?;
+    let (start, end) = job_entries(lines, workflow)
+        .into_iter()
+        .find(|(name, _, _)| name == job)
+        .map(|(_, start, end)| (start, end))?;
+    let param_indent = indent_of(&lines[jobs_start]) + 6;
+    let Some(r) = (start + 1..end).find(|&j| {
+        indent_of(&lines[j]) == param_indent && lines[j].trim_start().starts_with("requires:")
+    }) else {
+        return Some(Vec::new());
+    };
+    let value = strip_trailing_comment(lines[r].trim_start()["requires:".len()..].trim());
+    if let Some(inner) = value.strip_prefix('[').and_then(|v| v.strip_suffix(']')) {
+        return Some(
+            inner
+                .split(',')
+                .map(|i| i.trim().to_string())
+                .filter(|i| !i.is_empty())
+                .collect(),
+        );
     }
-    let mut s = out.join("\n");
-    if content.ends_with('\n') {
-        s.push('\n');
-    }
-    s
+    let items = lines
+        .iter()
+        .take(end)
+        .skip(r + 1)
+        .filter(|l| !l.trim().is_empty())
+        .take_while(|l| indent_of(l) > param_indent && l.trim_start().starts_with("- "))
+        .map(|l| strip_trailing_comment(l.trim_start()[2..].trim()).to_string())
+        .collect();
+    Some(items)
 }
 
 /// Apply patches to CI config files on disk. Under `WriteMode::Preview` or
@@ -1235,6 +1181,11 @@ pub fn apply_patches(
         }
         for sk in &report.skipped {
             summary.push(format!("{filename}: skipped {sk} (already present)"));
+        }
+        if filename == "release.yml" {
+            for problem in release_gate_problems(&patched, opts) {
+                summary.push(format!("{filename}: action needed: {problem}"));
+            }
         }
 
         if mode.writes() && patched != content {
@@ -2046,7 +1997,7 @@ workflows:
     }
 
     #[test]
-    fn patch_release_adds_the_gate_before_the_approval() {
+    fn patch_release_adds_the_gate_jobs_and_leaves_the_approval_alone() {
         let (output, report) = patch_release(GATED_RELEASE_FIXTURE, &gated_opts());
         assert!(report.insertions.contains(&"release gate".to_string()));
         assert!(report.warnings.is_empty(), "{:?}", report.warnings);
@@ -2054,8 +2005,8 @@ workflows:
             assert!(output.contains(&format!("name: {job}")), "{job}:\n{output}");
         }
         assert!(
-            output.contains("      - approve-release:\n          type: approval\n          requires: [calculate-versions, release-gate-review-orb]"),
-            "the approval must wait on the gate:\n{output}"
+            output.contains("      - approve-release:\n          type: approval\n          requires: [calculate-versions]\n"),
+            "the consumer's approval job must be left exactly as written:\n{output}"
         );
         assert!(output.contains("          check: true"), "{output}");
         assert!(
@@ -2079,31 +2030,71 @@ workflows:
         };
         let (output, _) = patch_release(GATED_RELEASE_FIXTURE, &opts);
         let gate = &output[output.find("release-gate-build-binary").unwrap()..];
-        for forbidden in ["ssh_fingerprint", "allow_main_record", "context:"] {
+        for forbidden in [
+            "ssh_fingerprint",
+            "allow_main_record",
+            "context:",
+            "persist_orb_workspace",
+            "checkout: false",
+        ] {
             assert!(!gate.contains(forbidden), "`{forbidden}` in gate:\n{gate}");
         }
     }
 
+    /// The consumer wires the approval to the gate themselves; `update`
+    /// reports (and `update --check` fails) until they do, naming the line to
+    /// write, whatever shape their `requires:` takes.
     #[rstest]
-    #[case::block_list(
-        "      - approve-release:\n          type: approval\n          requires:\n            - calculate-versions\n",
-        "          requires:\n            - calculate-versions\n            - release-gate-review-orb\n"
+    #[case::inline_missing(
+        "          requires: [calculate-versions]\n",
+        Some("requires: [calculate-versions, release-gate-review-orb]")
     )]
-    #[case::no_requires(
-        "      - approve-release:\n          type: approval\n",
-        "      - approve-release:\n          requires: [release-gate-review-orb]\n          type: approval\n"
+    #[case::inline_present(
+        "          requires: [calculate-versions, release-gate-review-orb]\n",
+        None
     )]
-    fn patch_release_adds_the_requirement_to_any_requires_shape(
-        #[case] job: &str,
-        #[case] expected: &str,
+    #[case::block_missing(
+        "          requires:\n            - calculate-versions\n",
+        Some("requires: [calculate-versions, release-gate-review-orb]")
+    )]
+    #[case::block_present(
+        "          requires:\n            - calculate-versions\n            - release-gate-review-orb # gate\n",
+        None
+    )]
+    #[case::no_requires("", Some("requires: [release-gate-review-orb]"))]
+    fn release_gate_problems_until_the_approval_requires_the_gate(
+        #[case] requires: &str,
+        #[case] expected: Option<&str>,
     ) {
         let content = format!(
-            "version: 2.1\n\norbs:\n  toolkit: jerus-org/circleci-toolkit@8.0.1\n\nworkflows:\n  release:\n    jobs:\n      - toolkit/calculate_versions:\n          name: calculate-versions\n{job}"
+            "version: 2.1\n\norbs:\n  toolkit: jerus-org/circleci-toolkit@8.0.1\n\nworkflows:\n  release:\n    jobs:\n      - toolkit/calculate_versions:\n          name: calculate-versions\n      - approve-release:\n          type: approval\n{requires}"
         );
         let (output, _) = patch_release(&content, &gated_opts());
-        assert!(output.contains(expected), "{output}");
+        let problems = release_gate_problems(&output, &gated_opts());
+        match expected {
+            None => assert!(problems.is_empty(), "{problems:?}"),
+            Some(line) => {
+                assert_eq!(problems.len(), 1, "{problems:?}");
+                assert!(problems[0].contains("approve-release"), "{problems:?}");
+                assert!(problems[0].contains(line), "{problems:?}");
+            }
+        }
         let (resynced, _) = resync_release(&output, &gated_opts());
         assert_eq!(resynced, output, "resync must reproduce the same file");
+    }
+
+    #[test]
+    fn release_gate_problems_names_a_missing_job_and_is_empty_when_off() {
+        let missing = PatchOpts {
+            release_gate_before: "approve-it".to_string(),
+            ..make_opts()
+        };
+        let problems = release_gate_problems(GATED_RELEASE_FIXTURE, &missing);
+        assert!(
+            problems.iter().any(|p| p.contains("approve-it")),
+            "{problems:?}"
+        );
+        assert!(release_gate_problems(GATED_RELEASE_FIXTURE, &make_opts()).is_empty());
     }
 
     #[test]
@@ -2113,27 +2104,12 @@ workflows:
         let (twice, report) = resync_release(&once, &opts);
         assert_eq!(once, twice, "a second resync must be a no-op");
         assert!(report.warnings.is_empty(), "{:?}", report.warnings);
-        // Stripping the gate restores the approval's own requires exactly.
-        let stripped = strip_managed(&remove_requirement(&once, RELEASE_GATE_FINAL_JOB)).0;
+        let stripped = strip_managed(&once).0;
+        assert!(!stripped.contains("release-gate"), "{stripped}");
         assert!(
             stripped
                 .contains("          type: approval\n          requires: [calculate-versions]\n"),
             "{stripped}"
-        );
-        assert!(!stripped.contains("release-gate"), "{stripped}");
-    }
-
-    #[test]
-    fn patch_release_warns_when_the_gated_job_is_missing() {
-        let opts = PatchOpts {
-            release_gate_before: "approve-it".to_string(),
-            ..make_opts()
-        };
-        let (_, report) = patch_release(GATED_RELEASE_FIXTURE, &opts);
-        assert!(
-            report.warnings.iter().any(|w| w.contains("approve-it")),
-            "{:?}",
-            report.warnings
         );
     }
 

@@ -214,8 +214,9 @@ release_gate_before = "approve-release"   # optional: gate this release-workflow
 
 `release_gate_before` names a job in `release_workflow` (in `release.yml`), normally the release
 approval. When set, `update` adds a release gate — build the binary, `generate --check`, pack and
-review — and makes that job require it, so a release can't be approved while the committed orb
-is out of sync or fails pack or review. Unset leaves `release.yml` alone. See the
+review. You add `release-gate-review-orb` to that job's `requires:` yourself (`update` never edits
+your jobs, and `update --check` fails until it's there), so a release can't be approved while the
+committed orb is out of sync or fails pack or review. Unset leaves `release.yml` alone. See the
 [Post-merge check guide](post-merge-regeneration.md#release-gate).
 
 `build_executor` sets the CircleCI executor the `build-binary` job compiles in — a named

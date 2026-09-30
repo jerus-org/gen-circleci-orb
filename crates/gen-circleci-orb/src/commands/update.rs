@@ -50,6 +50,7 @@ impl Update {
         self.warn_pin_mismatches(&opts, color)?;
 
         let mut drifted: Vec<String> = Vec::new();
+        let mut gate_problems: Vec<String> = Vec::new();
         for (filename, resync_fn) in resync_targets(&opts) {
             let path = self.ci_dir.join(&filename);
             // The post_merge_ci_file is the one target most consumers won't
@@ -66,6 +67,9 @@ impl Update {
                     .with_context(|| format!("reading {}", path.display()))?
             };
             let (resynced, report) = resync_fn(&current, &opts);
+            if filename == "release.yml" {
+                gate_problems.extend(ci_patcher::release_gate_problems(&resynced, &opts));
+            }
 
             // Content the strip kept because it was not recognised as ours, yet
             // sat inside a managed-marker region: preserved, but worth a human's
@@ -118,6 +122,12 @@ impl Update {
             failures.push(format!(
                 "CI wiring is out of date in {} — run `gen-circleci-orb update`",
                 drifted.join(", ")
+            ));
+        }
+        if !gate_problems.is_empty() {
+            failures.push(format!(
+                "release gate not wired:\n  {}",
+                gate_problems.join("\n  ")
             ));
         }
         if !arg_problems.is_empty() {
@@ -1369,6 +1379,51 @@ workflows:
         }
         .run()
         .unwrap();
+    }
+
+    /// The release gate's jobs are managed, but the approval job is the
+    /// consumer's: `update` adds the gate, fails naming the line to add, and
+    /// passes once the consumer has wired the approval to it.
+    #[test]
+    fn update_fails_until_the_approval_requires_the_release_gate() {
+        let dir = TempDir::new().unwrap();
+        let toml = TOML.replace(
+            "[ci]\n",
+            "[ci]\nrelease_gate_before = \"approve-release\"\n",
+        );
+        assert!(
+            toml.contains("release_gate_before"),
+            "fixture has no [ci] section"
+        );
+        let (toml, ci_dir) = write_repo(&dir, &toml, OLD_CONFIG);
+        let release = "version: 2.1\n\norbs:\n  toolkit: jerus-org/circleci-toolkit@8.0.1\n\nworkflows:\n  release:\n    jobs:\n      - approve-release:\n          type: approval\n";
+        fs::write(ci_dir.join("release.yml"), release).unwrap();
+        let cmd = |check| Update {
+            config: toml.clone(),
+            ci_dir: ci_dir.clone(),
+            check,
+        };
+
+        let err = cmd(false).run().unwrap_err().to_string();
+        assert!(err.contains("approve-release"), "{err}");
+        assert!(err.contains("requires: [release-gate-review-orb]"), "{err}");
+        let written = fs::read_to_string(ci_dir.join("release.yml")).unwrap();
+        assert!(
+            written.contains("name: release-gate-review-orb"),
+            "{written}"
+        );
+        assert!(
+            written.contains("      - approve-release:\n          type: approval\n"),
+            "the approval job must not be edited:\n{written}"
+        );
+        assert!(cmd(true).run().is_err(), "--check must fail while unwired");
+
+        let wired = written.replace(
+            "          type: approval\n",
+            "          type: approval\n          requires: [release-gate-review-orb]\n",
+        );
+        fs::write(ci_dir.join("release.yml"), wired).unwrap();
+        cmd(true).run().unwrap();
     }
 
     #[test]
