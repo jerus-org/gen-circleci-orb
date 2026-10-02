@@ -6,7 +6,7 @@ SPDX-License-Identifier: MIT OR Apache-2.0
 
 # Roadmap
 
-_Last updated: 2026-07-21._
+_Last updated: 2026-10-02._
 
 This roadmap describes the intended direction of gen-circleci-orb over roughly the next year.
 It is a statement of intent, not a commitment: priorities may shift with user feedback and
@@ -44,6 +44,11 @@ Rust CLI's `--help` output, and can wire the CI needed to keep the orb in sync. 
   extending beyond the current clap-focused MVP.
 - **Documentation completeness for 1.0**, including a stable configuration reference and upgrade
   guidance.
+- **[#473 — reuse the surrounding CI's build work in `build_rust_binary`.](https://github.com/jerus-org/gen-circleci-orb/issues/473)**
+  Opt-in ways for the binary build to benefit from caching (or a binary) the consumer's CI
+  already produces, such as compile-cache restore keys or a binary handed in through the
+  workspace. The job stays self-sufficient by default; reuse is never a dependency. Measure
+  the binary build's current cost first.
 
 ## Longer term (beyond 1.0)
 
