@@ -431,7 +431,7 @@ fn validate_config_completeness(config: &orb_config::OrbConfig) -> Result<Vec<St
         if post_merge
             .effective_skip_branch_patterns()
             .iter()
-            .any(|p| p.trim().is_empty() || p.chars().all(|c| c == '*'))
+            .any(|p| p.trim().is_empty() || crate::ci_patcher::matches_every_branch(p))
         {
             anyhow::bail!(
                 "{section} would skip the validation workflow's orb jobs on every \

@@ -379,6 +379,42 @@ fn block_is_managed_validation(block: &[&str]) -> bool {
     })
 }
 
+/// Whether the top-level `orbs:` section already declares `key` (e.g.
+/// `gen-circleci-orb`). Only the section's own entries count: the same text
+/// elsewhere in the file, such as a job parameter
+/// `crates: "gen-circleci-orb:gen-circleci-orb-v"`, is not a pin, and must not
+/// stop the pin being added.
+fn orbs_declares(content: &str, key: &str) -> bool {
+    let mut in_orbs = false;
+    let mut entry_indent: Option<usize> = None;
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let indent = line.len() - trimmed.len();
+        if indent == 0 {
+            in_orbs = line.trim_end() == "orbs:";
+            entry_indent = None;
+            continue;
+        }
+        if !in_orbs {
+            continue;
+        }
+        // The first entry fixes the section's indentation; deeper lines
+        // belong to an inline orb definition, not to `orbs:` itself.
+        let entry = *entry_indent.get_or_insert(indent);
+        if indent == entry
+            && trimmed
+                .strip_prefix(key)
+                .is_some_and(|rest| rest.starts_with(':'))
+        {
+            return true;
+        }
+    }
+    false
+}
+
 fn patch_step0_gen_circleci_orb_orb(
     content: &str,
     lines: &mut Vec<String>,
@@ -387,7 +423,7 @@ fn patch_step0_gen_circleci_orb_orb(
 ) {
     let version = &opts.gen_circleci_orb_version;
     let orb_entry = format!("  gen-circleci-orb: jerus-org/gen-circleci-orb@{version}");
-    if content.contains("gen-circleci-orb:") {
+    if orbs_declares(content, "gen-circleci-orb") {
         report.skipped.push("gen-circleci-orb orb".to_string());
     } else if let Some(pos) = find_section_end(lines, "orbs:") {
         let block = vec![managed_begin("  "), orb_entry, managed_end("  ")];
@@ -417,7 +453,7 @@ fn patch_step0b_gen_orb_mcp_orb(
     }
     let version = &opts.gen_orb_mcp_orb_version;
     let orb_entry = format!("  gen-orb-mcp: jerus-org/gen-orb-mcp@{version}");
-    if content.contains("gen-orb-mcp:") {
+    if orbs_declares(content, "gen-orb-mcp") {
         report.skipped.push("gen-orb-mcp orb".to_string());
     } else if let Some(pos) = find_section_end(lines, "orbs:") {
         lines.insert(pos, orb_entry);
@@ -432,7 +468,7 @@ fn patch_step1_orb_tools(
     report: &mut PatchReport,
 ) {
     let orb_entry = format!("  orb-tools: circleci/orb-tools@{}", opts.orb_tools_version);
-    if content.contains("orb-tools:") {
+    if orbs_declares(content, "orb-tools") {
         report.skipped.push("orb-tools orb".to_string());
     } else if let Some(pos) = find_section_end(lines, "orbs:") {
         lines.insert(pos, orb_entry);
@@ -768,7 +804,7 @@ fn ensure_orb_pins(
     // every resync after it (orb-tools already present) would place the
     // gen-circleci-orb block on opposite sides of the orb-tools line.
     if with_orb_tools {
-        if content.contains("orb-tools:") {
+        if orbs_declares(content, "orb-tools") {
             report.skipped.push("orb-tools orb".to_string());
         } else {
             let pos = find_or_create_section_end(lines, "orbs:");
@@ -777,7 +813,7 @@ fn ensure_orb_pins(
             report.insertions.push("orb-tools orb".to_string());
         }
     }
-    if content.contains("gen-circleci-orb:") {
+    if orbs_declares(content, "gen-circleci-orb") {
         report.skipped.push("gen-circleci-orb orb".to_string());
     } else {
         let pos = find_or_create_section_end(lines, "orbs:");
@@ -804,6 +840,14 @@ pub fn resync_post_merge_regen(content: &str, opts: &PatchOpts) -> (String, Patc
     (out, report)
 }
 
+/// Whether a branch glob matches every branch name: `*` (or `**`, ...). With
+/// such a pattern every merge qualifies, so the post-merge jobs carry no
+/// qualifying-branch guard at all rather than a `case` whose fallback arm can
+/// never be reached.
+pub(crate) fn matches_every_branch(pattern: &str) -> bool {
+    !pattern.is_empty() && pattern.chars().all(|c| c == '*')
+}
+
 /// Bash `case` guard: halts the job (marks it successful, skips remaining
 /// steps) unless `CIRCLE_BRANCH` matches one of `patterns`. Branch filters are
 /// blocked entirely on a "pr merged" pipeline (see gen-circleci-orb#328's
@@ -812,6 +856,9 @@ pub fn resync_post_merge_regen(content: &str, opts: &PatchOpts) -> (String, Patc
 /// job is still reported successful and would not otherwise block jobs that
 /// `requires:` it.
 fn qualifying_branch_guard_steps(patterns: &[String]) -> Vec<String> {
+    if patterns.iter().any(|p| matches_every_branch(p)) {
+        return Vec::new();
+    }
     let mut steps = vec!["          pre-steps:".to_string()];
     steps.extend(qualifying_branch_guard_run_step(patterns));
     steps
@@ -823,7 +870,9 @@ fn qualifying_branch_guard_steps(patterns: &[String]) -> Vec<String> {
 /// the same job invocation.
 fn qualifying_branch_guard_pre_steps_with_attach_workspace(patterns: &[String]) -> Vec<String> {
     let mut steps = vec!["          pre-steps:".to_string()];
-    steps.extend(qualifying_branch_guard_run_step(patterns));
+    if !patterns.iter().any(|p| matches_every_branch(p)) {
+        steps.extend(qualifying_branch_guard_run_step(patterns));
+    }
     steps.push("            - attach_workspace:".to_string());
     steps.push("                at: .".to_string());
     steps
@@ -2019,6 +2068,50 @@ workflows:
         );
         // The release itself is untouched: it still requires only the approval.
         assert!(output.contains("name: release-mytool\n          requires: [approve-release]"));
+    }
+
+    /// A job parameter that happens to contain `gen-circleci-orb:` (as
+    /// toolkit/calculate_versions' `crates:` does) is not an orb pin: the
+    /// gate's jobs still need `gen-circleci-orb` declared under `orbs:`.
+    #[test]
+    fn patch_release_pins_the_orb_when_only_a_job_parameter_names_it() {
+        let fixture = GATED_RELEASE_FIXTURE.replace(
+            "          name: calculate-versions\n",
+            "          name: calculate-versions\n          crates: \"gen-circleci-orb:gen-circleci-orb-v\"\n",
+        );
+        let (output, report) = patch_release(&fixture, &gated_opts());
+        assert!(
+            report
+                .insertions
+                .contains(&"gen-circleci-orb orb".to_string()),
+            "{output}"
+        );
+        let orbs = &output[output.find("orbs:").unwrap()..output.find("workflows:").unwrap()];
+        assert!(
+            orbs.contains("  gen-circleci-orb: jerus-org/gen-circleci-orb@"),
+            "{output}"
+        );
+        assert_eq!(resync_release(&output, &gated_opts()).0, output);
+    }
+
+    #[rstest]
+    #[case::pinned("orbs:\n  gen-circleci-orb: jerus-org/gen-circleci-orb@0.2.0\n", true)]
+    #[case::managed_block(
+        "orbs:\n  # >>> gen-circleci-orb\n  gen-circleci-orb: jerus-org/gen-circleci-orb@0.2.0\n  # <<< gen-circleci-orb\n",
+        true
+    )]
+    #[case::only_a_job_parameter(
+        "orbs:\n  toolkit: jerus-org/circleci-toolkit@8.0.1\nworkflows:\n  release:\n    jobs:\n      - toolkit/calculate_versions:\n          crates: \"gen-circleci-orb:gen-circleci-orb-v\"\n",
+        false
+    )]
+    #[case::inline_orb_definition(
+        "orbs:\n  mine:\n    orbs:\n      gen-circleci-orb: jerus-org/gen-circleci-orb@0.2.0\n",
+        false
+    )]
+    #[case::longer_key("orbs:\n  gen-circleci-orb-extra: jerus-org/extra@1.0.0\n", false)]
+    #[case::no_orbs_section("jobs:\n  gen-circleci-orb:\n    docker: []\n", false)]
+    fn orbs_declares_counts_only_orbs_entries(#[case] content: &str, #[case] expected: bool) {
+        assert_eq!(orbs_declares(content, "gen-circleci-orb"), expected);
     }
 
     #[test]
@@ -3865,6 +3958,23 @@ workflows:
             post_merge_ci_file: "update_prlog.yml".to_string(),
             ..make_opts()
         }
+    }
+
+    /// With a match-all pattern every merge qualifies, so the chain carries no
+    /// guard (a `case` whose halting arm could never run); pack and review
+    /// still attach the workspace the check persisted.
+    #[test]
+    fn patch_post_merge_regen_omits_the_guard_when_every_branch_qualifies() {
+        let opts = PatchOpts {
+            post_merge_branch_patterns: vec!["*".to_string()],
+            ..opts_with_post_merge_regen()
+        };
+        let (output, _) = patch_post_merge_regen(UPDATE_PRLOG_FIXTURE, &opts);
+        assert!(!output.contains("Check qualifying branch"), "{output}");
+        assert!(!output.contains("circleci-agent step halt"), "{output}");
+        assert_eq!(output.matches("          pre-steps:\n            - attach_workspace:\n                at: .\n").count(), 2, "{output}");
+        assert_eq!(output.matches("pre-steps:").count(), 2, "{output}");
+        assert_eq!(resync_post_merge_regen(&output, &opts).0, output);
     }
 
     #[test]

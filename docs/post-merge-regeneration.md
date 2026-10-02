@@ -63,7 +63,8 @@ Nothing in the chain loads a write key, attaches a signing context or pushes.
 `CIRCLE_BRANCH` (still the merged PR's branch at job start) with `branch_patterns` and halts the
 job (`circleci-agent step halt`) when it doesn't match. Every job carries its own copy, because a
 halted job still reports success and a job that `requires:` it would otherwise run. The guard is
-needed because CircleCI doesn't allow `filters: branches:` on a "PR merged" pipeline.
+needed because CircleCI doesn't allow `filters: branches:` on a "PR merged" pipeline. With
+`branch_patterns = ["*"]` every merge qualifies, so the jobs carry no guard.
 
 **The validation side.** For PR branches matching the skip patterns, the validation workflow's
 `build-binary`, `regenerate-orb`, `pack-orb` and `review-orb` get a branch `filters: ignore` entry
