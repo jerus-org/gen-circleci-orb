@@ -1,6 +1,6 @@
 [package]
 name = "gen-circleci-orb"
-version = "0.2.0"
+version = "0.2.1"
 description = "Generate a CircleCI orb to provide the facilities offered by a CLI program"
 edition.workspace = true
 authors.workspace = true
@@ -96,4 +96,4 @@ bin-dir = "{ bin }{ binary-ext }"
 # See docs/RELEASING.md.
 [package.metadata.binstall.signing]
 algorithm = "minisign"
-pubkey = "RWQvqIyhxa0JAbBNTHy9+krvO8Abk4JhQ6jM4Uwc9FOtkqeH4MV2X/Sl"
+pubkey = "RWQ2vmOM6YefemthyFTd6/EJzJSP5m+xjnDmXhY6yaj/RHPkx3zrsCe3"
