@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - ci-adopt the check-only post-merge chain and release gate(pr [#471])
 
+### Fixed
+
+- include the target_branch switch from a script(pr [#472])
+
 ## [0.2.1] - 2026-10-02
 
 ### Fixed
@@ -1320,6 +1324,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#469]: https://github.com/jerus-org/gen-circleci-orb/pull/469
 [#470]: https://github.com/jerus-org/gen-circleci-orb/pull/470
 [#471]: https://github.com/jerus-org/gen-circleci-orb/pull/471
+[#472]: https://github.com/jerus-org/gen-circleci-orb/pull/472
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.1...HEAD
 [0.2.1]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.1.28...v0.2.0
