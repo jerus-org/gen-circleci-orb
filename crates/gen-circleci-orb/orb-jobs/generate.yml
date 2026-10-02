@@ -104,10 +104,9 @@ steps:
     steps:
     - run:
         name: Switch onto target_branch
-        command: |
-          git fetch origin << parameters.target_branch >>
-          git checkout -B << parameters.target_branch >> origin/<< parameters.target_branch >>
-          echo 'export CIRCLE_BRANCH=<< parameters.target_branch >>' >> "$BASH_ENV"
+        command: <<include(scripts/switch-to-target-branch.sh)>>
+        environment:
+          TARGET_BRANCH: << parameters.target_branch >>
 - when:
     condition: << parameters.attach_workspace >>
     steps:

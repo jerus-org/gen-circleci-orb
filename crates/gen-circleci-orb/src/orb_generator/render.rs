@@ -158,6 +158,20 @@ pub fn generate(
         "echo \"export PATH=\\\"${WORKSPACE_ROOT}:\\$PATH\\\"\" >> \"$BASH_ENV\"\n".to_string(),
     );
 
+    // switch-to-target-branch.sh — generated only when an orb-producing job
+    // includes it (its `target_branch` switch step), so an orb without one
+    // carries no unreferenced script.
+    let switch_include = format!("<<include({SWITCH_TO_TARGET_BRANCH_SCRIPT_PATH})>>");
+    if files
+        .values()
+        .any(|content| content.contains(&switch_include))
+    {
+        files.insert(
+            PathBuf::from("src").join(SWITCH_TO_TARGET_BRANCH_SCRIPT_PATH),
+            SWITCH_TO_TARGET_BRANCH_SCRIPT.to_string(),
+        );
+    }
+
     // resolve_workspace_param.sh — generated only when at least one param,
     // anywhere in the tree, is configured `workspace_sourced = true`.
     // Unlike add-workspace-to-path.sh, this script is genuinely unused by
@@ -1973,12 +1987,35 @@ fn build_target_branch_param() -> OrbParameter {
     }
 }
 
+/// Where `build_target_branch_switch_step` includes its commands from,
+/// relative to the orb's `src/`.
+const SWITCH_TO_TARGET_BRANCH_SCRIPT_PATH: &str = "scripts/switch-to-target-branch.sh";
+
+/// The script behind `build_target_branch_switch_step`. `-B` against the
+/// just-fetched remote ref rather than a bare `git checkout <branch>`, which
+/// relies on remote-tracking DWIM and can fail on a shallow or single-branch
+/// clone.
+const SWITCH_TO_TARGET_BRANCH_SCRIPT: &str = r#"git fetch origin "${TARGET_BRANCH}"
+git checkout -B "${TARGET_BRANCH}" "origin/${TARGET_BRANCH}"
+echo "export CIRCLE_BRANCH=\"${TARGET_BRANCH}\"" >> "$BASH_ENV"
+"#;
+
 /// Conditional step: when `target_branch` is non-empty, fetch and check it out,
 /// then override `CIRCLE_BRANCH` in `$BASH_ENV` so tools reading it (e.g. the
 /// record push) see the new branch, not the stale value `checkout` left behind.
 /// Plain git — this job runs in the orb's own `default` executor, not a
 /// toolkit container, so no extra tool dependency is introduced.
+///
+/// The commands live in `scripts/switch-to-target-branch.sh`, included with
+/// the branch passed as `TARGET_BRANCH`: orb-tools' review (RC009) rejects an
+/// inline `run` command longer than 64 characters, and the post-merge check
+/// and release gate review the generated orb.
 fn build_target_branch_switch_step() -> serde_yaml::Value {
+    let mut env = serde_yaml::Mapping::new();
+    env.insert(
+        serde_yaml::Value::String("TARGET_BRANCH".to_string()),
+        serde_yaml::Value::String("<< parameters.target_branch >>".to_string()),
+    );
     let mut run_map = serde_yaml::Mapping::new();
     run_map.insert(
         serde_yaml::Value::String("name".to_string()),
@@ -1986,12 +2023,13 @@ fn build_target_branch_switch_step() -> serde_yaml::Value {
     );
     run_map.insert(
         serde_yaml::Value::String("command".to_string()),
-        serde_yaml::Value::String(
-            "git fetch origin << parameters.target_branch >>\n\
-             git checkout -B << parameters.target_branch >> origin/<< parameters.target_branch >>\n\
-             echo 'export CIRCLE_BRANCH=<< parameters.target_branch >>' >> \"$BASH_ENV\"\n"
-                .to_string(),
-        ),
+        serde_yaml::Value::String(format!(
+            "<<include({SWITCH_TO_TARGET_BRANCH_SCRIPT_PATH})>>"
+        )),
+    );
+    run_map.insert(
+        serde_yaml::Value::String("environment".to_string()),
+        serde_yaml::Value::Mapping(env),
     );
     let mut run_step = serde_yaml::Mapping::new();
     run_step.insert(
@@ -5226,27 +5264,54 @@ mod tests {
             job.contains("target_branch:"),
             "orb-producing job must expose target_branch:\n{job}"
         );
+        // The commands are included from a script (orb-tools review RC009
+        // rejects a long inline command), with the branch passed in.
         assert!(
-            job.contains("git fetch origin") && job.contains("git checkout"),
-            "must switch onto the target branch via plain git:\n{job}"
+            job.contains("command: <<include(scripts/switch-to-target-branch.sh)>>"),
+            "the switch must include its script:\n{job}"
         );
         assert!(
-            job.contains("git checkout -B << parameters.target_branch >> origin/<< parameters.target_branch >>"),
+            job.contains("TARGET_BRANCH: << parameters.target_branch >>"),
+            "the switch must pass the target_branch param to its script:\n{job}"
+        );
+        let script = &files[&PathBuf::from("src/scripts/switch-to-target-branch.sh")];
+        assert!(
+            script.contains("git fetch origin \"${TARGET_BRANCH}\""),
+            "must fetch the target branch via plain git:\n{script}"
+        );
+        assert!(
+            script.contains("git checkout -B \"${TARGET_BRANCH}\" \"origin/${TARGET_BRANCH}\""),
             "must checkout via -B against the just-fetched remote ref, not bare `git checkout \
              <branch>` — that relies on git's remote-tracking DWIM, which can fail on a \
-             shallow/single-branch clone:\n{job}"
+             shallow/single-branch clone:\n{script}"
         );
         assert!(
-            job.contains("CIRCLE_BRANCH"),
-            "must override CIRCLE_BRANCH so downstream tooling (e.g. record) sees the new branch:\n{job}"
+            script.contains("export CIRCLE_BRANCH=") && script.contains("$BASH_ENV"),
+            "must override CIRCLE_BRANCH so downstream tooling (e.g. record) sees the new branch:\n{script}"
         );
         assert!(
-            job.contains("<< parameters.target_branch >>"),
-            "the switch step must be gated on / use the target_branch param:\n{job}"
+            job.contains("condition: << parameters.target_branch >>"),
+            "the switch step must be gated on the target_branch param:\n{job}"
+        );
+        // RC009: no inline `run` command in the job is longer than 64
+        // characters (a long one must be included from a script).
+        for line in job.lines() {
+            if let Some(cmd) = line.trim_start().strip_prefix("command: ") {
+                assert!(
+                    cmd.starts_with("<<include(") || cmd.len() <= 64,
+                    "inline command longer than 64 characters (RC009): {cmd}"
+                );
+            }
+        }
+        assert!(
+            !job.contains("command: |"),
+            "no multi-line inline command (RC009):\n{job}"
         );
         // Must run right after checkout, before the invoke step.
         let checkout_at = job.find("- checkout").expect("checkout step");
-        let switch_at = job.find("target_branch >>").expect("target_branch usage");
+        let switch_at = job
+            .find("switch-to-target-branch.sh")
+            .expect("target_branch switch step");
         let invoke_at = job.find("- generate:").expect("generate invoke step");
         assert!(
             checkout_at < switch_at && switch_at < invoke_at,
@@ -5272,6 +5337,10 @@ mod tests {
         assert!(
             !job.contains("target_branch"),
             "non-orb job must not gain target_branch:\n{job}"
+        );
+        assert!(
+            !files.contains_key(&PathBuf::from("src/scripts/switch-to-target-branch.sh")),
+            "no orb-producing job, so no switch script"
         );
     }
 
