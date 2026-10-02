@@ -107,15 +107,25 @@ test_generation = false
 # workspace's other test jobs use (toolkit/rust_env_rolling, from
 # requires_job above).
 build_executor = "toolkit/rust_env_rolling"
+# Release gate (gen-circleci-orb#462): release.yml's release workflow checks,
+# packs and reviews the orb about to be released before approve-release can
+# be given. `update` adds the gate jobs; approve-release's `requires:` names
+# release-gate-review-orb by hand (update verifies it, never edits it).
+release_gate_before = "approve-release"
 
-# Relocates the regen+record chain off Renovate branches (which it would
-# otherwise freeze, gen-circleci-orb#326/#328) and into this repo's existing
-# "PR merged"-triggered update_prlog workflow, run last after
-# toolkit/update_prlog per the requires-ordering fix in #394, with the
-# original validation-workflow chain excluded on qualifying branches per
-# #397.
-[post_merge_regen]
-branch_patterns = ["renovate/*"]
+# Check-only post-merge chain (gen-circleci-orb#462): after every merge, build
+# the binary fresh and run `generate --check` against main, then pack and
+# review the committed orb. Nothing is recorded or pushed to main; generated
+# source only reaches main through a reviewed PR. Runs last in this repo's
+# "PR merged"-triggered update_prlog workflow, after toolkit/update_prlog.
+#
+# Every merge is checked ("*"), because generation logic changes in ordinary
+# PRs here. Renovate branches skip the validation workflow's orb jobs: a
+# regen commit on a bot branch makes Renovate stop rebasing it
+# (gen-circleci-orb#326/#328), and the post-merge check covers what merged.
+[post_merge_check]
+branch_patterns = ["*"]
+skip_branch_patterns = ["renovate/*"]
 workflow = "update_prlog"
 file = "update_prlog.yml"
 requires = ["update-prlog-on-main"]
