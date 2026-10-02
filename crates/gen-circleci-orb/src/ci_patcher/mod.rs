@@ -252,7 +252,26 @@ pub fn resync_build_composed(content: &str, opts: &PatchOpts) -> (String, PatchR
 /// Spacing follows the same rule: a removal closes the one blank it left, and
 /// every other blank is the consumer's. `update --check` compares byte for
 /// byte, so any reflow reads as drift nobody caused (#273).
+///
+/// This strips every managed job name, which is right for `config.yml`. A file
+/// holding only one kind of managed job uses `strip_managed_jobs` instead.
 fn strip_managed(content: &str) -> (String, Vec<String>) {
+    strip_managed_jobs(content, &ALL_MANAGED_JOBS)
+}
+
+/// Every job name the generator emits, in any file.
+const ALL_MANAGED_JOBS: [&[&str]; 3] = [
+    MANAGED_VALIDATION_JOBS,
+    MANAGED_POST_MERGE_REGEN_JOBS,
+    MANAGED_RELEASE_GATE_JOBS,
+];
+
+/// As `strip_managed`, but a job is removed only when its `name:` is in one
+/// of `owned`: the names the generator emits into this file. In release.yml or
+/// a dedicated post-merge file, a consumer job that happens to share a name
+/// with a validation job (e.g. its own `build-binary`) is the consumer's, and
+/// stays.
+fn strip_managed_jobs(content: &str, owned: &[&[&str]]) -> (String, Vec<String>) {
     let lines: Vec<&str> = content.lines().collect();
     let mut out: Vec<String> = Vec::with_capacity(lines.len());
     let mut warnings: Vec<String> = Vec::new();
@@ -265,7 +284,7 @@ fn strip_managed(content: &str) -> (String, Vec<String>) {
             in_marked_region = region_open;
             gap_open |= ends_blank(&out);
             i += 1;
-        } else if let Some(next) = managed_item_end(&lines, i) {
+        } else if let Some(next) = managed_item_end(&lines, i, owned) {
             gap_open |= ends_blank(&out);
             i = next;
         } else {
@@ -316,7 +335,7 @@ fn marker_toggle(line: &str) -> Option<bool> {
 ///
 /// This is the whole authority to delete: each arm names content we generate and
 /// bounds it by its own indentation. Nothing here consults the markers.
-fn managed_item_end(lines: &[&str], i: usize) -> Option<usize> {
+fn managed_item_end(lines: &[&str], i: usize, owned: &[&[&str]]) -> Option<usize> {
     let line = lines[i];
     let trimmed = line.trim_start();
 
@@ -334,7 +353,7 @@ fn managed_item_end(lines: &[&str], i: usize) -> Option<usize> {
     // `name:` is in the managed set; the `- ` line plus its continuation.
     if indent_of(line) == 6 && trimmed.starts_with("- ") {
         let end = indented_block_end(lines, i + 1, 7);
-        if block_is_managed_validation(&lines[i..end]) {
+        if block_is_managed_job(&lines[i..end], owned) {
             return Some(end);
         }
     }
@@ -368,13 +387,12 @@ fn keep_line(
     out.push(line.to_string());
 }
 
-fn block_is_managed_validation(block: &[&str]) -> bool {
+fn block_is_managed_job(block: &[&str], owned: &[&[&str]]) -> bool {
     block.iter().any(|l| {
         let t = l.trim_start();
-        MANAGED_VALIDATION_JOBS
+        owned
             .iter()
-            .chain(MANAGED_POST_MERGE_REGEN_JOBS)
-            .chain(MANAGED_RELEASE_GATE_JOBS)
+            .flat_map(|names| names.iter())
             .any(|n| t == format!("name: {n}"))
     })
 }
@@ -834,7 +852,7 @@ fn ensure_orb_pins(
 /// jobs, or, when the file is shared with `config.yml`, the validation/
 /// orb-release blocks `resync_build` owns) is untouched.
 pub fn resync_post_merge_regen(content: &str, opts: &PatchOpts) -> (String, PatchReport) {
-    let (stripped, warnings) = strip_managed(content);
+    let (stripped, warnings) = strip_managed_jobs(content, &[MANAGED_POST_MERGE_REGEN_JOBS]);
     let (out, mut report) = patch_post_merge_regen(&stripped, opts);
     report.warnings.extend(warnings);
     (out, report)
@@ -1101,7 +1119,7 @@ pub fn patch_release(content: &str, opts: &PatchOpts) -> (String, PatchReport) {
 /// Re-sync release.yml's release gate: strip the managed gate (its jobs and
 /// the managed gen-circleci-orb pin) and re-insert it via `patch_release`.
 pub fn resync_release(content: &str, opts: &PatchOpts) -> (String, PatchReport) {
-    let (stripped, warnings) = strip_managed(content);
+    let (stripped, warnings) = strip_managed_jobs(content, &[MANAGED_RELEASE_GATE_JOBS]);
     let (out, mut report) = patch_release(&stripped, opts);
     report.warnings.extend(warnings);
     (out, report)
@@ -2112,6 +2130,27 @@ workflows:
     #[case::no_orbs_section("jobs:\n  gen-circleci-orb:\n    docker: []\n", false)]
     fn orbs_declares_counts_only_orbs_entries(#[case] content: &str, #[case] expected: bool) {
         assert_eq!(orbs_declares(content, "gen-circleci-orb"), expected);
+    }
+
+    /// A consumer's own release job that shares a name with a validation job
+    /// (jci-audit's release.yml builds its binary in a job named
+    /// `build-binary`) is not the generator's to remove from release.yml.
+    #[test]
+    fn resync_release_keeps_a_consumer_job_named_like_a_validation_job() {
+        let fixture = GATED_RELEASE_FIXTURE.replace(
+            "      - toolkit/release_crate:\n",
+            "      - gen-circleci-orb/build_rust_binary:\n          name: build-binary\n          package: mytool\n          requires: [approve-release]\n\n      - toolkit/release_crate:\n",
+        );
+        let (output, _) = resync_release(&fixture, &gated_opts());
+        assert!(
+            output.contains("          name: build-binary\n          package: mytool\n          requires: [approve-release]\n"),
+            "the consumer's build-binary job must survive the re-sync:\n{output}"
+        );
+        assert!(
+            output.contains("name: release-gate-build-binary"),
+            "{output}"
+        );
+        assert_eq!(resync_release(&output, &gated_opts()).0, output);
     }
 
     #[test]
@@ -3974,6 +4013,23 @@ workflows:
         assert!(!output.contains("circleci-agent step halt"), "{output}");
         assert_eq!(output.matches("          pre-steps:\n            - attach_workspace:\n                at: .\n").count(), 2, "{output}");
         assert_eq!(output.matches("pre-steps:").count(), 2, "{output}");
+        assert_eq!(resync_post_merge_regen(&output, &opts).0, output);
+    }
+
+    /// A dedicated post-merge file only owns the post-merge chain: a consumer
+    /// job there that shares a name with a validation job stays.
+    #[test]
+    fn resync_post_merge_regen_keeps_a_consumer_job_named_like_a_validation_job() {
+        let fixture = format!(
+            "{UPDATE_PRLOG_FIXTURE}      - toolkit/label:\n          name: review-orb\n          context: [pcu-app]\n"
+        );
+        let opts = opts_with_post_merge_regen();
+        let (output, _) = resync_post_merge_regen(&fixture, &opts);
+        assert!(
+            output.contains("          name: review-orb\n          context: [pcu-app]\n"),
+            "the consumer's review-orb job must survive the re-sync:\n{output}"
+        );
+        assert!(output.contains("name: post-merge-review-orb"), "{output}");
         assert_eq!(resync_post_merge_regen(&output, &opts).0, output);
     }
 
