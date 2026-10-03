@@ -23,10 +23,6 @@ workflows:
           pcu_from_merge: --from-merge
           update_pcu: << pipeline.parameters.update_pcu >>
           pcu_verbosity: "-vvv"
-          # Labeling is deferred to label-oldest-renovate-pr below, which
-          # runs after the post-merge check, so a rebase is only requested
-          # once main's orb has been checked.
-          run_label: false
       # >>> gen-circleci-orb (managed — edits overwritten by 'gen-circleci-orb update')
       - gen-circleci-orb/build_rust_binary:
           name: post-merge-build-binary
@@ -60,7 +56,3 @@ workflows:
                 at: .
           requires: [post-merge-pack-orb]
       # <<< gen-circleci-orb
-      - toolkit/label:
-          name: label-oldest-renovate-pr
-          context: [release, bot-check, pcu-app]
-          requires: [post-merge-review-orb]
