@@ -25,7 +25,7 @@ RUN apt-get update \
        done; }
 
 FROM debian:13-slim AS cli-installer
-ARG CIRCLECI_CLI_VERSION=1.0.51648
+ARG CIRCLECI_CLI_VERSION=1.0.51932
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/* \

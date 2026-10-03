@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - docs-add #473 binary-build reuse to the roadmap(pr [#482])
+- ci-use the container's pcu for releases; pin gen-circleci-orb 0.2.3(pr [#483])
 
 ### Fixed
 
@@ -1348,6 +1349,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#475]: https://github.com/jerus-org/gen-circleci-orb/pull/475
 [#482]: https://github.com/jerus-org/gen-circleci-orb/pull/482
 [#476]: https://github.com/jerus-org/gen-circleci-orb/pull/476
+[#483]: https://github.com/jerus-org/gen-circleci-orb/pull/483
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.3...HEAD
 [0.2.3]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.1...v0.2.2
