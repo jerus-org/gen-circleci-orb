@@ -1689,7 +1689,6 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- lazy_static 1.5.0
 - rayon-core 1.13.0
 - rayon 1.12.0
 
@@ -1835,13 +1834,13 @@ DEALINGS IN THE SOFTWARE.
 Used by:
 
 - backtrace 0.3.76
-- cc 1.4.7
+- cc 1.6.0
 - cfg-if 1.0.5
 - cmake 0.1.58
-- find-msvc-tools 0.1.13
+- find-msvc-tools 0.1.14
 - git2 0.21.0
 - jobserver 0.1.35
-- js-sys 0.3.105
+- js-sys 0.3.106
 - libgit2-sys 0.18.8+1.9.7
 - libssh2-sys 0.3.3
 - openssl-probe 0.1.6
@@ -1850,12 +1849,12 @@ Used by:
 - pkg-config 0.3.34
 - rustc-demangle 0.1.28
 - socket2 0.6.5
-- wasm-bindgen-futures 0.4.78
-- wasm-bindgen-macro-support 0.2.128
-- wasm-bindgen-macro 0.2.128
-- wasm-bindgen-shared 0.2.128
-- wasm-bindgen 0.2.128
-- web-sys 0.3.105
+- wasm-bindgen-futures 0.4.79
+- wasm-bindgen-macro-support 0.2.129
+- wasm-bindgen-macro 0.2.129
+- wasm-bindgen-shared 0.2.129
+- wasm-bindgen 0.2.129
+- web-sys 0.3.106
 
 ```text
 Copyright (c) 2014 Alex Crichton
@@ -2032,7 +2031,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- uuid 1.26.1
+- uuid 1.27.0
 
 ```text
 Copyright (c) 2014 The Rust Project Developers
@@ -3273,7 +3272,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- tokio-rustls 0.26.5
+- tokio-rustls 0.26.6
 
 ```text
 Copyright (c) 2017 quininer kel
@@ -3449,7 +3448,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- smallvec 1.16.1
+- smallvec 1.16.2
 
 ```text
 Copyright (c) 2018 The Servo Project Developers
@@ -3881,7 +3880,7 @@ SOFTWARE.
 Used by:
 
 - tame-index 0.26.3
-- toml-span 0.7.1
+- toml-span 0.7.2
 
 ```text
 Copyright (c) 2019 Embark Studios
@@ -4512,7 +4511,7 @@ SOFTWARE.
 
 Used by:
 
-- hyper-util 0.1.20
+- hyper-util 0.1.21
 
 ```text
 Copyright (c) 2023-2025 Sean McArthur
@@ -4681,7 +4680,7 @@ SOFTWARE.
 
 Used by:
 
-- libc 0.2.189
+- libc 0.2.190
 
 ```text
 Copyright (c) The Rust Project Developers
@@ -4820,7 +4819,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- pcu 0.6.37
+- pcu 0.6.38
 
 ```text
 Copyright © 2025 Jeremiah Russell
@@ -4849,7 +4848,7 @@ THE SOFTWARE.
 
 Used by:
 
-- pcu-release-assets 0.1.4
+- pcu-release-assets 0.1.5
 
 ```text
 Copyright © 2026 Jeremiah Russell
@@ -5132,7 +5131,7 @@ SOFTWARE.
 
 Used by:
 
-- rustls-platform-verifier 0.7.0
+- rustls-platform-verifier 0.7.1
 
 ```text
 MIT License
@@ -5318,7 +5317,7 @@ SOFTWARE.
 
 Used by:
 
-- gen-circleci-orb 0.2.3
+- gen-circleci-orb 0.2.4
 
 ```text
 MIT License
@@ -5356,7 +5355,7 @@ Used by:
 - jni-sys-macros 0.4.1
 - jni 0.22.4
 - r-efi 6.0.0
-- rustls-platform-verifier-android 0.1.1
+- rustls-platform-verifier-android 0.2.0
 - windows-core 0.62.2
 - windows-implement 0.60.2
 - windows-interface 0.59.3
@@ -5686,6 +5685,7 @@ Used by:
 - fastrand 2.5.0
 - indenter 0.3.4
 - itoa 1.0.18
+- lazy_static 1.5.1
 - linux-raw-sys 0.12.1
 - once_cell 1.21.4
 - pathdiff 0.2.3
@@ -6381,8 +6381,8 @@ SOFTWARE.
 
 Used by:
 
-- async-compression 0.4.48
-- compression-codecs 0.4.43
+- async-compression 0.4.50
+- compression-codecs 0.4.45
 - compression-core 0.4.33
 
 ```text
