@@ -14,7 +14,7 @@ orbs:
   toolkit: jerus-org/circleci-toolkit@8.0.2
   orb-tools: circleci/orb-tools@12.3.3
   # >>> gen-circleci-orb (managed — edits overwritten by 'gen-circleci-orb update')
-  gen-circleci-orb: jerus-org/gen-circleci-orb@0.2.1
+  gen-circleci-orb: jerus-org/gen-circleci-orb@0.2.3
   # <<< gen-circleci-orb
 workflows:
   # release.yml runs ONLY the crate release. release_crate pushes the
@@ -44,10 +44,6 @@ workflows:
           crate_tag_prefix: gen-circleci-orb-v
           build_binary: true
           binary_name: gen-circleci-orb
-          # Install the latest pcu before releasing. pcu >= 0.6.37 fails the
-          # push when GitHub rejects a ref (jerus-org/pcu#1090); the image's
-          # older pcu reported the rejected 0.2.0 push as a success.
-          update_pcu: true
           context:
             - release
             - bot-check
