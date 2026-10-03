@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - deps: update rust crate pcu to 0.6.38(pr [#479])
 - deps: update dependency orb-tools to v12.5.0(pr [#480])
 - deps: lock file maintenance(pr [#481])
+- deps: update rust crate uuid to 1.27.0(pr [#484])
 
 ## [0.2.3] - 2026-10-02
 
@@ -1356,6 +1357,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#479]: https://github.com/jerus-org/gen-circleci-orb/pull/479
 [#480]: https://github.com/jerus-org/gen-circleci-orb/pull/480
 [#481]: https://github.com/jerus-org/gen-circleci-orb/pull/481
+[#484]: https://github.com/jerus-org/gen-circleci-orb/pull/484
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.3...HEAD
 [0.2.3]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.1...v0.2.2
