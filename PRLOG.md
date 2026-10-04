@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - deps: update dependency gen-circleci-orb to v0.2.4(pr [#477])
 - deps: update rust crate tokio to 1.53.2(pr [#486])
+- deps: lock file maintenance(pr [#487])
 
 ## [0.2.4] - 2026-10-03
 
@@ -1369,6 +1370,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#485]: https://github.com/jerus-org/gen-circleci-orb/pull/485
 [#477]: https://github.com/jerus-org/gen-circleci-orb/pull/477
 [#486]: https://github.com/jerus-org/gen-circleci-orb/pull/486
+[#487]: https://github.com/jerus-org/gen-circleci-orb/pull/487
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.4...HEAD
 [0.2.4]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.2...v0.2.3
