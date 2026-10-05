@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- docs-update roadmap status to 0.2.x(pr [#488])
+
 ### Fixed
 
 - deps: update dependency gen-circleci-orb to v0.2.4(pr [#477])
@@ -1371,6 +1375,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#477]: https://github.com/jerus-org/gen-circleci-orb/pull/477
 [#486]: https://github.com/jerus-org/gen-circleci-orb/pull/486
 [#487]: https://github.com/jerus-org/gen-circleci-orb/pull/487
+[#488]: https://github.com/jerus-org/gen-circleci-orb/pull/488
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.4...HEAD
 [0.2.4]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.2...v0.2.3
