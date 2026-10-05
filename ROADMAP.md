@@ -6,7 +6,7 @@ SPDX-License-Identifier: MIT OR Apache-2.0
 
 # Roadmap
 
-_Last updated: 2026-10-02._
+_Last updated: 2026-10-05._
 
 This roadmap describes the intended direction of gen-circleci-orb over roughly the next year.
 It is a statement of intent, not a commitment: priorities may shift with user feedback and
@@ -16,7 +16,7 @@ work into themes and horizons.
 
 ## Current status
 
-gen-circleci-orb is **pre-1.0 (0.1.x)**. It generates a complete CircleCI orb from a clap-based
+gen-circleci-orb is **pre-1.0 (0.2.x)**. It generates a complete CircleCI orb from a clap-based
 Rust CLI's `--help` output, and can wire the CI needed to keep the orb in sync. The CLI and the
 `gen-circleci-orb.toml` configuration surface may still change ahead of 1.0.
 
@@ -36,7 +36,7 @@ Rust CLI's `--help` output, and can wire the CI needed to keep the orb in sync. 
 ## Medium term (H1 2027) — toward 1.0
 
 - **Stabilise the configuration schema and CLI.** Settle the `gen-circleci-orb.toml` schema and the
-  command-line surface so that `0.1.x → 1.0` is a stability milestone with a documented migration.
+  command-line surface so that `0.x → 1.0` is a stability milestone with a documented migration.
 - **Custom job specification.** Let users define jobs that combine multiple generated commands or
   add steps not derivable from the CLI structure (noted as future work in
   [docs/design.md](docs/design.md)).
