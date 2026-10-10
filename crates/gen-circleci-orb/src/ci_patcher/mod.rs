@@ -941,8 +941,10 @@ fn validation_skip_filters(opts: &PatchOpts) -> Vec<String> {
         .collect()
 }
 
-/// `filters: branches: ignore:` for a validation-workflow orb job: `extra`
-/// (e.g. `main`) plus the skip patterns. Filters stop the job before any
+/// `filters: branches: ignore:` for a validation-workflow *testing* job
+/// (`pack-orb`/`review-orb`): `extra` (e.g. `main`) plus the skip patterns.
+/// Generation jobs never take the skip patterns (see
+/// `push_build_and_regenerate_steps`). Filters stop the job before any
 /// container starts, unlike the `pre-steps` halt the post-merge chain has to
 /// use (filters are unavailable on a "PR merged" pipeline). Emits nothing when
 /// both are empty.
@@ -1376,7 +1378,7 @@ fn push_build_and_regenerate_steps(steps: &mut Vec<String>, opts: &PatchOpts) {
     if !opts.build_executor.is_empty() {
         steps.push(format!("          executor: {}", opts.build_executor));
     }
-    push_validation_branch_ignore(steps, opts, &[]);
+    // No skip-pattern filter: generation always runs, on every branch.
 
     // regenerate-orb — regenerate the orb from the freshly-built binary.
     //
@@ -1426,8 +1428,11 @@ fn push_build_and_regenerate_steps(steps: &mut Vec<String>, opts: &PatchOpts) {
     // The orb chain is a no-op on `main` (can't push; the orb-release verify gate
     // covers publish-time drift). Run on PR branches only; the regen still
     // validates on forked PRs (the binary's branch guard skips the push there).
-    // Skip-pattern branches (e.g. Renovate) are left to the post-merge check.
-    push_validation_branch_ignore(steps, opts, &["main"]);
+    // Skip-pattern branches (e.g. Renovate) are NOT skipped: a dependency bump
+    // can change the generated orb, the post-merge check cannot commit to `main`
+    // to fix that, so the regeneration must be recorded on the PR branch. Only
+    // the testing of the generated orb is deferred (see the pack/review steps).
+    push_branch_ignore(steps, &["main"]);
 }
 
 /// check-ci-wiring — the self-pin wiring check, isolated in its own job so it
@@ -3367,14 +3372,26 @@ workflows:
         );
     }
 
-    // ── patch_build skips the validation chain on skip-pattern branches ────────
+    // ── patch_build: skip patterns defer testing, never generation ─────────────
 
-    /// The validation chain's copy of the orb jobs is skipped on a
-    /// skip-pattern branch (e.g. Renovate) by branch `filters:`, so no
-    /// container starts — not by a `pre-steps` halt, which still paid for
-    /// spin-up on every job (gen-circleci-orb#462, step 0 baseline).
+    /// The text of one managed job in the patched validation workflow: from its
+    /// `name:` line to the next job entry.
+    fn job_block<'a>(output: &'a str, name: &str) -> &'a str {
+        let start = output
+            .find(&format!("name: {name}\n"))
+            .unwrap_or_else(|| panic!("job {name} missing from:\n{output}"));
+        let rest = &output[start..];
+        let end = rest.find("\n      - ").unwrap_or(rest.len());
+        &rest[..end]
+    }
+
+    const RENOVATE_FILTER: &str = r"- /^renovate\/.*$/";
+
+    /// Generation must always happen: a dependency bump can change the
+    /// generated orb, and the post-merge check cannot commit to `main` to fix
+    /// it. So `build-binary` and `regenerate-orb` carry no skip-pattern filter.
     #[test]
-    fn patch_build_skips_validation_regen_on_skip_branches_with_filters() {
+    fn patch_build_always_regenerates_on_skip_pattern_branches() {
         let opts = PatchOpts {
             validation_skip_patterns: vec!["renovate/*".to_string()],
             // needs_generation_regen stays true (via record_contexts) with
@@ -3388,29 +3405,42 @@ workflows:
             !output.contains("circleci-agent step halt"),
             "the validation chain must not use a pre-steps halt:\n{output}"
         );
-        let filter_count = output.matches(r"- /^renovate\/.*$/").count();
-        assert_eq!(
-            filter_count, 2,
-            "expected the skip pattern as a branch-ignore filter on both \
-             build-binary and regenerate-orb, got {filter_count} in:\n{output}"
+        for job in ["build-binary", "regenerate-orb"] {
+            assert!(
+                !job_block(&output, job).contains(RENOVATE_FILTER),
+                "{job} must run on skip-pattern branches:\n{output}"
+            );
+        }
+        assert!(
+            job_block(&output, "regenerate-orb").contains("- main"),
+            "regenerate-orb must still skip main:\n{output}"
         );
     }
 
+    /// Only the testing of the generated orb is deferred to the post-merge
+    /// chain: `pack-orb` and `review-orb` are filtered out on skip-pattern
+    /// branches (no container starts), generation is not.
     #[test]
-    fn patch_build_skips_pack_and_review_on_skip_branches_with_filters() {
+    fn patch_build_skips_only_pack_and_review_on_skip_pattern_branches() {
         let opts = PatchOpts {
             validation_skip_patterns: vec!["renovate/*".to_string()],
             test_generation: true,
             ..make_opts()
         };
         let (output, _report) = patch_build(BUILD_FIXTURE_NO_JOBS, &opts);
-        let filter_count = output.matches(r"- /^renovate\/.*$/").count();
-        assert_eq!(
-            filter_count, 4,
-            "expected the skip filter on all four validation-chain jobs \
-             (build-binary, regenerate-orb, pack-orb, review-orb), got \
-             {filter_count} in:\n{output}"
-        );
+        for job in ["pack-orb", "review-orb"] {
+            assert!(
+                job_block(&output, job).contains(RENOVATE_FILTER),
+                "{job} should be skipped on skip-pattern branches:\n{output}"
+            );
+        }
+        for job in ["build-binary", "regenerate-orb"] {
+            assert!(
+                !job_block(&output, job).contains(RENOVATE_FILTER),
+                "{job} must not be skipped:\n{output}"
+            );
+        }
+        assert_eq!(output.matches(RENOVATE_FILTER).count(), 2, "{output}");
         assert!(
             !output.contains("circleci-agent step halt"),
             "pack-orb/review-orb must not carry a halt guard:\n{output}"

@@ -50,11 +50,12 @@ pub struct PostMergeCheckConfig {
     /// matching any pattern qualifies.
     pub branch_patterns: Vec<String>,
     /// Bash-glob pattern(s) for PR branches whose validation-workflow
-    /// build/regenerate/pack/review jobs are skipped (through branch
+    /// *testing* jobs (`pack-orb`, `review-orb`) are skipped (through branch
     /// `filters:`, so they cost nothing), because the post-merge check covers
-    /// them. Unset means the same as `branch_patterns`; set it explicitly
-    /// when `branch_patterns` is `["*"]`, since every PR must still be
-    /// validated somewhere. `[]` skips nothing.
+    /// them. Generation (`build-binary`, `regenerate-orb`) is never skipped:
+    /// the post-merge check cannot commit to `main`. Unset means the same as
+    /// `branch_patterns`; set it explicitly when `branch_patterns` is `["*"]`,
+    /// since every PR must still be tested somewhere. `[]` skips nothing.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub skip_branch_patterns: Option<Vec<String>>,
     /// Name of the workflow (within `file`) the check jobs are added to.

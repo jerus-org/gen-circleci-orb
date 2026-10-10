@@ -289,15 +289,18 @@ Optional. After a qualifying PR merges, a CI-managed workflow builds the binary,
 `generate --check` against `main`, then packs and reviews the committed orb. It never records or
 pushes: CI doesn't commit to `main`, and a failure means the orb needs a reviewed regeneration
 PR. PR branches matching the skip patterns (by default the same patterns) skip the validation
-workflow's orb jobs, which the post-merge check covers — useful for dependency bumps such as
-Renovate's, which rarely change the orb and freeze if a regen commit lands on their branch:
+workflow's *testing* jobs (`pack-orb`, `review-orb`), which the post-merge check covers. Generation
+always runs: the post-merge check can't commit to `main`, so a dependency bump that changes the
+orb has its regeneration recorded on the PR. For Renovate, list the record bot's commit email in
+Renovate's `gitIgnoredAuthors`, or Renovate stops updating the PR (see
+[Renovate and the recorded commit](post-merge-regeneration.md#renovate-and-the-recorded-commit)):
 
 ```toml
 [post_merge_check]
 branch_patterns = ["renovate/*"]     # merged PR branches to check (["*"] = every merge)
 workflow = "update_prlog"            # workflow (within `file`) to add the check jobs to
 file = "update_prlog.yml"            # CI file containing that workflow; defaults to config.yml
-# skip_branch_patterns = [...]       # PR branches to skip in validation; defaults to branch_patterns
+# skip_branch_patterns = [...]       # PR branches whose pack/review are skipped; defaults to branch_patterns
 ```
 
 **You must configure the CircleCI "PR merged" trigger yourself** — it's a CircleCI project

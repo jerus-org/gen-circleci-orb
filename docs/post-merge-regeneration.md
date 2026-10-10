@@ -7,17 +7,20 @@ generator produces and passes pack and review:
 - **`[post_merge_check]`** runs once after a qualifying PR merges: build the binary,
   `generate --check` against `main`, then pack and review the committed orb. It records nothing
   and pushes nothing. It also lets PR branches that match its patterns (e.g. Renovate's) skip the
-  validation workflow's orb jobs, since the post-merge check covers them.
+  validation workflow's *testing* jobs (`pack-orb`, `review-orb`), since the post-merge check covers
+  them. Generation is never skipped.
 - **The release gate** (`[ci].release_gate_before`) runs the same check, pack and review in the
   crate release workflow **before its approval**, so a release can't publish a crate whose orb
   would fail.
 
-You manage the binary's source; CI does the regeneration. On every PR branch it doesn't skip,
-`regenerate-orb` regenerates the orb and records it on the branch, so the code owner reviews it
-with the rest of the PR. Drift can only reach `main` through a skipped merge, such as a Renovate
-bump that changes the generator's output. When either check then fails, the fix is a PR branch
-that CI regenerates and records onto; nobody runs `generate` by hand. Having CI open that PR
-itself is tracked as future work (#462, D4).
+You manage the binary's source; CI does the regeneration. On every PR branch, including the ones
+whose testing is skipped, `regenerate-orb` regenerates the orb and records it on the branch, so the
+code owner reviews it with the rest of the PR. **Generation always happens on the PR**: the
+post-merge check can't commit to `main`, so a change it would have to generate could only fail
+there. Only the *testing* of the generated orb (pack and review) is deferred to the post-merge
+chain. Drift reaches `main` only if the recorded commit is absent from the merged branch. When
+either check then fails, the fix is a PR branch that CI regenerates and records onto; nobody runs
+`generate` by hand. Having CI open that PR itself is tracked as future work (#462, D4).
 
 The design is tracked in [gen-circleci-orb#462](https://github.com/jerus-org/gen-circleci-orb/issues/462).
 `[post_merge_check]` replaces `[post_merge_regen]` (see [Migrating](#migrating-from-post_merge_regen)).
@@ -28,16 +31,18 @@ The validation workflow's `build-binary` → `regenerate-orb` chain regenerates 
 branch and, with `[record]` enabled, commits the result back to that branch for review. Two kinds
 of PR don't suit that:
 
-- **Dependency bumps (Renovate, Dependabot).** Most don't change the CLI's `--help`, so
-  regenerating, packing and reviewing on every push is redundant work. And when a bump *does*
-  change the orb (the gen-circleci-orb pin, an image digest, a `cargo_tools` pin), a regen commit
-  on the bot's branch makes Renovate treat the PR as manually edited and stop rebasing it
-  (gen-circleci-orb#326).
+- **Dependency bumps (Renovate, Dependabot).** Most don't change the CLI's `--help`, so packing
+  and reviewing on every push is redundant work. Regeneration is not: when a bump *does* change
+  the orb (the gen-circleci-orb pin, an image digest, a `cargo_tools` pin) the change must be
+  generated and recorded on the PR. The regen commit makes Renovate treat the PR as manually
+  edited and stop rebasing it (gen-circleci-orb#326), unless the record bot's commit email is
+  listed in Renovate's `gitIgnoredAuthors` (see
+  [Renovate and the recorded commit](#renovate-and-the-recorded-commit)).
 - **Repeated pushes to one PR.** Packing and reviewing on each push repeats the same validation.
   Doing it once, on what actually merged, is enough (see `[ci].test_generation`).
 
-`[post_merge_check]` skips those jobs on matching PR branches and checks the result once, after
-merge. The residual risk — a dependency that changes the help output without anyone noticing — is
+`[post_merge_check]` skips the testing jobs on matching PR branches and tests the result once,
+after merge. The residual risk — a dependency that changes the help output without anyone noticing — is
 exactly what the fresh-build check catches.
 
 ## The post-merge chain
@@ -67,7 +72,8 @@ needed because CircleCI doesn't allow `filters: branches:` on a "PR merged" pipe
 `branch_patterns = ["*"]` every merge qualifies, so the jobs carry no guard.
 
 **The validation side.** For PR branches matching the skip patterns, the validation workflow's
-`build-binary`, `regenerate-orb`, `pack-orb` and `review-orb` get a branch `filters: ignore` entry
+`pack-orb` and `review-orb` get a branch `filters: ignore` entry (`build-binary` and
+`regenerate-orb` never do: generation always runs)
 (a bash glob such as `renovate/*` becomes the regex `/^renovate\/.*$/`). Filters stop the job
 before a container starts, so a skipped job costs nothing — unlike the `pre-steps` halt, which
 still pays for container spin-up.
@@ -96,7 +102,7 @@ to it.
 ```toml
 [post_merge_check]
 branch_patterns = ["renovate/*"]        # merged PR branches to check
-# skip_branch_patterns = ["renovate/*"] # PR branches whose validation orb jobs are skipped
+# skip_branch_patterns = ["renovate/*"] # PR branches whose pack/review jobs are skipped
 workflow = "update_prlog"               # workflow (within `file`) to add the chain to
 file = "update_prlog.yml"               # CI file containing that workflow; defaults to config.yml
 requires = ["update-prlog-on-main"]     # optional; see "Job ordering" below
@@ -104,8 +110,8 @@ requires = ["update-prlog-on-main"]     # optional; see "Job ordering" below
 
 - `branch_patterns`: bash-glob pattern(s) (`*` and `?`) selecting which merged PRs are checked.
   `["*"]` checks every merge.
-- `skip_branch_patterns`: bash-glob pattern(s) for PR branches whose validation-workflow orb jobs
-  are skipped. Defaults to `branch_patterns`. Set it explicitly when `branch_patterns` is `["*"]`:
+- `skip_branch_patterns`: bash-glob pattern(s) for PR branches whose validation-workflow *testing*
+  jobs (`pack-orb`, `review-orb`) are skipped; generation still runs. Defaults to `branch_patterns`. Set it explicitly when `branch_patterns` is `["*"]`:
   every PR must still be validated somewhere, so `update` refuses a skip pattern that matches every
   branch. `[]` skips nothing.
 - `workflow`: the workflow the chain is added to. Created if it doesn't exist.
@@ -210,10 +216,25 @@ jerus-org/pcu#1089), so the regenerated source never landed. It is deprecated:
    qualifying branch".
 2. Merge a qualifying PR that doesn't change the orb: the chain runs green and nothing is
    committed to `main`.
-3. Merge a skipped PR that alters generated output (e.g. a generator pin bump):
-   `post-merge-check-orb` fails. Open a PR branch; CI regenerates and records the orb on it for
-   review.
+3. Open a skip-pattern PR that alters generated output (e.g. a generator pin bump):
+   `regenerate-orb` regenerates and records the orb on the PR branch, `pack-orb` and `review-orb`
+   are skipped, and Renovate keeps updating the PR. After the merge the chain tests the result.
 4. Run a release: the gate jobs pass before the approval is offered, then the orb publishes.
+
+## Renovate and the recorded commit
+
+With `[record]` enabled, the regenerated orb is committed onto the PR branch, Renovate's included.
+By default Renovate treats a commit by any other author as a manual edit and stops updating the PR.
+Add the record bot's commit email (the value of `[record].user_email_env`, which only your CI knows)
+to `gitIgnoredAuthors` in each repository's Renovate config:
+
+```json
+{ "gitIgnoredAuthors": ["<bot email>"] }
+```
+
+Entries may be exact RFC5322 email strings, globs or regexes. `generate` prints a reminder while
+auto-record and a Renovate branch pattern are both configured; it can't check the setting itself.
+See [Renovate's `gitIgnoredAuthors`](https://docs.renovatebot.com/configuration-options/#gitignoredauthors).
 
 ## See also
 
