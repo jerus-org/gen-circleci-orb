@@ -1459,10 +1459,17 @@ fn render_runtime_stage(
         let mut components = rustup_components.to_vec();
         components.sort();
         components.dedup();
-        out.push_str(&format!(
-            "RUN rustup component add {}\n",
-            components.join(" ")
-        ));
+        // One component per line, as in `render_cargo_tools_install`, so a long
+        // list stays inside the Dockerfile line limit (docker:S7020).
+        out.push_str("RUN rustup component add \\\n");
+        out.push_str(
+            &components
+                .iter()
+                .map(|c| format!("    {c}"))
+                .collect::<Vec<_>>()
+                .join(" \\\n"),
+        );
+        out.push('\n');
     }
     out.push_str("USER circleci\n");
     out.push_str("WORKDIR /home/circleci/project\n");
@@ -3296,7 +3303,7 @@ mod tests {
         let content = &files[&PathBuf::from("Dockerfile")];
         let runtime = content.rsplit("FROM ").next().unwrap();
         let add = runtime
-            .find("RUN rustup component add llvm-tools-preview rust-src\n")
+            .find("RUN rustup component add \\\n    llvm-tools-preview \\\n    rust-src\n")
             .unwrap_or_else(|| panic!("sorted rustup line missing from runtime:\n{content}"));
         let user = runtime.find("USER circleci").expect("USER line");
         assert!(
@@ -3316,7 +3323,7 @@ mod tests {
         let files = generate(&cli, &opts, None);
         let content = &files[&PathBuf::from("Dockerfile")];
         assert!(
-            content.contains("RUN rustup component add llvm-tools-preview\n"),
+            content.contains("RUN rustup component add \\\n    llvm-tools-preview\n"),
             "local runtime stage should add the component:\n{content}"
         );
     }
@@ -5869,6 +5876,19 @@ mod tests {
             "cargo-about",
             "rsign2:rsign",
         ]);
+        let many_components: Vec<String> = [
+            "clippy",
+            "llvm-tools-preview",
+            "miri",
+            "rust-analyzer",
+            "rust-docs",
+            "rust-src",
+            "rustfmt",
+            "rust-std-aarch64-unknown-linux-musl",
+            "rust-std-x86_64-unknown-linux-musl",
+        ]
+        .map(String::from)
+        .to_vec();
 
         for binary in ["mytool", long_binary] {
             for method in [
@@ -5884,6 +5904,7 @@ mod tests {
                     } else {
                         vec![]
                     },
+                    rustup_components: many_components.clone(),
                     apt_packages: vec!["libssl-dev".to_string(), "pkg-config".to_string()],
                     ..default_opts()
                 };

@@ -649,13 +649,33 @@ pub(crate) fn ensure_rustup_components_supported(
     Ok(())
 }
 
+/// The generator's default runtime image (`debian:13-slim`) carries no
+/// `rustup`, so `RUN rustup component add` could only fail at container-build
+/// time. Catch that known case at generate time instead. (The MCP default is a
+/// `rust:` image and does have rustup.) A custom `base_image` is trusted: it
+/// may well provide rustup.
+pub(crate) fn ensure_rustup_base_image(base_image: &str, components: &[String]) -> Result<()> {
+    if !components.is_empty() && base_image == DEFAULT_BASE_IMAGE {
+        anyhow::bail!(
+            "rustup_components needs a runtime base_image that provides rustup, but base_image \
+             is the generator default {base_image:?}, which has none; set `[orb] base_image` \
+             to a Rust image (e.g. a `rust:` tag)"
+        );
+    }
+    Ok(())
+}
+
 /// Validates component names (they are spliced into a Dockerfile `RUN` line)
 /// and returns them sorted and de-duplicated. Rustup component names are
-/// `[a-z0-9._-]`, optionally with a `-<target-triple>` suffix.
+/// lowercase alphanumerics with `-`, optionally ending in a `-<target-triple>`
+/// suffix; the check here is a conservative superset that must start
+/// alphanumeric.
 pub(crate) fn validate_rustup_components(entries: &[String]) -> Result<Vec<String>> {
     let mut errors = Vec::new();
     for entry in entries {
-        let ok = !entry.is_empty()
+        // Must start alphanumeric so an entry can never read as a rustup option
+        // (`-h`, `--toolchain=nightly`) once spliced into the command line.
+        let ok = entry.starts_with(|c: char| c.is_ascii_alphanumeric())
             && entry
                 .chars()
                 .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
@@ -1335,6 +1355,10 @@ impl Generate {
         let cargo_tools = validate_cargo_tool_entries(&cargo_tools, &cli_def.binary_name)?;
         let rustup_components = resolve_rustup_components(&orb_config);
         ensure_rustup_components_supported(&install_method, &rustup_components)?;
+        ensure_rustup_base_image(
+            &resolve_base_image(self.base_image.as_deref(), &orb_config),
+            &rustup_components,
+        )?;
         let rustup_components = validate_rustup_components(&rustup_components)?;
 
         let git_push_subcommands =
@@ -2806,6 +2830,21 @@ mod tests {
     }
 
     #[test]
+    fn rustup_components_are_rejected_on_a_default_base_image_without_rustup() {
+        let c = vec!["llvm-tools-preview".to_string()];
+        let err = ensure_rustup_base_image(DEFAULT_BASE_IMAGE, &c)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("base_image"),
+            "error should name base_image: {err}"
+        );
+        assert!(ensure_rustup_base_image(MCP_DEFAULT_BASE_IMAGE, &c).is_ok());
+        assert!(ensure_rustup_base_image("rust:1-slim-trixie", &c).is_ok());
+        assert!(ensure_rustup_base_image(DEFAULT_BASE_IMAGE, &[]).is_ok());
+    }
+
+    #[test]
     fn validate_rustup_components_sorts_and_dedups() {
         let got = validate_rustup_components(&[
             "rust-src".to_string(),
@@ -2818,7 +2857,17 @@ mod tests {
 
     #[test]
     fn validate_rustup_components_rejects_shell_metacharacters_and_empties() {
-        for bad in ["", "rust src", "a;rm -rf /", "x$(y)", "a&&b"] {
+        for bad in [
+            "",
+            "rust src",
+            "a;rm -rf /",
+            "x$(y)",
+            "a&&b",
+            "-h",
+            "--toolchain=nightly",
+            ".hidden",
+            "_x",
+        ] {
             assert!(
                 validate_rustup_components(&[bad.to_string()]).is_err(),
                 "{bad:?} should be rejected"

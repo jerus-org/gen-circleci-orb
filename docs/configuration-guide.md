@@ -86,10 +86,12 @@ rustup_components = ["llvm-tools-preview"]
 
 Config only (no CLI flag). Supported with the **binstall** and **local** install methods; using it
 with `apt` is an error. The runtime `base_image` must provide `rustup` (the official `rust:` images
-do) or the container build fails. The component is installed for that image's default toolchain
+do): leaving `base_image` at the generator's default `debian:13-slim`, which has none, is rejected at
+generate time, and any other image without `rustup` fails the container build. The component is installed for that image's default toolchain
 only: a consumer whose `rust-toolchain.toml` selects another toolchain still downloads the component
-for it, exactly as before. Entries are validated (letters, digits, `-`, `_`, `.`), sorted and
-de-duplicated so regeneration is stable.
+for it, exactly as before. Entries are validated (letters, digits, `-`, `_`, `.`, and the first character must be a letter or
+digit so an entry can never read as a `rustup` option), then sorted and de-duplicated so
+regeneration is stable. The Dockerfile lists one component per line, like `cargo_tools`.
 
 ### `crate_wait_attempts` / `crate_wait_seconds` — the crates.io propagation gate
 

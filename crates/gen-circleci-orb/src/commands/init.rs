@@ -3104,6 +3104,7 @@ mod tests {
             orb: Some(OrbSection {
                 apt_packages: Some(vec!["gnupg".to_string()]),
                 cargo_tools: Some(vec!["cargo-audit".to_string()]),
+                rustup_components: Some(vec!["llvm-tools-preview".to_string()]),
                 custom_files: Some(vec!["src/scripts/build-container.sh".to_string()]),
                 allow_unparsed_help: Some(true),
                 crate_wait_attempts: 60,
@@ -3128,6 +3129,10 @@ mod tests {
         assert_eq!(
             orb.cargo_tools.as_deref(),
             Some(&["cargo-audit".to_string()][..])
+        );
+        assert_eq!(
+            orb.rustup_components.as_deref(),
+            Some(&["llvm-tools-preview".to_string()][..])
         );
         assert_eq!(
             orb.custom_files.as_deref(),
