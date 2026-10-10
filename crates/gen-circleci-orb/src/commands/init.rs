@@ -668,6 +668,10 @@ pub(crate) fn build_bootstrap_config(
             // below: `init` is a bootstrap, not a reset.
             apt_packages: existing.orb.as_ref().and_then(|o| o.apt_packages.clone()),
             cargo_tools: existing.orb.as_ref().and_then(|o| o.cargo_tools.clone()),
+            rustup_components: existing
+                .orb
+                .as_ref()
+                .and_then(|o| o.rustup_components.clone()),
             custom_files: existing.orb.as_ref().and_then(|o| o.custom_files.clone()),
             allow_unparsed_help: existing.orb.as_ref().and_then(|o| o.allow_unparsed_help),
             crate_wait_attempts: existing
