@@ -115,6 +115,15 @@ impl Update {
             }
         }
 
+        // After a real re-sync only: `--check` runs in CI on every push.
+        if !self.check {
+            if let Some(reminder) =
+                crate::commands::generate::renovate_ignored_authors_reminder(&config)
+            {
+                println!("{reminder}");
+            }
+        }
+
         let arg_problems = self.validate_orb_arguments(color)?;
 
         let mut failures = Vec::new();
@@ -434,9 +443,9 @@ fn validate_config_completeness(config: &orb_config::OrbConfig) -> Result<Vec<St
             .any(|p| p.trim().is_empty() || crate::ci_patcher::matches_every_branch(p))
         {
             anyhow::bail!(
-                "{section} would skip the validation workflow's orb jobs on every \
-                 PR branch (a blank or `*` skip pattern). Every PR must still be \
-                 validated somewhere: set [post_merge_check].skip_branch_patterns \
+                "{section} would skip the validation workflow's pack and review jobs \
+                 on every PR branch (a blank or `*` skip pattern). Every PR must still be \
+                 tested somewhere: set [post_merge_check].skip_branch_patterns \
                  explicitly (e.g. [\"renovate/*\"]) when branch_patterns is [\"*\"]."
             );
         }

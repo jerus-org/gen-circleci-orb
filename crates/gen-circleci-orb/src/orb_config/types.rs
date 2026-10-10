@@ -19,7 +19,7 @@ pub struct OrbConfig {
 impl OrbConfig {
     /// The post-merge check in force: `[post_merge_check]`, or the deprecated
     /// `[post_merge_regen]` read as one (its `branch_patterns` both select the
-    /// merges to check and skip the validation chain on those PR branches).
+    /// merges to check and skip the pack and review jobs on those PR branches).
     /// `None` when neither section is present.
     pub fn effective_post_merge_check(&self) -> Option<PostMergeCheckConfig> {
         if let Some(check) = &self.post_merge_check {
@@ -50,11 +50,12 @@ pub struct PostMergeCheckConfig {
     /// matching any pattern qualifies.
     pub branch_patterns: Vec<String>,
     /// Bash-glob pattern(s) for PR branches whose validation-workflow
-    /// build/regenerate/pack/review jobs are skipped (through branch
+    /// *testing* jobs (`pack-orb`, `review-orb`) are skipped (through branch
     /// `filters:`, so they cost nothing), because the post-merge check covers
-    /// them. Unset means the same as `branch_patterns`; set it explicitly
-    /// when `branch_patterns` is `["*"]`, since every PR must still be
-    /// validated somewhere. `[]` skips nothing.
+    /// them. Generation (`build-binary`, `regenerate-orb`) is never skipped:
+    /// the post-merge check cannot commit to `main`. Unset means the same as
+    /// `branch_patterns`; set it explicitly when `branch_patterns` is `["*"]`,
+    /// since every PR must still be tested somewhere. `[]` skips nothing.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub skip_branch_patterns: Option<Vec<String>>,
     /// Name of the workflow (within `file`) the check jobs are added to.
@@ -70,7 +71,8 @@ pub struct PostMergeCheckConfig {
 }
 
 impl PostMergeCheckConfig {
-    /// The PR branch patterns whose validation chain is skipped.
+    /// The PR branch patterns whose pack and review jobs are skipped
+    /// (generation always runs).
     pub fn effective_skip_branch_patterns(&self) -> Vec<String> {
         self.skip_branch_patterns
             .clone()
