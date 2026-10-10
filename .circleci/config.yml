@@ -88,6 +88,10 @@ workflows:
           name: build-binary
           package: gen-circleci-orb
           executor: toolkit/rust_env_rolling
+          filters:
+            branches:
+              ignore:
+                - /^renovate\/.*$/
       - gen-circleci-orb/generate:
           name: regenerate-orb
           binary: gen-circleci-orb
@@ -102,6 +106,7 @@ workflows:
             branches:
               ignore:
                 - main
+                - /^renovate\/.*$/
       - gen-circleci-orb/update:
           name: check-ci-wiring
           check: true

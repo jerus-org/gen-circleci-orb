@@ -19,7 +19,7 @@ pub struct OrbConfig {
 impl OrbConfig {
     /// The post-merge check in force: `[post_merge_check]`, or the deprecated
     /// `[post_merge_regen]` read as one (its `branch_patterns` both select the
-    /// merges to check and skip the validation chain on those PR branches).
+    /// merges to check and skip the pack and review jobs on those PR branches).
     /// `None` when neither section is present.
     pub fn effective_post_merge_check(&self) -> Option<PostMergeCheckConfig> {
         if let Some(check) = &self.post_merge_check {
@@ -71,7 +71,8 @@ pub struct PostMergeCheckConfig {
 }
 
 impl PostMergeCheckConfig {
-    /// The PR branch patterns whose validation chain is skipped.
+    /// The PR branch patterns whose pack and review jobs are skipped
+    /// (generation always runs).
     pub fn effective_skip_branch_patterns(&self) -> Vec<String> {
         self.skip_branch_patterns
             .clone()

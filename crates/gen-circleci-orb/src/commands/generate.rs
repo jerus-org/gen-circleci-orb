@@ -1271,9 +1271,6 @@ impl Generate {
         if orb_config.effective_post_merge_check().is_some() {
             println!("{}", post_merge_check_trigger_reminder());
         }
-        if let Some(reminder) = renovate_ignored_authors_reminder(&orb_config) {
-            println!("{reminder}");
-        }
         if orb_config.post_merge_regen.is_some() {
             eprintln!("warning: {}", post_merge_regen_deprecation());
         }
@@ -1583,33 +1580,22 @@ pub(crate) fn post_merge_check_trigger_reminder() -> String {
         .to_string()
 }
 
-/// Reminder printed when auto-record is on and a Renovate branch pattern is
-/// configured: the regenerated orb is recorded as a bot commit on Renovate's
-/// own PR branch, and Renovate treats any other author's commit as a manual edit
-/// and stops rebasing (gen-circleci-orb#328) unless that author is listed in
-/// `gitIgnoredAuthors`. The bot's email is only known to the CI environment
+/// Reminder printed by `init` and `update` (not `generate`, which runs in CI on
+/// every PR push) when auto-record is on: `regenerate-orb` records the
+/// regenerated orb as a bot commit on every non-`main` PR branch, Renovate's
+/// included. Renovate treats any other author's commit as a manual edit and
+/// stops updating the PR (gen-circleci-orb#328) unless that author is listed in
+/// `gitIgnoredAuthors`. Recording does not depend on `[post_merge_check]`, so
+/// neither does this. The bot's email is only known to the CI environment
 /// (`[record].user_email_env`), so this can remind but not verify.
 pub(crate) fn renovate_ignored_authors_reminder(
     config: &crate::orb_config::OrbConfig,
 ) -> Option<String> {
-    let records = config.record.as_ref().is_some_and(|r| r.enabled);
-    let check = config.effective_post_merge_check()?;
-    let renovate = check
-        .effective_skip_branch_patterns()
-        .iter()
-        .chain(check.branch_patterns.iter())
-        .any(|p| p.trim_start().to_ascii_lowercase().starts_with("renovate"));
-    if !(records && renovate) {
-        return None;
-    }
-    let env = config
-        .record
-        .as_ref()
-        .map(|r| r.user_email_env.as_str())
-        .unwrap_or("the record email variable");
+    let record = config.record.as_ref().filter(|r| r.enabled)?;
+    let env = record.user_email_env.as_str();
     Some(format!(
-        "Auto-record is on and Renovate branches are configured: the regenerated orb is \
-         committed onto Renovate's PR branch. Renovate treats a commit by any other author as \
+        "Auto-record is on: the regenerated orb is committed onto every PR branch, \
+         including Renovate's. If you use Renovate, it treats a commit by any other author as \
          a manual edit and stops updating the PR, so add the bot's commit email (the value of \
          ${env}) to `gitIgnoredAuthors` in your Renovate config, e.g.\n  \
          {{ \"gitIgnoredAuthors\": [\"<bot email>\"] }}\n\
@@ -1964,29 +1950,25 @@ mod tests {
 
     // ── renovate_ignored_authors_reminder ───────────────────────────────────
 
-    fn config_with(record_enabled: bool, patterns: &[&str]) -> crate::orb_config::OrbConfig {
-        use crate::orb_config::{OrbConfig, PostMergeCheckConfig, RecordConfig};
+    fn config_with_record(enabled: bool) -> crate::orb_config::OrbConfig {
+        use crate::orb_config::{OrbConfig, RecordConfig};
         OrbConfig {
             record: Some(RecordConfig {
-                enabled: record_enabled,
+                enabled,
                 user_email_env: "BOT_USER_EMAIL".to_string(),
                 ..RecordConfig::default()
-            }),
-            post_merge_check: Some(PostMergeCheckConfig {
-                branch_patterns: patterns.iter().map(|p| p.to_string()).collect(),
-                workflow: "update_prlog".to_string(),
-                ..PostMergeCheckConfig::default()
             }),
             ..OrbConfig::default()
         }
     }
 
-    /// With auto-record on and Renovate branches configured, the regeneration is
-    /// committed onto Renovate's branch, which freezes it unless the bot is in
-    /// `gitIgnoredAuthors`. The tool can't see the email, so it must say so.
+    /// With auto-record on, the regeneration is committed onto every PR branch,
+    /// Renovate's included, which freezes it unless the bot is in
+    /// `gitIgnoredAuthors`. That holds with or without a `[post_merge_check]`,
+    /// and the tool can't see the email, so it must say so.
     #[test]
     fn renovate_reminder_names_gitignoredauthors_and_the_email_variable() {
-        let msg = renovate_ignored_authors_reminder(&config_with(true, &["renovate/*"]))
+        let msg = renovate_ignored_authors_reminder(&config_with_record(true))
             .expect("reminder expected");
         assert!(msg.contains("gitIgnoredAuthors"), "{msg}");
         assert!(msg.contains("BOT_USER_EMAIL"), "{msg}");
@@ -1994,9 +1976,8 @@ mod tests {
     }
 
     #[test]
-    fn renovate_reminder_is_silent_without_record_or_without_renovate() {
-        assert!(renovate_ignored_authors_reminder(&config_with(false, &["renovate/*"])).is_none());
-        assert!(renovate_ignored_authors_reminder(&config_with(true, &["dependabot/*"])).is_none());
+    fn renovate_reminder_is_silent_when_nothing_is_recorded() {
+        assert!(renovate_ignored_authors_reminder(&config_with_record(false)).is_none());
         assert!(
             renovate_ignored_authors_reminder(&crate::orb_config::OrbConfig::default()).is_none()
         );

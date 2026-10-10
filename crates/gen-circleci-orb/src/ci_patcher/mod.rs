@@ -3417,6 +3417,24 @@ workflows:
         );
     }
 
+    /// The point of "always generate": on a skip-pattern branch `regenerate-orb`
+    /// still carries its record settings (release context) and its dependencies, so the regenerated orb is committed to the PR branch.
+    #[test]
+    fn patch_build_regenerate_keeps_record_settings_on_skip_pattern_branches() {
+        let opts = PatchOpts {
+            validation_skip_patterns: vec!["renovate/*".to_string()],
+            record_contexts: vec!["release".to_string()],
+            test_generation: false,
+            ..make_opts()
+        };
+        let (output, _report) = patch_build(BUILD_FIXTURE_NO_JOBS, &opts);
+        let block = job_block(&output, "regenerate-orb");
+        assert!(block.contains("context: [release]"), "{block}");
+        assert!(block.contains("- main"), "{block}");
+        assert!(block.contains("requires: [build-binary"), "{block}");
+        assert!(!block.contains("no_record"), "{block}");
+    }
+
     /// Only the testing of the generated orb is deferred to the post-merge
     /// chain: `pack-orb` and `review-orb` are filtered out on skip-pattern
     /// branches (no container starts), generation is not.

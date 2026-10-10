@@ -115,6 +115,15 @@ impl Update {
             }
         }
 
+        // After a real re-sync only: `--check` runs in CI on every push.
+        if !self.check {
+            if let Some(reminder) =
+                crate::commands::generate::renovate_ignored_authors_reminder(&config)
+            {
+                println!("{reminder}");
+            }
+        }
+
         let arg_problems = self.validate_orb_arguments(color)?;
 
         let mut failures = Vec::new();

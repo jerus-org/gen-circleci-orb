@@ -1494,6 +1494,11 @@ impl Init {
                 crate::commands::generate::post_merge_check_trigger_reminder()
             );
         }
+        if let Some(reminder) =
+            crate::commands::generate::renovate_ignored_authors_reminder(&bootstrap)
+        {
+            println!("{reminder}");
+        }
         if self.dry_run {
             let content = toml::to_string_pretty(&bootstrap)?;
             println!("(dry-run) Would write {}", config_path.display());

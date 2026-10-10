@@ -232,8 +232,13 @@ to `gitIgnoredAuthors` in each repository's Renovate config:
 { "gitIgnoredAuthors": ["<bot email>"] }
 ```
 
-Entries may be exact RFC5322 email strings, globs or regexes. `generate` prints a reminder while
-auto-record and a Renovate branch pattern are both configured; it can't check the setting itself.
+Entries may be exact RFC5322 email strings, globs or regexes. `init` and `update` print a reminder
+while auto-record is on; the tool can't check the setting itself.
+
+**Upgrading:** earlier versions skipped regeneration on skip-pattern branches, so Renovate PRs never
+received a recorded commit. After upgrading, re-run `update` to re-sync the wiring, and set
+`gitIgnoredAuthors` first, or the first dependency bump that changes the orb will stop Renovate
+updating that PR.
 See [Renovate's `gitIgnoredAuthors`](https://docs.renovatebot.com/configuration-options/#gitignoredauthors).
 
 ## See also
