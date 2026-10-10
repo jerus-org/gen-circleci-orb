@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - deps: lock file maintenance(pr [#497])
 - deps: update rust:1-slim-trixie docker digest to 2752b33(pr [#492])
 - deps: update rust crate toml to 1.1.8(pr [#493])
+- deps: update rust crate toml_edit to 0.25.17(pr [#494])
 
 ## [0.2.4] - 2026-10-03
 
@@ -1389,6 +1390,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#497]: https://github.com/jerus-org/gen-circleci-orb/pull/497
 [#492]: https://github.com/jerus-org/gen-circleci-orb/pull/492
 [#493]: https://github.com/jerus-org/gen-circleci-orb/pull/493
+[#494]: https://github.com/jerus-org/gen-circleci-orb/pull/494
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.4...HEAD
 [0.2.4]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.2...v0.2.3
