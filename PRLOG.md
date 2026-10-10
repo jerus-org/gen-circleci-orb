@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- add rustup_components to bake rustup components into the executor(pr [#491])
+
 ### Changed
 
 - docs-update roadmap status to 0.2.x(pr [#488])
@@ -1378,6 +1382,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#487]: https://github.com/jerus-org/gen-circleci-orb/pull/487
 [#488]: https://github.com/jerus-org/gen-circleci-orb/pull/488
 [#489]: https://github.com/jerus-org/gen-circleci-orb/pull/489
+[#491]: https://github.com/jerus-org/gen-circleci-orb/pull/491
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.4...HEAD
 [0.2.4]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.2...v0.2.3
