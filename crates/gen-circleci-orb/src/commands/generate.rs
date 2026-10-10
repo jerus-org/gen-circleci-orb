@@ -623,6 +623,78 @@ pub(crate) fn resolve_cargo_tools(
     }
 }
 
+/// `[orb].rustup_components` — config only, no CLI flag: it is an advanced
+/// image knob, set once alongside `base_image`.
+pub(crate) fn resolve_rustup_components(config: &crate::orb_config::OrbConfig) -> Vec<String> {
+    config
+        .orb
+        .as_ref()
+        .and_then(|o| o.rustup_components.clone())
+        .unwrap_or_default()
+}
+
+/// The apt method installs everything from one package stage with no runtime
+/// stage to add components in, so reject the combination loudly rather than
+/// silently dropping them from the executor.
+pub(crate) fn ensure_rustup_components_supported(
+    method: &InstallMethod,
+    components: &[String],
+) -> Result<()> {
+    if !components.is_empty() && matches!(method, InstallMethod::Apt) {
+        anyhow::bail!(
+            "rustup_components is not supported with the `apt` install method \
+             (it needs the binstall or local runtime stage)"
+        );
+    }
+    Ok(())
+}
+
+/// The generator's default runtime image (`debian:13-slim`) carries no
+/// `rustup`, so `RUN rustup component add` could only fail at container-build
+/// time. Catch that known case at generate time instead. (The MCP default is a
+/// `rust:` image and does have rustup.) A custom `base_image` is trusted: it
+/// may well provide rustup.
+pub(crate) fn ensure_rustup_base_image(base_image: &str, components: &[String]) -> Result<()> {
+    if !components.is_empty() && base_image == DEFAULT_BASE_IMAGE {
+        anyhow::bail!(
+            "rustup_components needs a runtime base_image that provides rustup, but base_image \
+             is the generator default {base_image:?}, which has none; set `[orb] base_image` \
+             to a Rust image (e.g. a `rust:` tag)"
+        );
+    }
+    Ok(())
+}
+
+/// Validates component names (they are spliced into a Dockerfile `RUN` line)
+/// and returns them sorted and de-duplicated. Rustup component names are
+/// lowercase alphanumerics with `-`, optionally ending in a `-<target-triple>`
+/// suffix; the check here is a conservative superset that must start
+/// alphanumeric.
+pub(crate) fn validate_rustup_components(entries: &[String]) -> Result<Vec<String>> {
+    let mut errors = Vec::new();
+    for entry in entries {
+        // Must start alphanumeric so an entry can never read as a rustup option
+        // (`-h`, `--toolchain=nightly`) once spliced into the command line.
+        let ok = entry.starts_with(|c: char| c.is_ascii_alphanumeric())
+            && entry
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+        if !ok {
+            errors.push(format!(
+                "rustup_components entry {entry:?} must be a non-empty rustup component name \
+                 (letters, digits, '-', '_' and '.' only)"
+            ));
+        }
+    }
+    if !errors.is_empty() {
+        anyhow::bail!("invalid rustup_components:\n{}", errors.join("\n"));
+    }
+    let mut out = entries.to_vec();
+    out.sort();
+    out.dedup();
+    Ok(out)
+}
+
 /// cargo_tools relies on the Binstall Dockerfile's Rust builder stage (which has
 /// cargo) to fetch and stage the extra tool binaries. The apt/local methods have
 /// no such stage, so reject the combination loudly rather than silently dropping
@@ -1281,6 +1353,13 @@ impl Generate {
         let cargo_tools = resolve_cargo_tools(&self.cargo_tools, &orb_config);
         ensure_cargo_tools_supported(&install_method, &cargo_tools)?;
         let cargo_tools = validate_cargo_tool_entries(&cargo_tools, &cli_def.binary_name)?;
+        let rustup_components = resolve_rustup_components(&orb_config);
+        ensure_rustup_components_supported(&install_method, &rustup_components)?;
+        ensure_rustup_base_image(
+            &resolve_base_image(self.base_image.as_deref(), &orb_config),
+            &rustup_components,
+        )?;
+        let rustup_components = validate_rustup_components(&rustup_components)?;
 
         let git_push_subcommands =
             resolve_git_push_subcommands(&self.git_push_subcommands, &orb_config);
@@ -1330,6 +1409,7 @@ impl Generate {
             ),
             apt_packages: resolve_apt_packages(&self.apt_packages, &orb_config),
             cargo_tools,
+            rustup_components,
             crate_wait: resolve_crate_wait(&orb_config),
             orb_version_pin: help_parser::binary_orb_version_pin(&introspect),
         };
@@ -2720,6 +2800,80 @@ mod tests {
     }
 
     // ── validate_cargo_tool_entries ─────────────────────────────────────────
+
+    // ── rustup_components ───────────────────────────────────────────────────
+
+    #[test]
+    fn resolve_rustup_components_reads_config_and_defaults_to_empty() {
+        use crate::orb_config::{OrbConfig, OrbSection};
+        assert!(resolve_rustup_components(&OrbConfig::default()).is_empty());
+        let config = OrbConfig {
+            orb: Some(OrbSection {
+                rustup_components: Some(vec!["llvm-tools-preview".to_string()]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            resolve_rustup_components(&config),
+            vec!["llvm-tools-preview"]
+        );
+    }
+
+    #[test]
+    fn rustup_components_are_rejected_with_the_apt_method_only() {
+        let c = vec!["rust-src".to_string()];
+        assert!(ensure_rustup_components_supported(&InstallMethod::Apt, &c).is_err());
+        assert!(ensure_rustup_components_supported(&InstallMethod::Binstall, &c).is_ok());
+        assert!(ensure_rustup_components_supported(&InstallMethod::Local, &c).is_ok());
+        assert!(ensure_rustup_components_supported(&InstallMethod::Apt, &[]).is_ok());
+    }
+
+    #[test]
+    fn rustup_components_are_rejected_on_a_default_base_image_without_rustup() {
+        let c = vec!["llvm-tools-preview".to_string()];
+        let err = ensure_rustup_base_image(DEFAULT_BASE_IMAGE, &c)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("base_image"),
+            "error should name base_image: {err}"
+        );
+        assert!(ensure_rustup_base_image(MCP_DEFAULT_BASE_IMAGE, &c).is_ok());
+        assert!(ensure_rustup_base_image("rust:1-slim-trixie", &c).is_ok());
+        assert!(ensure_rustup_base_image(DEFAULT_BASE_IMAGE, &[]).is_ok());
+    }
+
+    #[test]
+    fn validate_rustup_components_sorts_and_dedups() {
+        let got = validate_rustup_components(&[
+            "rust-src".to_string(),
+            "llvm-tools-preview".to_string(),
+            "rust-src".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(got, vec!["llvm-tools-preview", "rust-src"]);
+    }
+
+    #[test]
+    fn validate_rustup_components_rejects_shell_metacharacters_and_empties() {
+        for bad in [
+            "",
+            "rust src",
+            "a;rm -rf /",
+            "x$(y)",
+            "a&&b",
+            "-h",
+            "--toolchain=nightly",
+            ".hidden",
+            "_x",
+        ] {
+            assert!(
+                validate_rustup_components(&[bad.to_string()]).is_err(),
+                "{bad:?} should be rejected"
+            );
+        }
+    }
 
     #[test]
     fn validate_cargo_tool_entries_accepts_plain_and_split_forms() {

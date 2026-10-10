@@ -37,6 +37,12 @@ pub struct GenerateOpts {
     /// `cargo binstall` command line. Pre-validated by
     /// `commands::generate::validate_cargo_tool_entries`.
     pub cargo_tools: Vec<(String, String, Option<String>)>,
+    /// Rustup components to add in the runtime stage (`rustup component add`),
+    /// so tools that would otherwise fetch one on first use (e.g. `cargo-llvm-cov`
+    /// wanting `llvm-tools-preview`) find it already in the image. The runtime
+    /// base image must provide `rustup`; the build fails loudly if it does not.
+    /// Pre-validated by `commands::generate::validate_rustup_components`.
+    pub rustup_components: Vec<String>,
     /// How long the generated Dockerfile waits for crates.io to serve the
     /// version being released.
     pub crate_wait: CrateWait,
@@ -1276,6 +1282,7 @@ fn render_binstall_dockerfile(binary: &str, opts: &GenerateOpts) -> String {
         &opts.apt_packages,
         &copies,
         cli.is_some(),
+        &opts.rustup_components,
     ));
     out
 }
@@ -1430,6 +1437,7 @@ fn render_runtime_stage(
     apt_packages: &[String],
     copies: &[String],
     with_cli: bool,
+    rustup_components: &[String],
 ) -> String {
     let mut out = format!("FROM {base_image}\n");
     out.push_str("RUN apt-get update \\\n");
@@ -1444,6 +1452,24 @@ fn render_runtime_stage(
             "COPY --from=cli-installer /usr/local/bin/{CIRCLECI_CLI_BINARY} \
              /usr/local/bin/{CIRCLECI_CLI_BINARY}\n"
         ));
+    }
+    if !rustup_components.is_empty() {
+        // As root, before USER: components land in the image's RUSTUP_HOME and
+        // stay readable to the circleci user. Sorted so regeneration is stable.
+        let mut components = rustup_components.to_vec();
+        components.sort();
+        components.dedup();
+        // One component per line, as in `render_cargo_tools_install`, so a long
+        // list stays inside the Dockerfile line limit (docker:S7020).
+        out.push_str("RUN rustup component add \\\n");
+        out.push_str(
+            &components
+                .iter()
+                .map(|c| format!("    {c}"))
+                .collect::<Vec<_>>()
+                .join(" \\\n"),
+        );
+        out.push('\n');
     }
     out.push_str("USER circleci\n");
     out.push_str("WORKDIR /home/circleci/project\n");
@@ -1467,6 +1493,7 @@ fn render_local_dockerfile(binary: &str, opts: &GenerateOpts) -> String {
         &opts.apt_packages,
         &copies,
         cli.is_some(),
+        &opts.rustup_components,
     ));
     out
 }
@@ -3117,6 +3144,7 @@ mod tests {
             circleci_cli_version: None,
             apt_packages: vec![],
             cargo_tools: vec![],
+            rustup_components: vec![],
             crate_wait: CrateWait::default(),
             orb_version_pin: None,
         }
@@ -3262,6 +3290,50 @@ mod tests {
             !content.contains("| bash"),
             "must not use curl|bash:\n{content}"
         );
+    }
+
+    #[test]
+    fn dockerfile_rustup_components_added_in_runtime_stage_before_user() {
+        let cli = make_cli("mytool", vec![]);
+        let opts = GenerateOpts {
+            rustup_components: vec!["rust-src".to_string(), "llvm-tools-preview".to_string()],
+            ..default_opts()
+        };
+        let files = generate(&cli, &opts, None);
+        let content = &files[&PathBuf::from("Dockerfile")];
+        let runtime = content.rsplit("FROM ").next().unwrap();
+        let add = runtime
+            .find("RUN rustup component add \\\n    llvm-tools-preview \\\n    rust-src\n")
+            .unwrap_or_else(|| panic!("sorted rustup line missing from runtime:\n{content}"));
+        let user = runtime.find("USER circleci").expect("USER line");
+        assert!(
+            add < user,
+            "component must be added as root, before USER:\n{content}"
+        );
+    }
+
+    #[test]
+    fn local_dockerfile_also_gets_rustup_components() {
+        let cli = make_cli("mytool", vec![]);
+        let opts = GenerateOpts {
+            install_method: InstallMethod::Local,
+            rustup_components: vec!["llvm-tools-preview".to_string()],
+            ..default_opts()
+        };
+        let files = generate(&cli, &opts, None);
+        let content = &files[&PathBuf::from("Dockerfile")];
+        assert!(
+            content.contains("RUN rustup component add \\\n    llvm-tools-preview\n"),
+            "local runtime stage should add the component:\n{content}"
+        );
+    }
+
+    #[test]
+    fn dockerfile_no_rustup_components_emits_no_rustup_line() {
+        let cli = make_cli("mytool", vec![]);
+        let files = generate(&cli, &default_opts(), None);
+        let content = &files[&PathBuf::from("Dockerfile")];
+        assert!(!content.contains("rustup"), "unexpected rustup:\n{content}");
     }
 
     #[test]
@@ -5804,6 +5876,19 @@ mod tests {
             "cargo-about",
             "rsign2:rsign",
         ]);
+        let many_components: Vec<String> = [
+            "clippy",
+            "llvm-tools-preview",
+            "miri",
+            "rust-analyzer",
+            "rust-docs",
+            "rust-src",
+            "rustfmt",
+            "rust-std-aarch64-unknown-linux-musl",
+            "rust-std-x86_64-unknown-linux-musl",
+        ]
+        .map(String::from)
+        .to_vec();
 
         for binary in ["mytool", long_binary] {
             for method in [
@@ -5819,6 +5904,7 @@ mod tests {
                     } else {
                         vec![]
                     },
+                    rustup_components: many_components.clone(),
                     apt_packages: vec!["libssl-dev".to_string(), "pkg-config".to_string()],
                     ..default_opts()
                 };

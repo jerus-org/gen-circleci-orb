@@ -668,6 +668,10 @@ pub(crate) fn build_bootstrap_config(
             // below: `init` is a bootstrap, not a reset.
             apt_packages: existing.orb.as_ref().and_then(|o| o.apt_packages.clone()),
             cargo_tools: existing.orb.as_ref().and_then(|o| o.cargo_tools.clone()),
+            rustup_components: existing
+                .orb
+                .as_ref()
+                .and_then(|o| o.rustup_components.clone()),
             custom_files: existing.orb.as_ref().and_then(|o| o.custom_files.clone()),
             allow_unparsed_help: existing.orb.as_ref().and_then(|o| o.allow_unparsed_help),
             crate_wait_attempts: existing
@@ -3100,6 +3104,7 @@ mod tests {
             orb: Some(OrbSection {
                 apt_packages: Some(vec!["gnupg".to_string()]),
                 cargo_tools: Some(vec!["cargo-audit".to_string()]),
+                rustup_components: Some(vec!["llvm-tools-preview".to_string()]),
                 custom_files: Some(vec!["src/scripts/build-container.sh".to_string()]),
                 allow_unparsed_help: Some(true),
                 crate_wait_attempts: 60,
@@ -3124,6 +3129,10 @@ mod tests {
         assert_eq!(
             orb.cargo_tools.as_deref(),
             Some(&["cargo-audit".to_string()][..])
+        );
+        assert_eq!(
+            orb.rustup_components.as_deref(),
+            Some(&["llvm-tools-preview".to_string()][..])
         );
         assert_eq!(
             orb.custom_files.as_deref(),

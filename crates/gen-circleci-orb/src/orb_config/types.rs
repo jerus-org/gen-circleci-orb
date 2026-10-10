@@ -323,6 +323,14 @@ pub struct OrbSection {
     /// for orbs whose executor orchestrates other cargo tools (e.g. a security
     /// gate needs `cargo-audit` and `cargo-deny` on PATH).
     pub cargo_tools: Option<Vec<String>>,
+    /// Rustup components to pre-install in the executor image (`binstall` and
+    /// `local` install methods), e.g. `["llvm-tools-preview"]` for an orb that
+    /// wraps `cargo-llvm-cov`. Without this, a tool that needs a component
+    /// downloads it on every job run. Added with `rustup component add` as root
+    /// in the runtime stage, so the runtime `base_image` must provide `rustup`
+    /// (the official `rust:` images do) and the component is installed for
+    /// that image's default toolchain only.
+    pub rustup_components: Option<Vec<String>>,
     pub home_url: Option<String>,
     pub source_url: Option<String>,
     /// Subcommand names whose generated jobs include a set_https_remote step.
@@ -379,6 +387,7 @@ impl Default for OrbSection {
             install_method: DEFAULT_INSTALL_METHOD.to_string(),
             apt_packages: None,
             cargo_tools: None,
+            rustup_components: None,
             home_url: None,
             source_url: None,
             git_push_subcommands: None,

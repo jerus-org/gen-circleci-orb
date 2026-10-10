@@ -71,6 +71,28 @@ more than one `@`, or not starting with a digit — this is an exact pin, not a 
 `circleci` (reserved — the CLI-installer stage always writes there when enabled) — two tools landing
 at the same runtime path would silently drop one of them.
 
+### `rustup_components` — rustup components baked into the executor
+
+Rustup components to pre-install in the executor image. Use it when the wrapped tool would otherwise
+download a component on every job run — e.g. `cargo-llvm-cov` fetching `llvm-tools-preview` the
+first time it runs under `CI`. The generated Dockerfile adds them with `rustup component add` in the
+runtime stage, as root and before `USER`, so they land in the image's `RUSTUP_HOME` and stay readable
+to the `circleci` user.
+
+```toml
+[orb]
+rustup_components = ["llvm-tools-preview"]
+```
+
+Config only (no CLI flag). Supported with the **binstall** and **local** install methods; using it
+with `apt` is an error. The runtime `base_image` must provide `rustup` (the official `rust:` images
+do): leaving `base_image` at the generator's default `debian:13-slim`, which has none, is rejected at
+generate time, and any other image without `rustup` fails the container build. The component is installed for that image's default toolchain
+only: a consumer whose `rust-toolchain.toml` selects another toolchain still downloads the component
+for it, exactly as before. Entries are validated (letters, digits, `-`, `_`, `.`, and the first character must be a letter or
+digit so an entry can never read as a `rustup` option), then sorted and de-duplicated so
+regeneration is stable. The Dockerfile lists one component per line, like `cargo_tools`.
+
 ### `crate_wait_attempts` / `crate_wait_seconds` — the crates.io propagation gate
 
 ```toml
