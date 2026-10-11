@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - deps: lock file maintenance(pr [#500])
+- deps: update dependency gen-circleci-orb to v0.2.5(pr [#499])
 
 ## [0.2.5] - 2026-10-11
 
@@ -1404,6 +1405,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#496]: https://github.com/jerus-org/gen-circleci-orb/pull/496
 [#498]: https://github.com/jerus-org/gen-circleci-orb/pull/498
 [#500]: https://github.com/jerus-org/gen-circleci-orb/pull/500
+[#499]: https://github.com/jerus-org/gen-circleci-orb/pull/499
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.5...HEAD
 [0.2.5]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.3...v0.2.4
