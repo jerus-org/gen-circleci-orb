@@ -5,9 +5,27 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.5] - 2026-10-11
+
+Summary: Added[1], Fixed[7]
+
+### Added
+
+ - feat(config): add rustup_components
+
+### Fixed
+
+ - fix(ci): address review of always-generate change
+ - fix(ci): always generate on skip-pattern branches
+ - fix(deps): update rust crate uuid to 1.28.0
+ - fix(deps): update rust crate toml_edit to 0.25.17
+ - fix(deps): update rust crate toml to 1.1.8
+ - fix(config): harden rustup_components
+ - fix(deps): update rust crate tokio to 1.53.2
+
 ## [0.2.4] - 2026-10-03
 
-Summary: Fixed[5]
+Summary: Chore[1], Fixed[5]
 
 ### Fixed
 
@@ -1076,7 +1094,8 @@ Summary: Added[2], Chore[1], Fixed[2], Testing[1]
 
 Summary: Chore[2]
 
-[Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.3...HEAD
+[Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.4...HEAD
+[0.2.4]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.0...v0.2.1

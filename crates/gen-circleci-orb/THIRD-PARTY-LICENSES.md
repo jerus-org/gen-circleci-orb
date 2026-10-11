@@ -13,7 +13,7 @@ from the dependency graph with [`cargo-about`](https://github.com/EmbarkStudios/
 
 ## Overview
 
-- **MIT License** — 332 crate(s)
+- **MIT License** — 336 crate(s)
 - **ISC License** — 22 crate(s)
 - **Unicode License v3** — 19 crate(s)
 - **Apache License 2.0** — 9 crate(s)
@@ -1761,6 +1761,36 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
+- hex 0.4.3
+
+```text
+Copyright (c) 2013-2014 The Rust Project Developers.
+Copyright (c) 2015-2020 The rust-hex Developers
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+```
+
+## MIT License
+
+Used by:
+
 - form_urlencoded 1.2.2
 
 ```text
@@ -1834,7 +1864,7 @@ DEALINGS IN THE SOFTWARE.
 Used by:
 
 - backtrace 0.3.76
-- cc 1.6.0
+- cc 1.7.0
 - cfg-if 1.0.5
 - cmake 0.1.58
 - find-msvc-tools 0.1.14
@@ -1849,6 +1879,7 @@ Used by:
 - pkg-config 0.3.34
 - rustc-demangle 0.1.28
 - socket2 0.6.5
+- stacker 0.1.25
 - wasm-bindgen-futures 0.4.79
 - wasm-bindgen-macro-support 0.2.129
 - wasm-bindgen-macro 0.2.129
@@ -1925,7 +1956,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- mio 1.2.3
+- mio 1.2.4
 
 ```text
 Copyright (c) 2014 Carl Lerche and other MIO contributors
@@ -2031,7 +2062,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- uuid 1.27.0
+- uuid 1.28.0
 
 ```text
 Copyright (c) 2014 The Rust Project Developers
@@ -2102,7 +2133,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- hyper 1.11.1
+- hyper 1.12.0
 
 ```text
 Copyright (c) 2014-2026 Sean McArthur
@@ -2131,7 +2162,7 @@ THE SOFTWARE.
 
 Used by:
 
-- either 1.18.0
+- either 1.19.0
 
 ```text
 Copyright (c) 2015
@@ -2936,6 +2967,7 @@ DEALINGS IN THE SOFTWARE.
 Used by:
 
 - digest 0.10.7
+- hmac 0.12.1
 
 ```text
 Copyright (c) 2017 Artyom Pavlov
@@ -3202,7 +3234,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- h2 0.4.19
+- h2 0.4.20
 
 ```text
 Copyright (c) 2017 h2 authors
@@ -3448,7 +3480,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- smallvec 1.16.2
+- smallvec 1.16.3
 
 ```text
 Copyright (c) 2018 The Servo Project Developers
@@ -3483,7 +3515,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- want 0.3.1
+- want 0.3.2
 
 ```text
 Copyright (c) 2018-2019 Sean McArthur
@@ -3715,7 +3747,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- zeroize 1.9.0
+- zeroize 1.9.1
 
 ```text
 Copyright (c) 2018-2026 The RustCrypto Project Developers
@@ -4482,7 +4514,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- powerfmt 0.2.0
+- powerfmt 0.2.1
 
 ```text
 Copyright (c) 2023 Jacob Pratt et al.
@@ -4586,12 +4618,12 @@ Used by:
 - env_logger 0.11.11
 - is_terminal_polyfill 1.70.2
 - once_cell_polyfill 1.70.2
-- serde_spanned 1.1.1
-- toml 1.1.6+spec-1.1.0
-- toml_datetime 1.1.1+spec-1.1.0
-- toml_edit 0.25.15+spec-1.1.0
-- toml_parser 1.1.3+spec-1.1.0
-- toml_writer 1.1.2+spec-1.1.0
+- serde_spanned 1.1.2
+- toml 1.1.8+spec-1.1.0
+- toml_datetime 1.1.2+spec-1.1.0
+- toml_edit 0.25.17+spec-1.1.0
+- toml_parser 1.1.5+spec-1.1.0
+- toml_writer 1.1.3+spec-1.1.0
 
 ```text
 Copyright (c) Individual contributors
@@ -4812,6 +4844,32 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
+
+```
+
+## MIT License
+
+Used by:
+
+- psm 0.1.24
+
+```text
+Copyright © 2018, Simonas Kazlauskas
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
+associated documentation files (the "Software"), to deal in the Software without restriction,
+including without limitation the rights to use, copy, modify, merge, publish, distribute,
+sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or
+substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT
+NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
+OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ```
 
@@ -5317,7 +5375,7 @@ SOFTWARE.
 
 Used by:
 
-- gen-circleci-orb 0.2.4
+- gen-circleci-orb 0.2.5
 
 ```text
 MIT License
@@ -5400,8 +5458,8 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- tokio-util 0.7.19
-- tokio 1.53.1
+- tokio-util 0.7.20
+- tokio 1.53.2
 
 ```text
 MIT License
@@ -5641,7 +5699,7 @@ SOFTWARE.
 
 Used by:
 
-- octocrab 0.54.2
+- octocrab 0.54.3
 
 ```text
 MIT License (MIT)
@@ -5689,10 +5747,10 @@ Used by:
 - linux-raw-sys 0.12.1
 - once_cell 1.21.4
 - pathdiff 0.2.3
-- pest 2.9.2
-- pest_derive 2.9.2
-- pest_generator 2.9.2
-- pest_meta 2.9.2
+- pest 2.9.3
+- pest_derive 2.9.3
+- pest_generator 2.9.3
+- pest_meta 2.9.3
 - pin-project-internal 1.1.13
 - pin-project-lite 0.2.17
 - pin-project 1.1.13
@@ -5714,7 +5772,7 @@ Used by:
 - smol_str 0.3.6
 - syn 1.0.109
 - syn 2.0.119
-- syn 3.0.6
+- syn 3.0.7
 - thiserror-impl 2.0.21
 - thiserror 2.0.21
 - unicode-ident 1.0.26
@@ -5933,7 +5991,7 @@ Used by:
 
 - aho-corasick 1.1.5
 - jiff-core 0.1.1
-- jiff 0.2.37
+- jiff 0.2.38
 - memchr 2.8.3
 - ucd-trie 0.1.7
 - walkdir 2.5.0
@@ -6000,7 +6058,7 @@ SOFTWARE.
 
 Used by:
 
-- twox-hash 2.1.4
+- twox-hash 2.1.5
 
 ```text
 The MIT License (MIT)
