@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - deps: update rust crate pcu to 0.6.39(pr [#510])
 - deps: update rust crate tokio to 1.54.0(pr [#511])
 - deps: update dependency circleci-public/circleci-cli to v1.7.0(pr [#512])
+- deps: update rust crate rstest to 0.28.0(pr [#513])
 
 ## [0.2.5] - 2026-10-11
 
@@ -1425,6 +1426,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#510]: https://github.com/jerus-org/gen-circleci-orb/pull/510
 [#511]: https://github.com/jerus-org/gen-circleci-orb/pull/511
 [#512]: https://github.com/jerus-org/gen-circleci-orb/pull/512
+[#513]: https://github.com/jerus-org/gen-circleci-orb/pull/513
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.5...HEAD
 [0.2.5]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.3...v0.2.4
