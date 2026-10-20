@@ -1,3 +1,4 @@
+mod strict;
 mod types;
 
 pub use types::{
@@ -7,6 +8,8 @@ pub use types::{
     DEFAULT_CRATE_WAIT_SECONDS, DEFAULT_INSTALL_METHOD, DEFAULT_ORB_DIR, MAX_CRATE_WAIT_ATTEMPTS,
     MCP_DEFAULT_BASE_IMAGE,
 };
+
+pub use strict::unknown_job_group_keys;
 
 use anyhow::{Context, Result};
 use std::path::Path;
@@ -29,13 +32,42 @@ pub fn load_config(path: &Path) -> Result<OrbConfig> {
     }
     let content =
         std::fs::read_to_string(path).with_context(|| format!("cannot read {}", path.display()))?;
-    let config: OrbConfig = toml::from_str(&content).with_context(|| {
+    parse_config(path, &content)
+}
+
+/// [`load_config`], but failing on any unknown key in the job-group tables
+/// (#502).
+///
+/// Separate from [`load_config`] because `save_config` deliberately tolerates
+/// keys it does not model (a newer generator's config), whereas the commands
+/// that act on the job groups (`generate`, `update`) must not accept a config
+/// that silently drops what the author wrote. All offending keys are reported
+/// together.
+pub fn load_config_strict(path: &Path) -> Result<OrbConfig> {
+    if !path.exists() {
+        return Ok(OrbConfig::default());
+    }
+    let content =
+        std::fs::read_to_string(path).with_context(|| format!("cannot read {}", path.display()))?;
+    let config = parse_config(path, &content)?;
+    let errors = unknown_job_group_keys(&content);
+    if !errors.is_empty() {
+        anyhow::bail!(
+            "{} has unsupported job_group key(s):\n{}",
+            path.display(),
+            errors.join("\n")
+        );
+    }
+    Ok(config)
+}
+
+fn parse_config(path: &Path, content: &str) -> Result<OrbConfig> {
+    toml::from_str(content).with_context(|| {
         format!(
             "{} is not valid TOML — fix the syntax, or delete the file to start over",
             path.display()
         )
-    })?;
-    Ok(config)
+    })
 }
 
 /// Write the config, keeping whatever the user wrote around it.
@@ -332,6 +364,35 @@ mod tests {
         let path = dir.path().join("gen-circleci-orb.toml");
         std::fs::write(&path, content).unwrap();
         path
+    }
+
+    #[test]
+    fn load_config_strict_reports_every_unknown_key_in_one_error() {
+        let dir = TempDir::new().unwrap();
+        let path = write_toml(
+            &dir,
+            "[[job_group]]\nname = \"g\"\n[[job_group.step]]\nrun = \"r\"\nwhen = \"always\"\nbogus = 1\n",
+        );
+        let err = load_config_strict(&path).unwrap_err().to_string();
+        assert!(err.contains("`when`") && err.contains("`bogus`"), "{err}");
+        // The lenient loader still accepts the same file.
+        assert!(load_config(&path).is_ok());
+    }
+
+    #[test]
+    fn load_config_strict_accepts_missing_file_and_clean_config() {
+        let dir = TempDir::new().unwrap();
+        assert!(load_config_strict(&dir.path().join("absent.toml")).is_ok());
+        let path = write_toml(&dir, "[[job_group]]\nname = \"g\"\nsteps = [\"a\"]\n");
+        assert!(load_config_strict(&path).is_ok());
+    }
+
+    #[test]
+    fn load_config_strict_still_reports_invalid_toml() {
+        let dir = TempDir::new().unwrap();
+        let path = write_toml(&dir, "not = [valid");
+        let err = load_config_strict(&path).unwrap_err().to_string();
+        assert!(err.contains("not valid TOML"), "{err}");
     }
 
     #[test]

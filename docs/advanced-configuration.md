@@ -112,6 +112,11 @@ runner = "<< parameters.runner >>"
 | `run = "Set up git"` + `script` + `[job_group.step.environment]` | A custom `run` step: `run` is the step name, `script` the shell body, `environment` the env block |
 | `requires_git_auth = true` | Orthogonal to the above — settable on *any* step. Marks it as needing the authenticated (SSH-backed) git remote CircleCI's checkout injects, before a later `set_https_remote` step strips it. See the ordering rule below. |
 
+An unsupported or misspelt key in `[[job_group]]`, `[[job_group.step]]` or `[[job_group.parameter]]`
+(for example `when`, or `require_git_auth`) is an error from `generate`, `generate --check` and
+`update`, not something silently ignored. Every offending key is listed in one message, with the
+nearest known key when one is close.
+
 Two step targets are worth knowing about:
 
 - **`builtin = "attach_workspace"`** also injects two job parameters automatically —
