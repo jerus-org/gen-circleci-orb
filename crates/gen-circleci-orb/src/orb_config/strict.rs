@@ -5,34 +5,63 @@
 //! and the config looks as if it does something it does not. Those tables are
 //! checked here, on the raw TOML, and every offending key is reported at once.
 
-/// Keys `[[job_group]]` itself understands. Kept in step with [`JobGroup`] by
-/// the `known_keys_match_struct_fields` test.
-const GROUP_KEYS: &[&str] = &[
-    "name",
-    "description",
-    "steps",
-    "params",
-    "executor",
-    "parameter",
-    "step",
-];
+use super::{JobGroup, JobGroupParam, JobGroupStep};
 
-/// Keys `[[job_group.step]]` understands. Kept in step with [`JobGroupStep`] by
-/// the `known_keys_match_struct_fields` test.
-const STEP_KEYS: &[&str] = &[
-    "builtin",
-    "command",
-    "orb",
-    "run",
-    "script",
-    "with",
-    "environment",
-    "requires_git_auth",
-];
+/// The field names serde recognises for `T`, taken from its `Deserialize`
+/// derive so they cannot drift from the struct (renames such as `type` and
+/// `enum` included).
+///
+/// A derived `Deserialize` hands the full field list to
+/// `Deserializer::deserialize_struct`; this deserializer stops there and
+/// returns it.
+fn known_keys<T: serde::de::DeserializeOwned>() -> &'static [&'static str] {
+    match T::deserialize(FieldNames) {
+        Err(Fields(fields)) => fields,
+        Ok(_) => &[],
+    }
+}
 
-/// Keys `[[job_group.parameter]]` understands. Kept in step with
-/// [`JobGroupParam`] by the `known_keys_match_struct_fields` test.
-const PARAM_KEYS: &[&str] = &["name", "type", "default", "description", "enum"];
+#[derive(Debug)]
+struct Fields(&'static [&'static str]);
+
+impl std::fmt::Display for Fields {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "struct fields: {}", self.0.join(", "))
+    }
+}
+
+impl std::error::Error for Fields {}
+
+impl serde::de::Error for Fields {
+    fn custom<T: std::fmt::Display>(_: T) -> Self {
+        Fields(&[])
+    }
+}
+
+struct FieldNames;
+
+impl<'de> serde::Deserializer<'de> for FieldNames {
+    type Error = Fields;
+
+    fn deserialize_any<V: serde::de::Visitor<'de>>(self, _: V) -> Result<V::Value, Fields> {
+        Err(Fields(&[]))
+    }
+
+    fn deserialize_struct<V: serde::de::Visitor<'de>>(
+        self,
+        _name: &'static str,
+        fields: &'static [&'static str],
+        _: V,
+    ) -> Result<V::Value, Fields> {
+        Err(Fields(fields))
+    }
+
+    serde::forward_to_deserialize_any! {
+        bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string
+        bytes byte_buf option unit unit_struct newtype_struct seq tuple
+        tuple_struct map enum identifier ignored_any
+    }
+}
 
 /// Every unknown key in the job-group tables of `content`, one message each.
 ///
@@ -46,6 +75,11 @@ pub fn unknown_job_group_keys(content: &str) -> Vec<String> {
         return Vec::new();
     };
 
+    let (group_keys, step_keys, param_keys) = (
+        known_keys::<JobGroup>(),
+        known_keys::<JobGroupStep>(),
+        known_keys::<JobGroupParam>(),
+    );
     let mut errors = Vec::new();
     for (index, group) in groups
         .iter()
@@ -57,15 +91,15 @@ pub fn unknown_job_group_keys(content: &str) -> Vec<String> {
             .and_then(|n| n.as_str())
             .map(|n| format!("job_group \"{n}\""))
             .unwrap_or_else(|| format!("job_group #{}", index + 1));
-        for key in group.keys().filter(|k| !GROUP_KEYS.contains(&k.as_str())) {
+        for key in group.keys().filter(|k| !group_keys.contains(&k.as_str())) {
             errors.push(unknown_key_message(
                 &format!("[[job_group]] #{} ({name})", index + 1),
                 key,
-                GROUP_KEYS,
+                group_keys,
             ));
         }
-        check_tables(group, "step", STEP_KEYS, &name, &mut errors);
-        check_tables(group, "parameter", PARAM_KEYS, &name, &mut errors);
+        check_tables(group, "step", step_keys, &name, &mut errors);
+        check_tables(group, "parameter", param_keys, &name, &mut errors);
     }
     errors
 }
@@ -149,56 +183,45 @@ fn edit_distance(a: &str, b: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::orb_config::{JobGroup, JobGroupParam, JobGroupStep};
-    use indexmap::IndexMap;
 
-    fn keys_of<T: serde::Serialize>(value: &T) -> Vec<String> {
-        let table = toml::Table::try_from(value).unwrap();
-        let mut keys: Vec<String> = table.keys().cloned().collect();
-        keys.sort();
-        keys
-    }
-
-    fn sorted(known: &[&str]) -> Vec<String> {
-        let mut keys: Vec<String> = known.iter().map(|k| k.to_string()).collect();
+    fn sorted(keys: &[&str]) -> Vec<String> {
+        let mut keys: Vec<String> = keys.iter().map(|k| k.to_string()).collect();
         keys.sort();
         keys
     }
 
     #[test]
-    fn known_keys_match_struct_fields() {
-        let map: IndexMap<String, String> = IndexMap::from([("k".to_string(), "v".to_string())]);
-        let step = JobGroupStep {
-            builtin: Some(String::new()),
-            command: Some(String::new()),
-            orb: Some(String::new()),
-            run: Some(String::new()),
-            script: Some(String::new()),
-            with: Some(map.clone()),
-            environment: Some(map),
-            requires_git_auth: Some(true),
-        };
-        assert_eq!(keys_of(&step), sorted(STEP_KEYS));
-
-        let param = JobGroupParam {
-            name: String::new(),
-            param_type: Some(String::new()),
-            default: Some(String::new()),
-            description: Some(String::new()),
-            enum_values: Some(vec![]),
-        };
-        assert_eq!(keys_of(&param), sorted(PARAM_KEYS));
-
-        let group = JobGroup {
-            name: String::new(),
-            description: Some(String::new()),
-            steps: vec![String::new()],
-            params: Some(vec![]),
-            executor: Some(String::new()),
-            parameter: Some(vec![]),
-            step: Some(vec![]),
-        };
-        assert_eq!(keys_of(&group), sorted(GROUP_KEYS));
+    fn known_keys_come_from_the_structs() {
+        assert_eq!(
+            sorted(known_keys::<JobGroupStep>()),
+            sorted(&[
+                "builtin",
+                "command",
+                "orb",
+                "run",
+                "script",
+                "with",
+                "environment",
+                "requires_git_auth",
+            ])
+        );
+        // The serde names, not the Rust field names (`param_type`, `enum_values`).
+        assert_eq!(
+            sorted(known_keys::<JobGroupParam>()),
+            sorted(&["name", "type", "default", "description", "enum"])
+        );
+        assert_eq!(
+            sorted(known_keys::<JobGroup>()),
+            sorted(&[
+                "name",
+                "description",
+                "steps",
+                "params",
+                "executor",
+                "parameter",
+                "step",
+            ])
+        );
     }
 
     #[test]
@@ -301,8 +324,11 @@ extra = 1
 
     #[test]
     fn suggestion_handles_transpositions_and_ignores_short_keys() {
-        assert_eq!(nearest("wiht", STEP_KEYS), Some("with"));
-        assert_eq!(nearest("rn", STEP_KEYS), None);
-        assert_eq!(nearest("completely_different", STEP_KEYS), None);
+        assert_eq!(nearest("wiht", known_keys::<JobGroupStep>()), Some("with"));
+        assert_eq!(nearest("rn", known_keys::<JobGroupStep>()), None);
+        assert_eq!(
+            nearest("completely_different", known_keys::<JobGroupStep>()),
+            None
+        );
     }
 }
