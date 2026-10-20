@@ -9,7 +9,7 @@ pub use types::{
     MCP_DEFAULT_BASE_IMAGE,
 };
 
-pub use strict::unknown_job_group_keys;
+pub use strict::{config_key_report, unknown_job_group_keys, KeyReport};
 
 use anyhow::{Context, Result};
 use std::path::Path;
@@ -36,29 +36,43 @@ pub fn load_config(path: &Path) -> Result<OrbConfig> {
 }
 
 /// [`load_config`], but failing on any unknown key in the job-group tables
-/// (#502).
+/// (#502), and returning what the file's other keys say about it (#449).
 ///
 /// Separate from [`load_config`] because `save_config` deliberately tolerates
 /// keys it does not model (a newer generator's config), whereas the commands
 /// that act on the job groups (`generate`, `update`) must not accept a config
 /// that silently drops what the author wrote. All offending keys are reported
-/// together.
-pub fn load_config_strict(path: &Path) -> Result<OrbConfig> {
+/// together. Retired and unknown keys elsewhere are not errors here: the
+/// caller decides what to do with the [`KeyReport`] (see
+/// [`KeyReport::print_warnings`]).
+///
+/// The file is read and parsed once.
+pub fn load_config_strict(path: &Path) -> Result<(OrbConfig, KeyReport)> {
+    let (config, report) = load_with_report(path)?;
+    if !report.job_group_unknown.is_empty() {
+        anyhow::bail!(
+            "{} has unsupported job_group key(s):\n{}",
+            path.display(),
+            report.job_group_unknown.join("\n")
+        );
+    }
+    Ok((config, report))
+}
+
+/// The keys in the config file at `path` that do nothing, for
+/// `config validate`. The file must exist and parse.
+pub fn inspect_config(path: &Path) -> Result<KeyReport> {
+    load_with_report(path).map(|(_, report)| report)
+}
+
+fn load_with_report(path: &Path) -> Result<(OrbConfig, KeyReport)> {
     if !path.exists() {
-        return Ok(OrbConfig::default());
+        return Ok((OrbConfig::default(), KeyReport::default()));
     }
     let content =
         std::fs::read_to_string(path).with_context(|| format!("cannot read {}", path.display()))?;
     let config = parse_config(path, &content)?;
-    let errors = unknown_job_group_keys(&content);
-    if !errors.is_empty() {
-        anyhow::bail!(
-            "{} has unsupported job_group key(s):\n{}",
-            path.display(),
-            errors.join("\n")
-        );
-    }
-    Ok(config)
+    Ok((config, config_key_report(&content)))
 }
 
 fn parse_config(path: &Path, content: &str) -> Result<OrbConfig> {

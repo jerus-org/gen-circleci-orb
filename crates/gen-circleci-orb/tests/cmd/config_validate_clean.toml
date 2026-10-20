@@ -1,0 +1,7 @@
+bin.name = "gen-circleci-orb"
+args = ["config", "validate"]
+status.code = 0
+stdout = """
+gen-circleci-orb.toml is valid.
+"""
+stderr = ""

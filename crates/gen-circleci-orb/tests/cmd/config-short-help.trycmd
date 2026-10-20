@@ -6,6 +6,7 @@ Usage: gen-circleci-orb config [OPTIONS] <COMMAND>
 
 Commands:
   show           Print the current configuration
+  validate       Check the configuration for retired and unknown keys
   suppress       Suppress job generation for a subcommand (generate_job =
                  false)
   unsuppress     Re-enable job generation for a previously suppressed

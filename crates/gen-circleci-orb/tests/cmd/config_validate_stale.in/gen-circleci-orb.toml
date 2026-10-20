@@ -1,0 +1,10 @@
+[ci]
+build_workflow = "validation"
+rust_image = "rust:latest"
+build_executer = "toolkit/rust_env_rolling"
+
+[[job_group]]
+name = "g"
+[[job_group.step]]
+run = "r"
+when = "always"

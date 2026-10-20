@@ -21,6 +21,11 @@ pub struct Config {
 pub enum ConfigCommands {
     /// Print the current configuration.
     Show,
+    /// Check the configuration for retired and unknown keys.
+    ///
+    /// Exits non-zero when any are found. A retired key names what replaced
+    /// it; unknown keys name the nearest known key when one is close.
+    Validate,
     /// Suppress job generation for a subcommand (generate_job = false).
     Suppress {
         /// Subcommand name to suppress.
@@ -71,6 +76,7 @@ impl Config {
                     print!("{}", toml::to_string_pretty(&config)?);
                 }
             }
+            ConfigCommands::Validate => validate_config_file(&self.config)?,
             ConfigCommands::Suppress { subcommand } => {
                 let mut config = orb_config::load_config(&self.config)?;
                 suppress_subcommand(&mut config, subcommand);
@@ -116,6 +122,35 @@ impl Config {
         }
         Ok(())
     }
+}
+
+/// `config validate`: the file must parse and carry no retired or unknown keys.
+/// Every problem is listed in one error.
+fn validate_config_file(path: &std::path::Path) -> Result<()> {
+    if !path.exists() {
+        anyhow::bail!("no config file found at {}", path.display());
+    }
+    let report = orb_config::inspect_config(path)?;
+    if report.is_clean() {
+        println!("{} is valid.", path.display());
+        return Ok(());
+    }
+    let problems: Vec<&String> = report
+        .retired
+        .iter()
+        .chain(&report.unknown)
+        .chain(&report.job_group_unknown)
+        .collect();
+    anyhow::bail!(
+        "{} has {} problem(s):\n{}",
+        path.display(),
+        problems.len(),
+        problems
+            .iter()
+            .map(|p| format!("  - {p}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    )
 }
 
 pub(crate) fn suppress_subcommand(config: &mut OrbConfig, name: &str) {

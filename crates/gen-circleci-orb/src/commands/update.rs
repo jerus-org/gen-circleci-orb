@@ -35,8 +35,9 @@ pub struct Update {
 
 impl Update {
     pub fn run(&self) -> Result<()> {
-        let config = orb_config::load_config_strict(&self.config)
+        let (config, key_report) = orb_config::load_config_strict(&self.config)
             .with_context(|| format!("reading {}", self.config.display()))?;
+        key_report.print_warnings();
         // `update` relies on init-captured config; it must not guess. Fail on a
         // missing required section, warn on present-but-empty required fields.
         for w in validate_config_completeness(&config)? {
