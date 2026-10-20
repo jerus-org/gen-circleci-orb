@@ -39,7 +39,9 @@ workflows:
           min_rust_version: << pipeline.parameters.min_rust_version >>
       # Verifies the DECLARED rust-version (cargo msrv verify); the rolling
       # min_rust_version builds above can be newer than the declared floor (#456).
-      - toolkit/msrv_verify
+      - toolkit/msrv_verify:
+          # Virtual workspace root has no package.rust-version; verify the member.
+          manifest_path: crates/gen-circleci-orb/Cargo.toml
       - toolkit/optional_builds:
           filters:
             branches:
