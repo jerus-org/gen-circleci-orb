@@ -1267,6 +1267,7 @@ impl Generate {
     pub fn run(&self) -> Result<()> {
         let config_path = resolve_config_path(self.config.as_ref(), &self.output);
         let orb_config = orb_config::load_config(&config_path)?;
+        orb_config::ensure_known_job_group_keys(&config_path)?;
 
         if orb_config.effective_post_merge_check().is_some() {
             println!("{}", post_merge_check_trigger_reminder());
