@@ -3,7 +3,7 @@ version: 2.1
 parameters:
   min_rust_version:
     type: string
-    default: "1.89"
+    default: "1.91"
 
 orbs:
   toolkit: jerus-org/circleci-toolkit@8.0.3
@@ -37,6 +37,9 @@ workflows:
               only: /pull\/[0-9]+/
       - toolkit/required_builds:
           min_rust_version: << pipeline.parameters.min_rust_version >>
+      # Verifies the DECLARED rust-version (cargo msrv verify); the rolling
+      # min_rust_version builds above can be newer than the declared floor (#456).
+      - toolkit/msrv_verify
       - toolkit/optional_builds:
           filters:
             branches:
