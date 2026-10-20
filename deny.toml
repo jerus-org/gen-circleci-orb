@@ -7,6 +7,9 @@ db-urls = ["https://github.com/rustsec/advisory-db"]
 unmaintained = "all"
 yanked = "warn"
 ignore = [
+    # Interim: unsafe-libyaml (via the deprecated serde_yaml) is unmaintained.
+    # Remove when jerus-org/gen-circleci-orb#507 closes.
+    "RUSTSEC-2024-0449",
 ]
 
 [licenses]
