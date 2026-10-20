@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - deps: lock file maintenance(pr [#506])
 - msrv: raise declared rust-version to 1.91 and verify it in CI(pr [#504])
 - deps: update rust:1-slim-trixie docker digest to 4df2ae8(pr [#509])
+- deps: update rust crate pcu to 0.6.39(pr [#510])
 
 ## [0.2.5] - 2026-10-11
 
@@ -1419,6 +1420,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#504]: https://github.com/jerus-org/gen-circleci-orb/pull/504
 [#505]: https://github.com/jerus-org/gen-circleci-orb/pull/505
 [#509]: https://github.com/jerus-org/gen-circleci-orb/pull/509
+[#510]: https://github.com/jerus-org/gen-circleci-orb/pull/510
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.5...HEAD
 [0.2.5]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.3...v0.2.4
