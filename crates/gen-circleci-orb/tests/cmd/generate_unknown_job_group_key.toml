@@ -1,0 +1,10 @@
+bin.name = "gen-circleci-orb"
+args = ["generate", "--binary", "fixture-cli", "--orb-namespace", "jerus-org", "--output", ".", "--no-record"]
+status.code = 1
+stdout = ""
+env.remove = ["RUST_BACKTRACE", "RUST_LIB_BACKTRACE"]
+stderr = """
+Error: [..]gen-circleci-orb.toml has unsupported job_group key(s):
+[[job_group.step]] #1 in job_group "g": unknown key `when`[..]
+[[job_group.step]] #2 in job_group "g": unknown key `require_git_auth` (did you mean `requires_git_auth`?)[..]
+"""

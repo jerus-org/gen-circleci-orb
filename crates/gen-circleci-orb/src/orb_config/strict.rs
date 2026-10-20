@@ -5,6 +5,18 @@
 //! and the config looks as if it does something it does not. Those tables are
 //! checked here, on the raw TOML, and every offending key is reported at once.
 
+/// Keys `[[job_group]]` itself understands. Kept in step with [`JobGroup`] by
+/// the `known_keys_match_struct_fields` test.
+const GROUP_KEYS: &[&str] = &[
+    "name",
+    "description",
+    "steps",
+    "params",
+    "executor",
+    "parameter",
+    "step",
+];
+
 /// Keys `[[job_group.step]]` understands. Kept in step with [`JobGroupStep`] by
 /// the `known_keys_match_struct_fields` test.
 const STEP_KEYS: &[&str] = &[
@@ -35,12 +47,23 @@ pub fn unknown_job_group_keys(content: &str) -> Vec<String> {
     };
 
     let mut errors = Vec::new();
-    for (index, group) in groups.iter().filter_map(|g| g.as_table()).enumerate() {
+    for (index, group) in groups
+        .iter()
+        .enumerate()
+        .filter_map(|(i, g)| g.as_table().map(|t| (i, t)))
+    {
         let name = group
             .get("name")
             .and_then(|n| n.as_str())
             .map(|n| format!("job_group \"{n}\""))
             .unwrap_or_else(|| format!("job_group #{}", index + 1));
+        for key in group.keys().filter(|k| !GROUP_KEYS.contains(&k.as_str())) {
+            errors.push(unknown_key_message(
+                &format!("[[job_group]] #{} ({name})", index + 1),
+                key,
+                GROUP_KEYS,
+            ));
+        }
         check_tables(group, "step", STEP_KEYS, &name, &mut errors);
         check_tables(group, "parameter", PARAM_KEYS, &name, &mut errors);
     }
@@ -57,53 +80,76 @@ fn check_tables(
     let Some(entries) = group.get(table).and_then(|v| v.as_array()) else {
         return;
     };
-    for (index, entry) in entries.iter().filter_map(|e| e.as_table()).enumerate() {
+    for (index, entry) in entries
+        .iter()
+        .enumerate()
+        .filter_map(|(i, e)| e.as_table().map(|t| (i, t)))
+    {
         for key in entry.keys().filter(|k| !known.contains(&k.as_str())) {
-            let mut message = format!(
-                "[[job_group.{table}]] #{} in {group_name}: unknown key `{key}`",
-                index + 1
-            );
-            if let Some(near) = nearest(key, known) {
-                message.push_str(&format!(" (did you mean `{near}`?)"));
-            }
-            message.push_str(&format!(" — known keys: {}", known.join(", ")));
-            errors.push(message);
+            let location = format!("[[job_group.{table}]] #{} in {group_name}", index + 1);
+            errors.push(unknown_key_message(&location, key, known));
         }
     }
 }
 
+fn unknown_key_message(location: &str, key: &str, known: &[&str]) -> String {
+    let mut message = format!("{location}: unknown key `{key}`");
+    if let Some(near) = nearest(key, known) {
+        message.push_str(&format!(" (did you mean `{near}`?)"));
+    }
+    message.push_str(&format!(" — known keys: {}", known.join(", ")));
+    message
+}
+
 /// The known key closest to `key`, if one is close enough to be a likely typo.
+///
+/// Keys under three characters are never matched: at that length one edit
+/// reaches almost any known key, so a suggestion would only mislead.
 fn nearest<'a>(key: &str, known: &[&'a str]) -> Option<&'a str> {
-    let limit = (key.chars().count() / 3).max(1);
+    let length = key.chars().count();
+    if length < 3 {
+        return None;
+    }
+    let limit = (length / 3).max(1);
     known
         .iter()
-        .map(|k| (levenshtein(key, k), *k))
+        .map(|k| (edit_distance(key, k), *k))
         .filter(|(distance, _)| *distance <= limit)
         .min_by_key(|(distance, _)| *distance)
         .map(|(_, k)| k)
 }
 
-fn levenshtein(a: &str, b: &str) -> usize {
+/// Optimal string alignment distance: insertions, deletions, substitutions and
+/// adjacent transpositions (`wiht` -> `with`) each cost one edit.
+fn edit_distance(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
     let b: Vec<char> = b.chars().collect();
-    let mut row: Vec<usize> = (0..=b.len()).collect();
-    for (i, ca) in a.chars().enumerate() {
-        let mut diagonal = row[0];
-        row[0] = i + 1;
-        for (j, cb) in b.iter().enumerate() {
-            let above = row[j + 1];
-            row[j + 1] = (diagonal + usize::from(ca != *cb))
-                .min(row[j] + 1)
-                .min(above + 1);
-            diagonal = above;
+    let mut grid = vec![vec![0usize; b.len() + 1]; a.len() + 1];
+    for (i, row) in grid.iter_mut().enumerate() {
+        row[0] = i;
+    }
+    for (j, cell) in grid[0].iter_mut().enumerate() {
+        *cell = j;
+    }
+    for i in 1..=a.len() {
+        for j in 1..=b.len() {
+            let cost = usize::from(a[i - 1] != b[j - 1]);
+            let mut best = (grid[i - 1][j] + 1)
+                .min(grid[i][j - 1] + 1)
+                .min(grid[i - 1][j - 1] + cost);
+            if i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] {
+                best = best.min(grid[i - 2][j - 2] + 1);
+            }
+            grid[i][j] = best;
         }
     }
-    row[b.len()]
+    grid[a.len()][b.len()]
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::orb_config::{JobGroupParam, JobGroupStep};
+    use crate::orb_config::{JobGroup, JobGroupParam, JobGroupStep};
     use indexmap::IndexMap;
 
     fn keys_of<T: serde::Serialize>(value: &T) -> Vec<String> {
@@ -142,6 +188,17 @@ mod tests {
             enum_values: Some(vec![]),
         };
         assert_eq!(keys_of(&param), sorted(PARAM_KEYS));
+
+        let group = JobGroup {
+            name: String::new(),
+            description: Some(String::new()),
+            steps: vec![String::new()],
+            params: Some(vec![]),
+            executor: Some(String::new()),
+            parameter: Some(vec![]),
+            step: Some(vec![]),
+        };
+        assert_eq!(keys_of(&group), sorted(GROUP_KEYS));
     }
 
     #[test]
@@ -216,5 +273,36 @@ extra = 1
     fn invalid_toml_or_no_groups_yield_nothing() {
         assert!(unknown_job_group_keys("not = [valid").is_empty());
         assert!(unknown_job_group_keys("[orb]\nbinary = \"x\"\n").is_empty());
+    }
+
+    #[test]
+    fn job_group_level_unknown_key_is_reported() {
+        let toml = "[[job_group]]\nname = \"g\"\nparameters = []\nexecuter = \"x\"\n";
+        let errors = unknown_job_group_keys(toml);
+        assert_eq!(errors.len(), 2, "{errors:?}");
+        assert!(
+            errors[0].contains("[[job_group]] #1 (job_group \"g\")"),
+            "{errors:?}"
+        );
+        assert!(errors[0].contains("did you mean `executor`?"), "{errors:?}");
+        // Keys come out in the TOML table's (alphabetical) order.
+        assert!(
+            errors[1].contains("did you mean `parameter`?"),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn position_counts_non_table_entries() {
+        let toml = "[[job_group]]\nname = \"g\"\nstep = [\"stray\", { run = \"r\", bogus = 1 }]\n";
+        let errors = unknown_job_group_keys(toml);
+        assert!(errors[0].contains("[[job_group.step]] #2"), "{errors:?}");
+    }
+
+    #[test]
+    fn suggestion_handles_transpositions_and_ignores_short_keys() {
+        assert_eq!(nearest("wiht", STEP_KEYS), Some("with"));
+        assert_eq!(nearest("rn", STEP_KEYS), None);
+        assert_eq!(nearest("completely_different", STEP_KEYS), None);
     }
 }

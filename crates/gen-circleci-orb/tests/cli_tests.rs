@@ -11,6 +11,15 @@ fn cli_tests() {
         std::path::Path::new(env!("CARGO_BIN_EXE_gen-circleci-orb")),
     );
 
+    // Fails while loading the config, before any binary is introspected, so it
+    // needs no fixture (#502).
+    cases
+        .case("tests/cmd/generate_unknown_job_group_key.toml")
+        .register_bin(
+            "gen-circleci-orb",
+            std::path::Path::new(env!("CARGO_BIN_EXE_gen-circleci-orb")),
+        );
+
     // fixture-cli is a test-only binary (required-features = ["test-fixtures"]) —
     // env!("CARGO_BIN_EXE_fixture-cli") only resolves when that feature built it,
     // so this whole case (and the bin registration it depends on) is compiled out

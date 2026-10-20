@@ -1,0 +1,8 @@
+[[job_group]]
+name = "g"
+[[job_group.step]]
+command = "upload"
+when = "always"
+[[job_group.step]]
+run = "r"
+require_git_auth = true
