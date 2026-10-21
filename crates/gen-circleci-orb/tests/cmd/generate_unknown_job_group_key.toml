@@ -5,6 +5,6 @@ stdout = ""
 env.remove = ["RUST_BACKTRACE", "RUST_LIB_BACKTRACE"]
 stderr = """
 Error: [..]gen-circleci-orb.toml has unsupported job_group key(s):
-[[job_group.step]] #1 in job_group "g": unknown key `retry`[..]
+[[job_group.step]] #1 in job_group "g": unknown key `not_a_key`[..]
 [[job_group.step]] #2 in job_group "g": unknown key `require_git_auth` (did you mean `requires_git_auth`?)[..]
 """

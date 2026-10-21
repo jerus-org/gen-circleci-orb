@@ -7,5 +7,5 @@ stderr = """
 Error: gen-circleci-orb.toml has 3 problem(s):
   - [ci]: `rust_image` is retired — replaced by `[ci].build_executor` (an orb executor reference, not an image string)
   - [ci]: unknown key `build_executer` (did you mean `build_executor`?)[..]
-  - [[job_group.step]] #1 in job_group "g": unknown key `retry`[..]
+  - [[job_group.step]] #1 in job_group "g": unknown key `not_a_key`[..]
 """

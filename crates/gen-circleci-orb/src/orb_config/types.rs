@@ -547,7 +547,7 @@ pub struct JobGroupStep {
     /// Marks a step as needing the authenticated git remote CircleCI's
     /// checkout injects, before a later `set_https_remote` step strips it.
     /// `builtin = "checkout"` gets this implicitly. See
-    /// `validate_job_group_step_order` for the enforced ordering rule and
+    /// `validate_job_group_steps` for the enforced ordering rule and
     /// the bug history behind it (gen-orb-mcp#266, #288).
     pub requires_git_auth: Option<bool>,
 }

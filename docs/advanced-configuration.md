@@ -114,7 +114,7 @@ runner = "<< parameters.runner >>"
 | `requires_git_auth = true` | Orthogonal to the above — settable on *any* step. Marks it as needing the authenticated (SSH-backed) git remote CircleCI's checkout injects, before a later `set_https_remote` step strips it. See the ordering rule below. |
 
 An unsupported or misspelt key in `[[job_group]]`, `[[job_group.step]]` or `[[job_group.parameter]]`
-(for example `retry`, or `require_git_auth`) is an error from `generate`, `generate --check` and
+(for example a misspelt `require_git_auth`) is an error from `generate`, `generate --check` and
 `update`, not something silently ignored. Every offending key is listed in one message, with the
 nearest known key when one is close.
 

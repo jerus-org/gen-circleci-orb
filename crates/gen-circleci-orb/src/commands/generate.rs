@@ -1152,7 +1152,10 @@ fn check_override_value(
     }
 }
 
-pub(crate) fn validate_job_group_step_order(
+/// Every check on a rich-mode job_group's steps that needs only the config:
+/// step order around `set_https_remote` (see [`job_group_step_order_errors`])
+/// and each step's `when`. All problems are reported together.
+pub(crate) fn validate_job_group_steps(
     job_groups: &[orb_config::JobGroup],
     git_push_subcommands: &[String],
 ) -> Result<()> {
@@ -1190,7 +1193,9 @@ fn job_group_step_when_errors(group: &orb_config::JobGroup) -> Vec<String> {
             group.name,
             describe_job_group_step(step)
         );
-        if step.run.is_none() {
+        // The renderer emits a built-in before a `run` step, so on a step that
+        // sets both, `when` would be dropped.
+        if step.builtin.is_some() || step.run.is_none() {
             errors.push(format!(
                 "{context} is only valid on a custom `run` step; CircleCI does not accept \
                  `when` on a command or orb invocation"
@@ -1206,7 +1211,7 @@ fn job_group_step_when_errors(group: &orb_config::JobGroup) -> Vec<String> {
     errors
 }
 
-/// One rich-mode job_group's share of [`validate_job_group_step_order`]'s
+/// One rich-mode job_group's share of [`validate_job_group_steps`]'s
 /// checks. Split out so the multiplicity check, the boundary lookup, and the
 /// per-step check each read as one small piece rather than one deeply nested
 /// function.
@@ -1403,7 +1408,7 @@ impl Generate {
 
         let git_push_subcommands =
             resolve_git_push_subcommands(&self.git_push_subcommands, &orb_config);
-        validate_job_group_step_order(
+        validate_job_group_steps(
             orb_config.job_group.as_deref().unwrap_or_default(),
             &git_push_subcommands,
         )?;
@@ -4060,10 +4065,7 @@ mod tests {
     fn validate_job_group_step_when_accepts_each_value_on_a_run_step() {
         for when in ["always", "on_success", "on_fail"] {
             let group = rich_group("g", vec![with_when(step_run("Upload"), when)]);
-            assert!(
-                validate_job_group_step_order(&[group], &[]).is_ok(),
-                "{when}"
-            );
+            assert!(validate_job_group_steps(&[group], &[]).is_ok(), "{when}");
         }
     }
 
@@ -4080,7 +4082,7 @@ mod tests {
                 with_when(step_builtin("checkout"), "always"),
             ],
         );
-        let err = validate_job_group_step_order(&[group], &[])
+        let err = validate_job_group_steps(&[group], &[])
             .unwrap_err()
             .to_string();
         assert_eq!(
@@ -4094,9 +4096,21 @@ mod tests {
     }
 
     #[test]
+    fn validate_job_group_step_when_rejects_a_step_the_renderer_treats_as_builtin() {
+        // `builtin` wins over `run` when rendering, so `when` would be dropped.
+        let mut step = with_when(step_run("x"), "always");
+        step.builtin = Some("checkout".to_string());
+        let group = rich_group("g", vec![step]);
+        let err = validate_job_group_steps(&[group], &[])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("only valid on a custom `run` step"), "{err}");
+    }
+
+    #[test]
     fn validate_job_group_step_when_rejects_an_unknown_value() {
         let group = rich_group("g", vec![with_when(step_run("Upload"), "sometimes")]);
-        let err = validate_job_group_step_order(&[group], &[])
+        let err = validate_job_group_steps(&[group], &[])
             .unwrap_err()
             .to_string();
         assert!(
@@ -4117,7 +4131,7 @@ mod tests {
                 with_when(step_command("upload"), "always"),
             ],
         );
-        let err = validate_job_group_step_order(&[group], &[])
+        let err = validate_job_group_steps(&[group], &[])
             .unwrap_err()
             .to_string();
         assert!(
@@ -4143,7 +4157,7 @@ mod tests {
             ],
         );
         let push_subcommands = ["save".to_string()];
-        let result = validate_job_group_step_order(&[group], &push_subcommands);
+        let result = validate_job_group_steps(&[group], &push_subcommands);
         assert!(result.is_ok(), "expected Ok, got {result:?}");
     }
 
@@ -4156,7 +4170,7 @@ mod tests {
                 requiring_git_auth(step_command("prime")),
             ],
         );
-        let err = validate_job_group_step_order(&[group], &[]).unwrap_err();
+        let err = validate_job_group_steps(&[group], &[]).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("build_mcp_server"), "got: {msg}");
         assert!(msg.contains("prime"), "got: {msg}");
@@ -4173,7 +4187,7 @@ mod tests {
             vec![step_command("save"), step_command("set_https_remote")],
         );
         let push_subcommands = ["save".to_string()];
-        let err = validate_job_group_step_order(&[group], &push_subcommands).unwrap_err();
+        let err = validate_job_group_steps(&[group], &push_subcommands).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("save"), "got: {msg}");
         assert!(msg.contains("invokes push subcommand"), "got: {msg}");
@@ -4191,7 +4205,7 @@ mod tests {
             ],
         );
         let push_subcommands = ["save".to_string()];
-        let result = validate_job_group_step_order(&[group], &push_subcommands);
+        let result = validate_job_group_steps(&[group], &push_subcommands);
         assert!(result.is_ok(), "expected Ok, got {result:?}");
     }
 
@@ -4205,7 +4219,7 @@ mod tests {
                 step_command("set_https_remote"),
             ],
         );
-        let err = validate_job_group_step_order(&[group], &[]).unwrap_err();
+        let err = validate_job_group_steps(&[group], &[]).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains('2'), "got: {msg}");
         assert!(msg.contains("expected at most one"), "got: {msg}");
@@ -4224,7 +4238,7 @@ mod tests {
                 step_command("set_https_remote"),
             ],
         );
-        let err = validate_job_group_step_order(&[group], &[]).unwrap_err();
+        let err = validate_job_group_steps(&[group], &[]).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("expected at most one"), "got: {msg}");
         assert!(
@@ -4239,7 +4253,7 @@ mod tests {
             "build_mcp_server",
             vec![step_command("set_https_remote"), step_builtin("checkout")],
         );
-        let err = validate_job_group_step_order(&[group], &[]).unwrap_err();
+        let err = validate_job_group_steps(&[group], &[]).unwrap_err();
         assert!(
             err.to_string()
                 .contains("requires an authenticated git remote"),
@@ -4257,7 +4271,7 @@ mod tests {
         // Simple-mode groups (step: None) are never inspected, regardless of
         // what would otherwise be a violation.
         let push_subcommands = ["save".to_string()];
-        let result = validate_job_group_step_order(&[group], &push_subcommands);
+        let result = validate_job_group_steps(&[group], &push_subcommands);
         assert!(result.is_ok(), "expected Ok, got {result:?}");
     }
 
@@ -4275,8 +4289,7 @@ mod tests {
             ],
         );
         let push_subcommands = ["save".to_string()];
-        let err =
-            validate_job_group_step_order(&[group_a, group_b], &push_subcommands).unwrap_err();
+        let err = validate_job_group_steps(&[group_a, group_b], &push_subcommands).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("group_a"), "got: {msg}");
         assert!(msg.contains("group_b"), "got: {msg}");
@@ -4288,7 +4301,7 @@ mod tests {
             "build_mcp_server",
             vec![step_command("set_https_remote"), step_command("save")],
         );
-        let result = validate_job_group_step_order(&[group], &[]);
+        let result = validate_job_group_steps(&[group], &[]);
         assert!(result.is_ok(), "expected Ok, got {result:?}");
     }
 

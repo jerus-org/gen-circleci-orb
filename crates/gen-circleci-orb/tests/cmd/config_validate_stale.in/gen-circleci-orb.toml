@@ -7,4 +7,4 @@ build_executer = "toolkit/rust_env_rolling"
 name = "g"
 [[job_group.step]]
 run = "r"
-retry = "always"
+not_a_key = "always"
