@@ -55,5 +55,13 @@ fn cli_tests() {
             "fixture-cli",
             std::path::Path::new(env!("CARGO_BIN_EXE_fixture-cli")),
         );
+
+        // A step `when` that is not on a `run` step, or not a CircleCI value (#503).
+        cases
+            .case("tests/cmd/generate_fixture_when.toml")
+            .register_bin(
+                "fixture-cli",
+                std::path::Path::new(env!("CARGO_BIN_EXE_fixture-cli")),
+            );
     }
 }

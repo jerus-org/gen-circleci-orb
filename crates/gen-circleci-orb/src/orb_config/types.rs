@@ -536,6 +536,12 @@ pub struct JobGroupStep {
     pub orb: Option<String>,
     pub run: Option<String>,
     pub script: Option<String>,
+    /// When a custom `run` step runs: `always`, `on_success` (CircleCI's
+    /// default) or `on_fail`, rendered as the step's `when:`. Valid only with
+    /// [`run`](Self::run): CircleCI accepts `when` on a `run` step but not on
+    /// the invocation of an orb command, so setting it on any other kind of
+    /// step is an error (gen-circleci-orb#503).
+    pub when: Option<String>,
     pub with: Option<IndexMap<String, String>>,
     pub environment: Option<IndexMap<String, String>>,
     /// Marks a step as needing the authenticated git remote CircleCI's

@@ -1158,13 +1158,52 @@ pub(crate) fn validate_job_group_step_order(
 ) -> Result<()> {
     let errors: Vec<String> = job_groups
         .iter()
-        .flat_map(|group| job_group_step_order_errors(group, git_push_subcommands))
+        .flat_map(|group| {
+            let mut errors = job_group_step_order_errors(group, git_push_subcommands);
+            errors.extend(job_group_step_when_errors(group));
+            errors
+        })
         .collect();
 
     if !errors.is_empty() {
-        anyhow::bail!("invalid job_group step order:\n{}", errors.join("\n"));
+        anyhow::bail!("invalid job_group step(s):\n{}", errors.join("\n"));
     }
     Ok(())
+}
+
+/// The values CircleCI accepts for a step's `when`.
+const STEP_WHEN_VALUES: [&str; 3] = ["always", "on_success", "on_fail"];
+
+/// A rich-mode step's `when` (#503): CircleCI accepts it on a `run` step but
+/// not on the invocation of an orb command (it rejects `Unexpected
+/// argument(s): when`), so it is valid only on a custom `run` step, and only
+/// with one of CircleCI's three values. Checked here so the mistake fails
+/// `generate` instead of `orb-tools/pack`.
+fn job_group_step_when_errors(group: &orb_config::JobGroup) -> Vec<String> {
+    let mut errors = Vec::new();
+    for step in group.step.as_deref().unwrap_or_default() {
+        let Some(when) = &step.when else {
+            continue;
+        };
+        let context = format!(
+            "job group {:?}, {}: `when = {when:?}`",
+            group.name,
+            describe_job_group_step(step)
+        );
+        if step.run.is_none() {
+            errors.push(format!(
+                "{context} is only valid on a custom `run` step; CircleCI does not accept \
+                 `when` on a command or orb invocation"
+            ));
+        }
+        if !STEP_WHEN_VALUES.contains(&when.as_str()) {
+            errors.push(format!(
+                "{context} is not one of {}",
+                STEP_WHEN_VALUES.join(", ")
+            ));
+        }
+    }
+    errors
 }
 
 /// One rich-mode job_group's share of [`validate_job_group_step_order`]'s
@@ -4007,6 +4046,85 @@ mod tests {
             step: Some(steps),
             ..Default::default()
         }
+    }
+
+    fn with_when(
+        mut step: crate::orb_config::JobGroupStep,
+        when: &str,
+    ) -> crate::orb_config::JobGroupStep {
+        step.when = Some(when.to_string());
+        step
+    }
+
+    #[test]
+    fn validate_job_group_step_when_accepts_each_value_on_a_run_step() {
+        for when in ["always", "on_success", "on_fail"] {
+            let group = rich_group("g", vec![with_when(step_run("Upload"), when)]);
+            assert!(
+                validate_job_group_step_order(&[group], &[]).is_ok(),
+                "{when}"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_job_group_step_when_rejects_a_command_orb_or_builtin_step() {
+        let mut orb = step_run("x");
+        orb.run = None;
+        orb.orb = Some("toolkit/setup".to_string());
+        let group = rich_group(
+            "g",
+            vec![
+                with_when(step_command("upload"), "always"),
+                with_when(orb, "on_fail"),
+                with_when(step_builtin("checkout"), "always"),
+            ],
+        );
+        let err = validate_job_group_step_order(&[group], &[])
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            err.matches("only valid on a custom `run` step").count(),
+            3,
+            "{err}"
+        );
+        assert!(err.contains("command \"upload\""), "{err}");
+        assert!(err.contains("orb \"toolkit/setup\""), "{err}");
+        assert!(err.contains("builtin \"checkout\""), "{err}");
+    }
+
+    #[test]
+    fn validate_job_group_step_when_rejects_an_unknown_value() {
+        let group = rich_group("g", vec![with_when(step_run("Upload"), "sometimes")]);
+        let err = validate_job_group_step_order(&[group], &[])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("`when = \"sometimes\"` is not one of always, on_success, on_fail"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn validate_job_group_step_when_is_reported_with_ordering_errors() {
+        // A step with `when` stays subject to the ordering rule, and both are
+        // reported together.
+        let group = rich_group(
+            "g",
+            vec![
+                step_command("set_https_remote"),
+                requiring_git_auth(with_when(step_run("Late"), "always")),
+                with_when(step_command("upload"), "always"),
+            ],
+        );
+        let err = validate_job_group_step_order(&[group], &[])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("requires_git_auth") || err.contains("authenticated"),
+            "{err}"
+        );
+        assert!(err.contains("only valid on a custom `run` step"), "{err}");
     }
 
     #[test]

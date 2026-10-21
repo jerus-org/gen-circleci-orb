@@ -110,12 +110,30 @@ runner = "<< parameters.runner >>"
 | `command = "prime"` | Invoke one of the tool's generated commands. Values come from `[job_group.step.with]`; omit `with` to wire parameters through by name |
 | `orb = "some-orb/setup"` | Invoke a third-party orb command, values from `[job_group.step.with]` |
 | `run = "Set up git"` + `script` + `[job_group.step.environment]` | A custom `run` step: `run` is the step name, `script` the shell body, `environment` the env block |
+| `when = "always"` | On a `run` step only: when the step runs, `always`, `on_success` (CircleCI's default) or `on_fail`. See below. |
 | `requires_git_auth = true` | Orthogonal to the above — settable on *any* step. Marks it as needing the authenticated (SSH-backed) git remote CircleCI's checkout injects, before a later `set_https_remote` step strips it. See the ordering rule below. |
 
 An unsupported or misspelt key in `[[job_group]]`, `[[job_group.step]]` or `[[job_group.parameter]]`
-(for example `when`, or `require_git_auth`) is an error from `generate`, `generate --check` and
+(for example `retry`, or `require_git_auth`) is an error from `generate`, `generate --check` and
 `update`, not something silently ignored. Every offending key is listed in one message, with the
 nearest known key when one is close.
+
+**Run a step after a failure.** `when` is rendered as the `run` step's own `when:`, so a step can
+run even though an earlier one failed — upload a report and fail on it afterwards, or collect
+diagnostics:
+
+```toml
+[[job_group.step]]
+run = "Upload report"
+script = "upload-report"
+when = "always"
+```
+
+CircleCI accepts `when` on a `run` step but not on the invocation of an orb command (it rejects
+`Unexpected argument(s): when`), so `when` on a `command`, `orb` or `builtin` step is an error from
+`generate`, as is any value other than `always`, `on_success` or `on_fail`. To run a generated
+command regardless of earlier failures, wrap it in a `run` step. The ordering rules below apply to
+a step with `when` like any other.
 
 Two step targets are worth knowing about:
 

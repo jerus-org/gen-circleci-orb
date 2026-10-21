@@ -1,0 +1,11 @@
+bin.name = "gen-circleci-orb"
+args = ["generate", "--binary", "fixture-cli", "--orb-namespace", "jerus-org", "--output", ".", "--no-record"]
+status.code = 1
+env.remove = ["RUST_BACKTRACE", "RUST_LIB_BACKTRACE"]
+stdout = "..."
+stderr = """
+...
+Error: invalid job_group step(s):
+job group "build_all", command "build": `when = "always"` is only valid on a custom `run` step; CircleCI does not accept `when` on a command or orb invocation
+job group "build_all", run "Collect diagnostics": `when = "sometimes"` is not one of always, on_success, on_fail
+"""

@@ -2568,6 +2568,7 @@ fn build_custom_run_step(
     name: &str,
     command: Option<&str>,
     environment: Option<&IndexMap<String, String>>,
+    when: Option<&str>,
 ) -> serde_yaml::Value {
     let mut run_map = serde_yaml::Mapping::new();
     run_map.insert(
@@ -2591,6 +2592,12 @@ fn build_custom_run_step(
         run_map.insert(
             serde_yaml::Value::String("environment".to_string()),
             serde_yaml::Value::Mapping(env_map),
+        );
+    }
+    if let Some(when) = when {
+        run_map.insert(
+            serde_yaml::Value::String("when".to_string()),
+            serde_yaml::Value::String(when.to_string()),
         );
     }
     let mut m = serde_yaml::Mapping::new();
@@ -2765,6 +2772,7 @@ fn render_rich_job_group(
                 run_name,
                 command.as_deref(),
                 step.environment.as_ref(),
+                step.when.as_deref(),
             ));
         } else if let Some(orb_ref) = &step.orb {
             steps.push(build_with_invoke_step(orb_ref, step.with.as_ref()));
@@ -8587,6 +8595,31 @@ mod tests {
             job.contains("force: true"),
             "boolean literal must coerce to YAML bool:\n{job}"
         );
+    }
+
+    #[test]
+    fn rich_run_step_when_renders_on_the_run_step_only_when_set() {
+        use crate::orb_config::{JobGroup, JobGroupStep};
+        let run = |name: &str, when: Option<&str>| JobGroupStep {
+            run: Some(name.to_string()),
+            script: Some("true".to_string()),
+            when: when.map(str::to_string),
+            ..Default::default()
+        };
+        let job = render_rich(JobGroup {
+            name: "sync_and_publish".to_string(),
+            step: Some(vec![
+                run("Upload report", Some("always")),
+                run("Collect diagnostics", Some("on_fail")),
+                run("Plain step", None),
+            ]),
+            ..Default::default()
+        });
+        let value: serde_yaml::Value = serde_yaml::from_str(&job).unwrap();
+        let steps = value["steps"].as_sequence().unwrap();
+        assert_eq!(steps[0]["run"]["when"], "always", "{job}");
+        assert_eq!(steps[1]["run"]["when"], "on_fail", "{job}");
+        assert!(steps[2]["run"].get("when").is_none(), "{job}");
     }
 
     #[test]
