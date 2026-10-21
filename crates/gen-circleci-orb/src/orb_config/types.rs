@@ -540,6 +540,12 @@ pub struct JobGroupStep {
     pub orb: Option<String>,
     pub run: Option<String>,
     pub script: Option<String>,
+    /// When a custom `run` step runs: `always`, `on_success` (CircleCI's
+    /// default) or `on_fail`, rendered as the step's `when:`. Valid only with
+    /// [`run`](Self::run): CircleCI accepts `when` on a `run` step but not on
+    /// the invocation of an orb command, so setting it on any other kind of
+    /// step is an error (gen-circleci-orb#503).
+    pub when: Option<String>,
     pub with: Option<IndexMap<String, String>>,
     /// For a `command` step: options of the command deliberately left at the
     /// command's own default, named as `with` names them (the command's
@@ -552,7 +558,7 @@ pub struct JobGroupStep {
     /// Marks a step as needing the authenticated git remote CircleCI's
     /// checkout injects, before a later `set_https_remote` step strips it.
     /// `builtin = "checkout"` gets this implicitly. See
-    /// `validate_job_group_step_order` for the enforced ordering rule and
+    /// `validate_job_group_steps` for the enforced ordering rule and
     /// the bug history behind it (gen-orb-mcp#266, #288).
     pub requires_git_auth: Option<bool>,
 }

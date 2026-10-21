@@ -386,6 +386,7 @@ mod tests {
                 "orb",
                 "run",
                 "script",
+                "when",
                 "with",
                 "defaults",
                 "environment",
@@ -431,12 +432,12 @@ anything = "goes"
 
     #[test]
     fn unsupported_step_key_is_reported_with_table_and_key() {
-        let toml = "[[job_group]]\nname = \"g\"\n[[job_group.step]]\ncommand = \"upload\"\nwhen = \"always\"\n";
+        let toml = "[[job_group]]\nname = \"g\"\n[[job_group.step]]\ncommand = \"upload\"\nnot_a_key = \"always\"\n";
         let errors = unknown_job_group_keys(toml);
         assert_eq!(errors.len(), 1);
         assert!(errors[0].contains("[[job_group.step]] #1"), "{errors:?}");
         assert!(errors[0].contains("job_group \"g\""), "{errors:?}");
-        assert!(errors[0].contains("`when`"), "{errors:?}");
+        assert!(errors[0].contains("`not_a_key`"), "{errors:?}");
         assert!(!errors[0].contains("did you mean"), "{errors:?}");
     }
 
@@ -466,7 +467,7 @@ anything = "goes"
 name = "a"
 [[job_group.step]]
 run = "r"
-when = "always"
+not_a_key = "always"
 [[job_group.step]]
 run = "s"
 bogus = 1
@@ -547,7 +548,7 @@ bogus = 1
 name = "g"
 [[job_group.step]]
 run = "r"
-when = "always"
+not_a_key = "always"
 "#;
 
     #[test]

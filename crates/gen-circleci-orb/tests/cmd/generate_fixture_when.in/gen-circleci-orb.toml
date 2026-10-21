@@ -1,0 +1,11 @@
+[[job_group]]
+name = "build_all"
+
+[[job_group.step]]
+command = "build"
+when = "always"
+
+[[job_group.step]]
+run = "Collect diagnostics"
+script = "echo diagnostics"
+when = "sometimes"
