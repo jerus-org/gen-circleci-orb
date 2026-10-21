@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - flag retired and unknown config keys(pr [#514])
 - require every option of a rich job_group command to be addressed(pr [#515])
 - let a custom run step set when(pr [#516])
+- retire the unused [ci] release_after_job(pr [#517])
 
 ### Fixed
 
@@ -1433,6 +1434,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#514]: https://github.com/jerus-org/gen-circleci-orb/pull/514
 [#515]: https://github.com/jerus-org/gen-circleci-orb/pull/515
 [#516]: https://github.com/jerus-org/gen-circleci-orb/pull/516
+[#517]: https://github.com/jerus-org/gen-circleci-orb/pull/517
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.5...HEAD
 [0.2.5]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.3...v0.2.4
