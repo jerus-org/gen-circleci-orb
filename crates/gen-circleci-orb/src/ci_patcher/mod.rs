@@ -645,11 +645,45 @@ pub fn patch_post_merge_regen(content: &str, opts: &PatchOpts) -> (String, Patch
         .insertions
         .push("post-merge check workflow steps".to_string());
 
+    if is_fresh_file {
+        settle_orbs_block_spacing(&mut lines);
+    }
+
     let mut output = lines.join("\n");
     if is_fresh_file || content.ends_with('\n') {
         output.push('\n');
     }
     (output, report)
+}
+
+/// Lay out the managed `orbs:` pin block the way a resync leaves it: the blank
+/// line that separates `orbs:` from the next top-level section sits before the
+/// block, not after it.
+///
+/// A resync strips the managed block and inserts it again at the end of
+/// `orbs:`, which is past that blank line. A file created from scratch is
+/// built the other way round (`workflows:` is added after the pins), so the
+/// blank line ends up after the block. The two layouts differ only in that
+/// blank line, but `update --check` compares text, so it failed straight after
+/// the first `update` and the next `update` rewrote the file (#457).
+fn settle_orbs_block_spacing(lines: &mut Vec<String>) {
+    let begin = managed_begin("  ");
+    let end = managed_end("  ");
+    let Some(end_at) = lines.iter().position(|l| *l == end) else {
+        return;
+    };
+    let Some(begin_at) = lines[..end_at].iter().rposition(|l| *l == begin) else {
+        return;
+    };
+    let blank_after = lines.get(end_at + 1).is_some_and(|l| l.is_empty());
+    let section_follows = lines
+        .get(end_at + 2)
+        .is_some_and(|l| !l.is_empty() && indent_of(l) == 0);
+    let blank_before = begin_at > 0 && lines[begin_at - 1].is_empty();
+    if blank_after && section_follows && !blank_before {
+        lines.remove(end_at + 1);
+        lines.insert(begin_at, String::new());
+    }
 }
 
 /// Effective job names (an explicit `name:` override when present, else the
@@ -4586,6 +4620,24 @@ workflows:
         assert!(output.contains("  update_prlog:") && output.contains("    jobs:"));
         assert!(output.contains("name: post-merge-build-binary"));
         assert!(output.ends_with('\n'));
+    }
+
+    #[test]
+    fn a_freshly_created_post_merge_file_is_already_in_its_resynced_form() {
+        // #457: the first `update` created the file with a blank line after the
+        // managed orbs block; the next `update` (a strip and re-patch) moved it
+        // before the block, so `update --check` failed right after the first
+        // `update`, with an empty change summary. Creating the file must leave
+        // it exactly as a resync would.
+        let opts = opts_with_post_merge_regen();
+        let (first, _) = patch_post_merge_regen("", &opts);
+        let (resynced, _) = resync_post_merge_regen(&first, &opts);
+        assert_eq!(
+            first, resynced,
+            "first run:\n{first}\nresynced:\n{resynced}"
+        );
+        let (again, _) = resync_post_merge_regen(&resynced, &opts);
+        assert_eq!(resynced, again, "a further resync must change nothing");
     }
 
     #[test]
