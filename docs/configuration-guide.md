@@ -309,6 +309,28 @@ setting, not something this tool can commit for you. See the
 for the mechanism, job ordering, the release gate and migrating from the deprecated
 `[post_merge_regen]` (still read, with a warning, as `[post_merge_check]`).
 
+## Checking the file: `config validate`
+
+A key the generator does not read has no effect, and nothing else says so. `gen-circleci-orb
+config validate` parses `gen-circleci-orb.toml` and lists, in one report, every key that does
+nothing:
+
+- **Retired keys** — ones an earlier version read. The message names what replaced it:
+
+  | Retired key | Now |
+  |-------------|-----|
+  | `[ci].rust_image` | `[ci].build_executor` (an orb executor reference, not an image string) |
+  | `[ci].live_regenerate` | `[ci].test_generation`, which gates the whole generation self-test chain |
+  | `[record].write_token_env` | nothing: the record step uses ambient authorization, so delete it |
+
+- **Unknown keys**, in any table, with the nearest known key when one is close (a typo).
+- **Unsupported `[[job_group]]` keys**, as described in the
+  [Advanced Configuration Guide](advanced-configuration.md#composed-jobs-job_group).
+
+It exits non-zero when it finds any, so it can run in CI. `generate` and `update` print the
+retired and unknown keys as warnings and carry on (an older config keeps working); only
+unsupported `[[job_group]]` keys stop them.
+
 ## How CLI inputs become orb parameters
 
 Every option and argument in the binary's `--help` becomes an orb parameter:

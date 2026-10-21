@@ -20,6 +20,14 @@ fn cli_tests() {
             std::path::Path::new(env!("CARGO_BIN_EXE_gen-circleci-orb")),
         );
 
+    // `config validate` reads only the config file, so it needs no fixture (#449).
+    for case in ["config_validate_stale", "config_validate_clean"] {
+        cases.case(format!("tests/cmd/{case}.toml")).register_bin(
+            "gen-circleci-orb",
+            std::path::Path::new(env!("CARGO_BIN_EXE_gen-circleci-orb")),
+        );
+    }
+
     // fixture-cli is a test-only binary (required-features = ["test-fixtures"]) —
     // env!("CARGO_BIN_EXE_fixture-cli") only resolves when that feature built it,
     // so this whole case (and the bin registration it depends on) is compiled out
