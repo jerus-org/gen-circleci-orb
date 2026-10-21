@@ -109,6 +109,10 @@ pub struct KeyReport {
     pub unknown: Vec<String>,
     /// Unknown keys in the job-group tables (these are errors, see [`unknown_job_group_keys`]).
     pub job_group_unknown: Vec<String>,
+    /// Why the file does not load as a config (bad syntax, or a value of the
+    /// wrong type), when it does not. Set by `config validate`, so that it
+    /// reports this together with the key problems rather than instead of them.
+    pub parse_error: Option<String>,
 }
 
 impl KeyReport {
@@ -126,7 +130,10 @@ impl KeyReport {
     }
 
     pub fn is_clean(&self) -> bool {
-        self.retired.is_empty() && self.unknown.is_empty() && self.job_group_unknown.is_empty()
+        self.parse_error.is_none()
+            && self.retired.is_empty()
+            && self.unknown.is_empty()
+            && self.job_group_unknown.is_empty()
     }
 }
 

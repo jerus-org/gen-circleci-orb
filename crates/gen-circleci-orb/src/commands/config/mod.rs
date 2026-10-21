@@ -125,7 +125,8 @@ impl Config {
 }
 
 /// `config validate`: the file must parse and carry no retired or unknown keys.
-/// Every problem is listed in one error.
+/// Every problem is collected first and listed in one error, so a file that
+/// fails to load still has its key problems reported with the load failure.
 fn validate_config_file(path: &std::path::Path) -> Result<()> {
     if !path.exists() {
         anyhow::bail!("no config file found at {}", path.display());
@@ -136,8 +137,9 @@ fn validate_config_file(path: &std::path::Path) -> Result<()> {
         return Ok(());
     }
     let problems: Vec<&String> = report
-        .retired
+        .parse_error
         .iter()
+        .chain(&report.retired)
         .chain(&report.unknown)
         .chain(&report.job_group_unknown)
         .collect();

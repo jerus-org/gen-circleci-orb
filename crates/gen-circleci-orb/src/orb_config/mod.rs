@@ -59,10 +59,20 @@ pub fn load_config_strict(path: &Path) -> Result<(OrbConfig, KeyReport)> {
     Ok((config, report))
 }
 
-/// The keys in the config file at `path` that do nothing, for
-/// `config validate`. The file must exist and parse.
+/// Everything wrong with the config file at `path`, for `config validate`.
+///
+/// Unlike [`load_config_strict`], a file that does not load (bad syntax, or a
+/// value of the wrong type) is not an early exit: the reason goes into
+/// [`KeyReport::parse_error`] beside whatever key problems can still be found,
+/// so one run reports it all. Only a file that cannot be read is an error.
 pub fn inspect_config(path: &Path) -> Result<KeyReport> {
-    load_with_report(path).map(|(_, report)| report)
+    let content =
+        std::fs::read_to_string(path).with_context(|| format!("cannot read {}", path.display()))?;
+    let mut report = config_key_report(&content);
+    report.parse_error = parse_config(path, &content)
+        .err()
+        .map(|error| format!("{error:#}"));
+    Ok(report)
 }
 
 fn load_with_report(path: &Path) -> Result<(OrbConfig, KeyReport)> {
@@ -378,6 +388,25 @@ mod tests {
         let path = dir.path().join("gen-circleci-orb.toml");
         std::fs::write(&path, content).unwrap();
         path
+    }
+
+    #[test]
+    fn inspect_config_reports_a_load_failure_together_with_key_problems() {
+        let dir = TempDir::new().unwrap();
+        // `mcp` must be a bool, so the file does not load; the retired key is
+        // still found and reported alongside.
+        let path = write_toml(&dir, "[ci]\nmcp = \"yes\"\nrust_image = \"x\"\n");
+        let report = inspect_config(&path).unwrap();
+        assert!(report.parse_error.is_some(), "{report:?}");
+        assert_eq!(report.retired.len(), 1, "{report:?}");
+        assert!(!report.is_clean());
+    }
+
+    #[test]
+    fn inspect_config_on_a_clean_file_is_clean() {
+        let dir = TempDir::new().unwrap();
+        let path = write_toml(&dir, "[ci]\nbuild_executor = \"e\"\n");
+        assert!(inspect_config(&path).unwrap().is_clean());
     }
 
     #[test]
