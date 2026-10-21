@@ -200,7 +200,7 @@ for the generated orb and CI, so it is safe to commit and review.
 | Section | Purpose |
 |---------|---------|
 | `[orb]` | `binary`, `namespaces`, `orb_dir`, `base_image`, `builder_image`, `circleci_cli_version` — the orb's own source and container |
-| `[ci]` | Workflow/job wiring: `build_workflow`, `release_workflow`, `requires_job`, `release_after_job`, `crate_tag_prefix`, `docker_namespace`, `docker_context`, `orb_context`, MCP fields, `build_executor`, `test_generation`, and `release_gate_before` |
+| `[ci]` | Workflow/job wiring: `build_workflow`, `release_workflow` (the workflow the release gate is added to), `requires_job`, `crate_tag_prefix`, `docker_namespace`, `docker_context`, `orb_context`, MCP fields, `build_executor`, `test_generation`, and `release_gate_before` |
 | `[record]` | Optional auto-record: after `generate`, commit the regenerated orb source back (GPG-signed) so the published orb stays in sync with the CLI. Stores only env-var **names** — the secrets stay in CI contexts |
 | `[post_merge_check]` | Optional: check each qualifying merged PR's orb once, after merge (build, `generate --check`, pack, review; never records or pushes), and skip the validation orb jobs on matching PR branches such as Renovate's. Replaces the deprecated `[post_merge_regen]` |
 | `[orbs]`, `[[job_group]]`, `[[extra_job]]`, `[subcommand.*]` | Extra orb pins, composed jobs, custom jobs, and per-subcommand overrides (including `interactive` / `generate_job`) |

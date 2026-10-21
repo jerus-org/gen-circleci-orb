@@ -34,7 +34,6 @@ pub(crate) struct GatheredCore {
     pub build_workflow: String,
     pub release_workflow: String,
     pub crate_tag_prefix: String,
-    pub release_after_job: String,
     pub docker_namespace: String,
 }
 
@@ -390,13 +389,10 @@ pub struct Init {
     #[arg(long, help_heading = "CI workflow wiring")]
     pub crate_tag_prefix: Option<String>,
 
-    /// Job in the release workflow after which the generated release jobs should be gated.
+    /// Deprecated and ignored: nothing reads it any more.
     ///
-    /// (build-binary-release, pack-orb-release, build-container, ensure-orb-registered)
-    /// This is the sole mechanism for specifying where the generated
-    /// jobs plug into the existing pipeline topology.
-    /// Falls back to `[ci] release_after_job` in the config; prompted for if neither is set.
-    #[arg(long, help_heading = "CI workflow wiring")]
+    /// Accepted so existing scripts keep working; it is not recorded in the config.
+    #[arg(long, hide = true, help_heading = "CI workflow wiring")]
     pub release_after_job: Option<String>,
 
     /// Output directory for the generated orb source (relative to repo root).
@@ -950,10 +946,11 @@ impl Init {
             self.crate_tag_prefix.clone(),
             ci.and_then(|c| c.crate_tag_prefix.clone()),
         );
-        let release_after_job = pick(
-            self.release_after_job.clone(),
-            ci.and_then(|c| c.release_after_job.clone()),
-        );
+        if self.release_after_job.is_some() {
+            eprintln!(
+                "warning: --release-after-job is deprecated and ignored; nothing reads it any more"
+            );
+        }
         let docker_namespace = pick(
             self.docker_namespace.clone(),
             ci.and_then(|c| c.docker_namespace.clone()),
@@ -965,7 +962,6 @@ impl Init {
                 (build_workflow.is_none(), "--build-workflow"),
                 (release_workflow.is_none(), "--release-workflow"),
                 (crate_tag_prefix.is_none(), "--crate-tag-prefix"),
-                (release_after_job.is_none(), "--release-after-job"),
                 (docker_namespace.is_none(), "--docker-namespace"),
             ]
             .into_iter()
@@ -984,7 +980,6 @@ impl Init {
                 build_workflow: build_workflow.unwrap_or_default(),
                 release_workflow: release_workflow.unwrap_or_default(),
                 crate_tag_prefix: crate_tag_prefix.unwrap_or_default(),
-                release_after_job: release_after_job.unwrap_or_default(),
                 docker_namespace: docker_namespace.unwrap_or_default(),
             });
         }
@@ -1026,10 +1021,6 @@ impl Init {
                 Some(format!("{binary}-v")),
             )?,
         };
-        let release_after_job = resolve(
-            "Job in the release workflow the generated release jobs should follow",
-            release_after_job,
-        )?;
         let docker_namespace = resolve(
             "Docker registry namespace for the orb's executor image (e.g. myorg)",
             docker_namespace,
@@ -1040,7 +1031,6 @@ impl Init {
             build_workflow,
             release_workflow,
             crate_tag_prefix,
-            release_after_job,
             docker_namespace,
         })
     }
@@ -1379,7 +1369,6 @@ impl Init {
             release_workflow: core.release_workflow.clone(),
             requires_job: self.requires_job.clone(),
             crate_tag_prefix: core.crate_tag_prefix.clone(),
-            release_after_job: core.release_after_job.clone(),
             orb_tools_version: self.orb_tools_version.clone(),
             docker_orb_version: self.docker_orb_version.clone(),
             docker_context: extras.docker_context.clone(),
@@ -1463,7 +1452,8 @@ impl Init {
             build_workflow: Some(core.build_workflow.clone()),
             release_workflow: Some(core.release_workflow.clone()),
             requires_job: self.requires_job.clone(),
-            release_after_job: Some(core.release_after_job.clone()),
+            // Retired: nothing reads it, so a re-run drops a recorded value.
+            release_after_job: None,
             crate_tag_prefix: Some(core.crate_tag_prefix.clone()),
             docker_namespace: Some(core.docker_namespace.clone()),
             docker_context: Some(extras.docker_context.clone()),
@@ -1683,7 +1673,7 @@ mod tests {
             release_workflow: Some("orb-release".to_string()),
             requires_job: None,
             crate_tag_prefix: Some("mytool-v".to_string()),
-            release_after_job: Some("publish-orb".to_string()),
+            release_after_job: None,
             orb_dir: None,
             install_method: None,
             base_image: None,
@@ -1810,7 +1800,7 @@ mod tests {
             build_workflow: Some(core.build_workflow.clone()),
             release_workflow: Some(core.release_workflow.clone()),
             requires_job: init.requires_job.clone(),
-            release_after_job: Some(core.release_after_job.clone()),
+            release_after_job: None,
             crate_tag_prefix: Some(core.crate_tag_prefix.clone()),
             docker_namespace: Some(core.docker_namespace.clone()),
             docker_context: Some(extras.docker_context.clone()),
@@ -2088,7 +2078,7 @@ mod tests {
             release_workflow: Some("orb-release".to_string()),
             requires_job: None,
             crate_tag_prefix: Some("mytool-v".to_string()),
-            release_after_job: Some("publish-orb".to_string()),
+            release_after_job: None,
             orb_dir: None,
             install_method: None,
             base_image: None,
@@ -2188,6 +2178,23 @@ mod tests {
 
     // ── gather_core: the values init cannot run without (#226) ─────────────
 
+    /// `--release-after-job` is deprecated: still accepted (existing scripts keep
+    /// working), never required, and not part of what init gathers or records.
+    #[test]
+    fn gather_core_accepts_the_deprecated_release_after_job_flag_and_ignores_it() {
+        let init = Init {
+            release_after_job: Some("approve-release".to_string()),
+            ..make_init(false)
+        };
+        assert!(init.gather_core(&OrbConfig::default(), false).is_ok());
+        // And it is no longer needed to get past the non-interactive check.
+        let without = Init {
+            release_after_job: None,
+            ..make_init(false)
+        };
+        assert!(without.gather_core(&OrbConfig::default(), false).is_ok());
+    }
+
     #[test]
     fn gather_core_uses_cli_values() {
         let init = make_init(false);
@@ -2196,7 +2203,6 @@ mod tests {
         assert_eq!(core.build_workflow, "validation");
         assert_eq!(core.release_workflow, "orb-release");
         assert_eq!(core.crate_tag_prefix, "mytool-v");
-        assert_eq!(core.release_after_job, "publish-orb");
         assert_eq!(core.docker_namespace, "my-docker-ns");
     }
 
@@ -2212,7 +2218,6 @@ mod tests {
                 build_workflow: Some("cfg-build".to_string()),
                 release_workflow: Some("cfg-release".to_string()),
                 crate_tag_prefix: Some("cfg-v".to_string()),
-                release_after_job: Some("cfg-after".to_string()),
                 docker_namespace: Some("cfg-ns".to_string()),
                 ..CiSection::default()
             }),
@@ -2232,7 +2237,6 @@ mod tests {
         assert_eq!(core.build_workflow, "cfg-build");
         assert_eq!(core.release_workflow, "cfg-release");
         assert_eq!(core.crate_tag_prefix, "cfg-v");
-        assert_eq!(core.release_after_job, "cfg-after");
         assert_eq!(core.docker_namespace, "cfg-ns");
     }
 
@@ -2264,7 +2268,6 @@ mod tests {
                 build_workflow: Some(String::new()),
                 release_workflow: Some(String::new()),
                 crate_tag_prefix: Some(String::new()),
-                release_after_job: Some(String::new()),
                 docker_namespace: Some(String::new()),
                 ..CiSection::default()
             }),
@@ -2288,7 +2291,6 @@ mod tests {
             "--build-workflow",
             "--release-workflow",
             "--crate-tag-prefix",
-            "--release-after-job",
             "--docker-namespace",
         ] {
             assert!(msg.contains(flag), "error must name {flag}, got: {msg}");
@@ -2330,7 +2332,6 @@ mod tests {
             "--build-workflow",
             "--release-workflow",
             "--crate-tag-prefix",
-            "--release-after-job",
             "--docker-namespace",
         ] {
             assert!(msg.contains(flag), "error must name {flag}, got: {msg}");

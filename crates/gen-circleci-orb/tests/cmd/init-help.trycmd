@@ -98,16 +98,6 @@ CI workflow wiring:
           to `[ci] crate_tag_prefix` in the config; prompted for if neither
           is set.
 
-      --release-after-job <RELEASE_AFTER_JOB>
-          Job in the release workflow after which the generated release
-          jobs should be gated.
-          
-          (build-binary-release, pack-orb-release, build-container,
-          ensure-orb-registered) This is the sole mechanism for specifying
-          where the generated jobs plug into the existing pipeline
-          topology. Falls back to `[ci] release_after_job` in the config;
-          prompted for if neither is set.
-
       --ci-dir <CI_DIR>
           Path to the .circleci/ directory
           

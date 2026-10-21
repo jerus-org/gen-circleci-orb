@@ -84,7 +84,6 @@ contexts = ["release"]
 build_workflow = "validation"
 release_workflow = "release"
 requires_job = "toolkit/common_tests"
-release_after_job = "release-gen-circleci-orb"
 crate_tag_prefix = "gen-circleci-orb-v"
 docker_namespace = "jerusdp"
 docker_context = "docker"

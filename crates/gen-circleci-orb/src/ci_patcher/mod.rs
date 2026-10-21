@@ -17,7 +17,6 @@ pub struct PatchOpts {
     /// Used to filter the `orb-release:` workflow trigger and to strip the prefix
     /// when normalising `CIRCLE_TAG` for `orb-tools/publish`.
     pub crate_tag_prefix: String,
-    pub release_after_job: String,
     pub orb_tools_version: String,
     pub docker_orb_version: String,
     pub docker_context: String,
@@ -1667,7 +1666,6 @@ mod tests {
             release_workflow: "release".to_string(),
             requires_job: Some("common-tests".to_string()),
             crate_tag_prefix: "mytool-v".to_string(),
-            release_after_job: "approve-release".to_string(),
             orb_tools_version: "12.3.3".to_string(),
             docker_orb_version: "3.0.1".to_string(),
             docker_context: "docker".to_string(),
