@@ -414,10 +414,13 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = write_toml(
             &dir,
-            "[[job_group]]\nname = \"g\"\n[[job_group.step]]\nrun = \"r\"\nwhen = \"always\"\nbogus = 1\n",
+            "[[job_group]]\nname = \"g\"\n[[job_group.step]]\nrun = \"r\"\nnot_a_key = \"always\"\nbogus = 1\n",
         );
         let err = load_config_strict(&path).unwrap_err().to_string();
-        assert!(err.contains("`when`") && err.contains("`bogus`"), "{err}");
+        assert!(
+            err.contains("`not_a_key`") && err.contains("`bogus`"),
+            "{err}"
+        );
         // The lenient loader still accepts the same file.
         assert!(load_config(&path).is_ok());
     }
