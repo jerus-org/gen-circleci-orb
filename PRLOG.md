@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - reject unknown keys in rich-mode job_group tables(pr [#505])
+- flag retired and unknown config keys(pr [#514])
 
 ### Fixed
 
@@ -1427,6 +1428,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#511]: https://github.com/jerus-org/gen-circleci-orb/pull/511
 [#512]: https://github.com/jerus-org/gen-circleci-orb/pull/512
 [#513]: https://github.com/jerus-org/gen-circleci-orb/pull/513
+[#514]: https://github.com/jerus-org/gen-circleci-orb/pull/514
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.5...HEAD
 [0.2.5]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.3...v0.2.4
