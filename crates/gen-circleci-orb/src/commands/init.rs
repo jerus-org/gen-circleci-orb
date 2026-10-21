@@ -1276,6 +1276,13 @@ impl Init {
         // resolved.
         let config_path = std::path::Path::new("gen-circleci-orb.toml");
         let existing_config = crate::orb_config::load_config(config_path)?;
+        // Retired and unknown keys in a recorded config: say so rather than
+        // silently dropping or ignoring them.
+        if config_path.exists() {
+            if let Ok(report) = crate::orb_config::inspect_config(config_path) {
+                report.print_warnings();
+            }
+        }
         let core = self.gather_core(&existing_config, interactive)?;
 
         // Parse binary early: detect push-capable subcommands (for dialogue default),

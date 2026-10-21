@@ -38,8 +38,7 @@ gen-circleci-orb init \
   --build-workflow validation \
   --release-workflow release \
   --crate-tag-prefix my-tool-v \
-  --requires-job common-tests \
-  --release-after-job release-my-tool
+  --requires-job common-tests
 ```
 
 `--crate-tag-prefix` is the tag prefix your release pipeline uses for the crate

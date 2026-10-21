@@ -57,8 +57,7 @@ gen-circleci-orb init \
   --build-workflow validation \
   --release-workflow release \
   --crate-tag-prefix my-tool-v \
-  --requires-job common-tests \
-  --release-after-job release-my-tool
+  --requires-job common-tests
 ```
 
 `init` patches `.circleci/config.yml` to add:
@@ -128,7 +127,6 @@ gen-circleci-orb init [OPTIONS]
     --build-workflow <WF>
     --release-workflow <WF>
     --crate-tag-prefix <PREFIX>
-    --release-after-job <JOB>
 
 Required:
   --binary <BINARY>                   Binary to introspect (must be on PATH)
@@ -139,7 +137,6 @@ Required:
   --release-workflow <WF>             Release workflow name to patch
   --crate-tag-prefix <PREFIX>         Crate release tag prefix (e.g. my-tool-v); filters the
                                       orb-release: workflow trigger
-  --release-after-job <JOB>           Job in the release workflow after which orb release jobs run
 
 Options:
   --requires-job <JOB>                Job that regenerate-orb should require
