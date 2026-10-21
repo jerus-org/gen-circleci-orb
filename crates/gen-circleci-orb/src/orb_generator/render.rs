@@ -2710,6 +2710,85 @@ pub(crate) fn rich_job_group_type_errors(
     errors
 }
 
+/// Every option of a command invoked by a rich-mode `job_group` step that the
+/// step leaves unaddressed (#501), plus misuse of the step's `defaults` list.
+///
+/// A rich step passes a command only what its `with` table names, so an option
+/// that is neither set there nor deliberately left at the command's default is
+/// unreachable for the job's consumers, and nothing says so: it stays that way
+/// when the CLI later gains an option. Each option of the command must be
+/// exactly one of pinned or exposed (a `with` entry, literal or
+/// `<< parameters.x >>`) or listed in the step's `defaults`. A `defaults` entry
+/// that names no option of the command, or one also set in `with`, is an error
+/// too. Steps whose command is not a generated leaf command (such as
+/// `set_https_remote`) are not checked. All problems are returned together.
+pub(crate) fn rich_job_group_option_errors(
+    cli: &CliDefinition,
+    config: Option<&OrbConfig>,
+    effective_names: &HashMap<String, String>,
+) -> Vec<String> {
+    let cli = normalize_verbosity_flags(cli, config);
+    let mut errors = Vec::new();
+    for group in config
+        .and_then(|c| c.job_group.as_ref())
+        .into_iter()
+        .flatten()
+    {
+        for step in group.step.as_deref().unwrap_or_default() {
+            let Some(command) = &step.command else {
+                continue;
+            };
+            let Some((sub, effective_name)) = find_leaf_subcommand(&cli, command, effective_names)
+            else {
+                continue;
+            };
+            let options: Vec<String> = build_command_orb_parameters(sub, &effective_name, config)
+                .into_keys()
+                .collect();
+            let with_keys: Vec<&str> = step
+                .with
+                .iter()
+                .flat_map(|w| w.keys().map(String::as_str))
+                .collect();
+            let defaults: Vec<&str> = step.defaults.iter().flatten().map(String::as_str).collect();
+            let context = format!("job group `{}`, step `{command}`", group.name);
+
+            let unaddressed: Vec<&str> = options
+                .iter()
+                .map(String::as_str)
+                .filter(|o| !with_keys.contains(o) && !defaults.contains(o))
+                .collect();
+            if !unaddressed.is_empty() {
+                errors.push(format!(
+                    "{context}: option(s) {} not addressed; pin or expose each in `with` \
+                     (a literal, or `<< parameters.x >>`), or list it in `defaults` to leave \
+                     it at the command's default",
+                    unaddressed
+                        .iter()
+                        .map(|o| format!("`{o}`"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+            for name in &defaults {
+                if !options.iter().any(|o| o == name) {
+                    errors.push(format!(
+                        "{context}: `defaults` lists `{name}`, which is not an option of \
+                         `{command}` (options: {})",
+                        options.join(", ")
+                    ));
+                } else if with_keys.contains(name) {
+                    errors.push(format!(
+                        "{context}: `{name}` is listed in `defaults` but also set in `with`; \
+                         choose one"
+                    ));
+                }
+            }
+        }
+    }
+    errors
+}
+
 /// Render a rich-mode job_group: explicit parameter declarations and an ordered,
 /// heterogeneous step list (built-ins, tool commands, third-party orb steps and
 /// custom run steps). The whole job is data declared in the config file.
@@ -8388,6 +8467,199 @@ mod tests {
 
     fn type_errors(config: &crate::orb_config::OrbConfig) -> Vec<String> {
         rich_job_group_type_errors(&typed_cli(), Some(config), &HashMap::new())
+    }
+
+    // ── rich-mode option coverage (#501) ─────────────────────────────────────
+
+    fn options_cli() -> CliDefinition {
+        let flag = |name: &str, param_type: ParamType| Parameter {
+            long_name: name.to_string(),
+            param_type,
+            default: Some(String::new()),
+            description: format!("The {name} option."),
+            ..Default::default()
+        };
+        make_cli(
+            "mytool",
+            vec![make_leaf(
+                "complexity",
+                vec![
+                    flag("file", ParamType::String),
+                    flag(
+                        "unmatched",
+                        ParamType::Enum(vec!["fail".into(), "ok".into()]),
+                    ),
+                    flag("exclude_tests", ParamType::Boolean),
+                    flag("output", ParamType::String),
+                ],
+            )],
+        )
+    }
+
+    /// A rich group with one `complexity` step: `with` entries and `defaults`.
+    fn options_config(
+        with: &[(&str, &str)],
+        defaults: Option<&[&str]>,
+    ) -> crate::orb_config::OrbConfig {
+        use crate::orb_config::{JobGroup, JobGroupStep, OrbConfig};
+        OrbConfig {
+            job_group: Some(vec![JobGroup {
+                name: "report_all".to_string(),
+                step: Some(vec![JobGroupStep {
+                    command: Some("complexity".to_string()),
+                    with: Some(
+                        with.iter()
+                            .map(|(k, v)| (k.to_string(), v.to_string()))
+                            .collect(),
+                    ),
+                    defaults: defaults.map(|d| d.iter().map(|s| s.to_string()).collect()),
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            }]),
+            ..OrbConfig::default()
+        }
+    }
+
+    fn option_errors(config: &crate::orb_config::OrbConfig) -> Vec<String> {
+        rich_job_group_option_errors(&options_cli(), Some(config), &HashMap::new())
+    }
+
+    #[test]
+    fn rich_step_missing_options_fails_naming_group_step_and_each_option() {
+        let errors = option_errors(&options_config(&[("file", "<< parameters.file >>")], None));
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        let e = &errors[0];
+        assert!(
+            e.contains("job group `report_all`, step `complexity`"),
+            "{e}"
+        );
+        for option in ["unmatched", "exclude_tests", "output"] {
+            assert!(e.contains(&format!("`{option}`")), "{e}");
+        }
+        assert!(!e.contains("`file`"), "{e}");
+    }
+
+    #[test]
+    fn rich_step_pinned_exposed_and_defaulted_options_each_pass() {
+        let errors = option_errors(&options_config(
+            &[
+                ("file", "<< parameters.file >>"),
+                ("unmatched", "fail"),
+                ("exclude_tests", "true"),
+            ],
+            Some(&["output"]),
+        ));
+        assert!(errors.is_empty(), "{errors:?}");
+    }
+
+    #[test]
+    fn rich_step_defaults_naming_a_non_option_is_an_error() {
+        let errors = option_errors(&options_config(
+            &[
+                ("file", "x"),
+                ("unmatched", "ok"),
+                ("exclude_tests", "false"),
+            ],
+            Some(&["output", "ghost"]),
+        ));
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("`ghost`"), "{:?}", errors[0]);
+        assert!(
+            errors[0].contains("not an option of `complexity`"),
+            "{:?}",
+            errors[0]
+        );
+    }
+
+    #[test]
+    fn rich_step_option_both_in_with_and_defaults_is_an_error() {
+        let errors = option_errors(&options_config(
+            &[
+                ("file", "x"),
+                ("unmatched", "ok"),
+                ("exclude_tests", "false"),
+                ("output", "o"),
+            ],
+            Some(&["output"]),
+        ));
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("`output` is listed in `defaults` but also set in `with`"));
+    }
+
+    #[test]
+    fn rich_step_with_no_with_table_leaves_every_option_unaddressed() {
+        use crate::orb_config::{JobGroup, JobGroupStep, OrbConfig};
+        let config = OrbConfig {
+            job_group: Some(vec![JobGroup {
+                name: "g".to_string(),
+                step: Some(vec![JobGroupStep {
+                    command: Some("complexity".to_string()),
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            }]),
+            ..OrbConfig::default()
+        };
+        let errors = option_errors(&config);
+        assert_eq!(errors.len(), 1);
+        for option in ["file", "unmatched", "exclude_tests", "output"] {
+            assert!(
+                errors[0].contains(&format!("`{option}`")),
+                "{:?}",
+                errors[0]
+            );
+        }
+    }
+
+    #[test]
+    fn rich_option_check_skips_synthetic_commands_and_simple_groups() {
+        use crate::orb_config::{JobGroup, JobGroupStep, OrbConfig};
+        let config = OrbConfig {
+            job_group: Some(vec![
+                JobGroup {
+                    name: "rich".to_string(),
+                    step: Some(vec![JobGroupStep {
+                        command: Some("set_https_remote".to_string()),
+                        ..Default::default()
+                    }]),
+                    ..Default::default()
+                },
+                // Simple mode wires every option itself.
+                JobGroup {
+                    name: "simple".to_string(),
+                    steps: vec!["complexity".to_string()],
+                    ..Default::default()
+                },
+            ]),
+            ..OrbConfig::default()
+        };
+        assert!(option_errors(&config).is_empty());
+    }
+
+    #[test]
+    fn rich_option_errors_are_collected_across_steps_and_groups() {
+        use crate::orb_config::{JobGroup, JobGroupStep, OrbConfig};
+        let step = || JobGroupStep {
+            command: Some("complexity".to_string()),
+            ..Default::default()
+        };
+        let config = OrbConfig {
+            job_group: Some(vec![
+                JobGroup {
+                    name: "a".to_string(),
+                    step: Some(vec![step(), step()]),
+                    ..Default::default()
+                },
+                JobGroup {
+                    name: "b".to_string(),
+                    step: Some(vec![step()]),
+                    ..Default::default()
+                },
+            ]),
+            ..OrbConfig::default()
+        };
+        assert_eq!(option_errors(&config).len(), 3);
     }
 
     #[test]

@@ -527,6 +527,10 @@ pub struct JobGroupParam {
 ///   shell body is [`script`](Self::script), and env block is
 ///   [`environment`](Self::environment).
 ///
+/// Every option of a [`command`](Self::command) step must be addressed: set in
+/// [`with`](Self::with) (pinned to a literal, or exposed as
+/// `<< parameters.x >>`) or listed in [`defaults`](Self::defaults).
+///
 /// [`requires_git_auth`](Self::requires_git_auth) is orthogonal to the above —
 /// it can be set on any step kind, not just one of the discriminants.
 #[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq)]
@@ -537,6 +541,13 @@ pub struct JobGroupStep {
     pub run: Option<String>,
     pub script: Option<String>,
     pub with: Option<IndexMap<String, String>>,
+    /// For a `command` step: options of the command deliberately left at the
+    /// command's own default (the command's orb-facing parameter names, as
+    /// used in `with`). Every option of the invoked command must be pinned or
+    /// exposed in [`with`](Self::with), or listed here; `generate` fails
+    /// otherwise, and when a name here is not an option of the command or is
+    /// also set in `with` (gen-circleci-orb#501).
+    pub defaults: Option<Vec<String>>,
     pub environment: Option<IndexMap<String, String>>,
     /// Marks a step as needing the authenticated git remote CircleCI's
     /// checkout injects, before a later `set_https_remote` step strips it.

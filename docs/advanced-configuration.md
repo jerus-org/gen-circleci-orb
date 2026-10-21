@@ -44,6 +44,12 @@ the underlying tool evolves. The simple per-subcommand jobs self-maintain (they 
 a simpler surface for every consumer — is the whole point, but it is a real cost. Prefer the
 simple jobs until a genuine single-activity or combine-with-critical-steps need appears.
 
+`generate` takes some of that burden back: for every `command` step of a rich-mode job, it checks
+that **each option of the invoked command is addressed** (see
+[Address every option](#address-every-option-of-an-invoked-command)), so a command that gains an
+option fails the build until each composed job decides what to do with it, instead of the job
+silently never exposing it.
+
 ## Composed jobs: `[[job_group]]`
 
 A `[[job_group]]` assembles a job from the tool's generated **commands** (not its jobs) plus
@@ -107,7 +113,7 @@ runner = "<< parameters.runner >>"
 | Field | Meaning |
 |-------|---------|
 | `builtin = "checkout"` | A built-in step (`checkout`, `attach_workspace`) |
-| `command = "prime"` | Invoke one of the tool's generated commands. Values come from `[job_group.step.with]`; omit `with` to wire parameters through by name |
+| `command = "prime"` | Invoke one of the tool's generated commands. Values come from `[job_group.step.with]`; every option of the command must be set there or listed in `defaults` (see below) |
 | `orb = "some-orb/setup"` | Invoke a third-party orb command, values from `[job_group.step.with]` |
 | `run = "Set up git"` + `script` + `[job_group.step.environment]` | A custom `run` step: `run` is the step name, `script` the shell body, `environment` the env block |
 | `requires_git_auth = true` | Orthogonal to the above — settable on *any* step. Marks it as needing the authenticated (SSH-backed) git remote CircleCI's checkout injects, before a later `set_https_remote` step strips it. See the ordering rule below. |
@@ -135,6 +141,39 @@ it never surfaces there). This was previously enforced only by hand-ordering the
 prose comment, and was gotten wrong twice in production
 ([jerus-org/gen-orb-mcp#266](https://github.com/jerus-org/gen-orb-mcp/issues/266),
 [#288](https://github.com/jerus-org/gen-orb-mcp/pull/288)) before it was a validated field.
+
+### Address every option of an invoked command
+
+A rich-mode `command` step passes the command only what its `[job_group.step.with]` table names.
+An option left out is unreachable for the job's consumers, and stays that way when the CLI later
+gains more options. So `generate` (and `generate --check`) requires each option of the invoked
+command to be exactly one of:
+
+1. **pinned** in `with` to a literal (`unmatched = "fail"`);
+2. **exposed** in `with` as a job parameter (`file = "<< parameters.file >>"`), declared with a
+   `[[job_group.parameter]]`;
+3. **deliberately left at the command's default**, by listing it in the step's `defaults`.
+
+```toml
+[[job_group.step]]
+command = "complexity"
+defaults = ["duplicates", "no_rollup", "output", "dry_run"]   # considered; the default is right
+
+[job_group.step.with]
+file = "<< parameters.file >>"          # exposed
+unmatched = "fail"                      # pinned
+```
+
+Names are the command's orb-facing parameter names, the same ones `with` uses (a CLI flag `--name`
+is `build_name` in `build`, for example). Anything else is an error that names the job group, the
+step, the command and the options, with every problem in the file reported together:
+
+- an option that is in none of the three;
+- a `defaults` entry that is not an option of the command (a stale entry, or a typo);
+- an option set in both `with` and `defaults`.
+
+Steps that are not a generated command (`set_https_remote`, built-ins, `orb` and `run` steps) and
+simple-mode job groups are not checked.
 
 ## Worked example: gen-orb-mcp's `build_mcp_server`
 
@@ -253,6 +292,10 @@ The consumer invokes it as a single job:
 
 Everything a consumer would otherwise wire by hand — checkout, workspace, git setup, and the four
 tool commands with their exact `with:` values — is collapsed into one job the owner maintains.
+
+> The excerpt above shows only the values it sets. Under the
+> [every-option rule](#address-every-option-of-an-invoked-command), each command step also needs
+> every other option of its command set in `with` or listed in `defaults`.
 
 ## Silence the jobs a consumer should not run alone
 

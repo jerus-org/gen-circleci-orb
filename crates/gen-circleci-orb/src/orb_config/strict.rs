@@ -379,6 +379,7 @@ mod tests {
                 "run",
                 "script",
                 "with",
+                "defaults",
                 "environment",
                 "requires_git_auth",
             ])

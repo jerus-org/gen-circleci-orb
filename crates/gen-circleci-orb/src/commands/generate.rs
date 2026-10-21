@@ -1387,11 +1387,26 @@ impl Generate {
             Some(&orb_config),
             &effective_names,
         );
-        if !job_group_type_errors.is_empty() {
-            anyhow::bail!(
-                "job group parameter type error(s):\n{}",
-                job_group_type_errors.join("\n")
-            );
+        let job_group_option_errors = orb_generator::render::rich_job_group_option_errors(
+            &cli_def,
+            Some(&orb_config),
+            &effective_names,
+        );
+        if !job_group_type_errors.is_empty() || !job_group_option_errors.is_empty() {
+            let mut sections = Vec::new();
+            if !job_group_type_errors.is_empty() {
+                sections.push(format!(
+                    "job group parameter type error(s):\n{}",
+                    job_group_type_errors.join("\n")
+                ));
+            }
+            if !job_group_option_errors.is_empty() {
+                sections.push(format!(
+                    "job group option error(s):\n{}",
+                    job_group_option_errors.join("\n")
+                ));
+            }
+            anyhow::bail!("{}", sections.join("\n\n"));
         }
 
         let opts = orb_generator::GenerateOpts {
