@@ -2750,7 +2750,11 @@ pub(crate) fn rich_job_group_option_errors(
                 .iter()
                 .flat_map(|w| w.keys().map(String::as_str))
                 .collect();
-            let defaults: Vec<&str> = step.defaults.iter().flatten().map(String::as_str).collect();
+            let mut defaults: Vec<&str> =
+                step.defaults.iter().flatten().map(String::as_str).collect();
+            // A name listed twice is one mistake, reported once.
+            defaults.sort_unstable();
+            defaults.dedup();
             let context = format!("job group `{}`, step `{command}`", group.name);
 
             let unaddressed: Vec<&str> = options
@@ -2773,8 +2777,8 @@ pub(crate) fn rich_job_group_option_errors(
             for name in &defaults {
                 if !options.iter().any(|o| o == name) {
                     errors.push(format!(
-                        "{context}: `defaults` lists `{name}`, which is not an option of \
-                         `{command}` (options: {})",
+                        "{context}: `defaults` lists `{name}`, which is not a parameter of the \
+                         generated `{command}` command (parameters: {})",
                         options.join(", ")
                     ));
                 } else if with_keys.contains(name) {
@@ -8566,10 +8570,23 @@ mod tests {
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert!(errors[0].contains("`ghost`"), "{:?}", errors[0]);
         assert!(
-            errors[0].contains("not an option of `complexity`"),
+            errors[0].contains("not a parameter of the generated `complexity` command"),
             "{:?}",
             errors[0]
         );
+    }
+
+    #[test]
+    fn rich_step_duplicate_defaults_entry_is_reported_once() {
+        let errors = option_errors(&options_config(
+            &[
+                ("file", "x"),
+                ("unmatched", "ok"),
+                ("exclude_tests", "false"),
+            ],
+            Some(&["output", "ghost", "ghost"]),
+        ));
+        assert_eq!(errors.len(), 1, "{errors:?}");
     }
 
     #[test]

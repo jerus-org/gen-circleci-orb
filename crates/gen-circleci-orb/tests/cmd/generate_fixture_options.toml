@@ -7,5 +7,5 @@ stderr = """
 ...
 Error: job group option error(s):
 job group `build_all`, step `build`: option(s) `target`, `format`, `log_level` not addressed; pin or expose each in `with` (a literal, or `<< parameters.x >>`), or list it in `defaults` to leave it at the command's default
-job group `build_all`, step `build`: `defaults` lists `ghost`, which is not an option of `build` (options: target, build_name, format, log_level)
+job group `build_all`, step `build`: `defaults` lists `ghost`, which is not a parameter of the generated `build` command (parameters: target, build_name, format, log_level)
 """

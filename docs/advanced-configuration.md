@@ -169,7 +169,8 @@ is `build_name` in `build`, for example). Anything else is an error that names t
 step, the command and the options, with every problem in the file reported together:
 
 - an option that is in none of the three;
-- a `defaults` entry that is not an option of the command (a stale entry, or a typo);
+- a `defaults` entry that is not a parameter of the generated command (a stale entry, or a typo;
+  a flag the generator hardcodes is not a parameter either);
 - an option set in both `with` and `defaults`.
 
 Steps that are not a generated command (`set_https_remote`, built-ins, `orb` and `run` steps) and

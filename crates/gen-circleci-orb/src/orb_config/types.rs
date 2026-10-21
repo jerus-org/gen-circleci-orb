@@ -542,11 +542,11 @@ pub struct JobGroupStep {
     pub script: Option<String>,
     pub with: Option<IndexMap<String, String>>,
     /// For a `command` step: options of the command deliberately left at the
-    /// command's own default (the command's orb-facing parameter names, as
-    /// used in `with`). Every option of the invoked command must be pinned or
-    /// exposed in [`with`](Self::with), or listed here; `generate` fails
-    /// otherwise, and when a name here is not an option of the command or is
-    /// also set in `with` (gen-circleci-orb#501).
+    /// command's own default, named as `with` names them (the command's
+    /// orb-facing parameter names). Every option of the invoked command must be
+    /// pinned or exposed in [`with`](Self::with) or listed here, or `generate`
+    /// fails. It is also an error to list a name that is not an option of the
+    /// command, or one that `with` also sets (gen-circleci-orb#501).
     pub defaults: Option<Vec<String>>,
     pub environment: Option<IndexMap<String, String>>,
     /// Marks a step as needing the authenticated git remote CircleCI's
