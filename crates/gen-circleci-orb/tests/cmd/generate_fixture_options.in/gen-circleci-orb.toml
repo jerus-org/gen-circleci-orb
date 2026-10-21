@@ -1,0 +1,12 @@
+[[job_group]]
+name = "build_all"
+
+[[job_group.parameter]]
+name = "name"
+
+[[job_group.step]]
+command = "build"
+defaults = ["ghost"]
+
+[job_group.step.with]
+build_name = "<< parameters.name >>"
