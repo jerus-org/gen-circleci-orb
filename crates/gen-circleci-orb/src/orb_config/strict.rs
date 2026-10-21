@@ -380,6 +380,7 @@ mod tests {
                 "script",
                 "when",
                 "with",
+                "defaults",
                 "environment",
                 "requires_git_auth",
             ])
