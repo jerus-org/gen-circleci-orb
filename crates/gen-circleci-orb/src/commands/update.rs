@@ -511,9 +511,6 @@ fn opts_from_config(config: &orb_config::OrbConfig) -> ci_patcher::PatchOpts {
         crate_tag_prefix: ci
             .and_then(|c| c.crate_tag_prefix.clone())
             .unwrap_or_default(),
-        release_after_job: ci
-            .and_then(|c| c.release_after_job.clone())
-            .unwrap_or_default(),
         orb_tools_version: "12.3.3".to_string(),
         docker_orb_version: DEFAULT_DOCKER_ORB_VERSION.to_string(),
         docker_context: ci

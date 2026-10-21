@@ -94,6 +94,12 @@ const RETIRED: &[Retired] = &[
         advice: "renamed to `[ci].test_generation`, which now gates the whole generation self-test chain",
     },
     Retired {
+        table: "ci",
+        key: "release_after_job",
+        advice: "no longer read, so it has no effect; delete it (the field is still accepted and \
+                 will be removed in a later breaking release)",
+    },
+    Retired {
         table: "record",
         key: "write_token_env",
         advice: "no longer used: the record step relies on ambient authorization, so delete it",
@@ -230,12 +236,14 @@ fn check_known(
     } else {
         format!("[{path}]")
     };
-    for key in table.keys().filter(|k| !known.contains(&k.as_str())) {
+    for key in table.keys() {
+        // A retired key is reported even while the struct still accepts it
+        // (a deprecated field kept for one more release).
         if let Some(row) = RETIRED.iter().find(|r| r.table == scope && r.key == key) {
             report
                 .retired
                 .push(format!("{label}: `{key}` is retired — {}", row.advice));
-        } else {
+        } else if !known.contains(&key.as_str()) {
             report.unknown.push(unknown_key_message(&label, key, known));
         }
     }
@@ -619,5 +627,18 @@ anything = "goes@1"
         let report = config_key_report("[subcommand.ci]\nrust_image = \"x\"\n");
         assert!(report.retired.is_empty(), "{:?}", report.retired);
         assert_eq!(report.unknown.len(), 1);
+    }
+
+    #[test]
+    fn a_retired_key_is_reported_even_while_the_struct_still_accepts_it() {
+        // `release_after_job` is still a field (removal waits for a breaking
+        // release), but nothing reads it.
+        let report = config_key_report("[ci]\nrelease_after_job = \"approve\"\n");
+        assert!(report.unknown.is_empty(), "{:?}", report.unknown);
+        assert_eq!(report.retired.len(), 1, "{:?}", report.retired);
+        assert!(report.retired[0].contains("`release_after_job` is retired"));
+        assert!(!report.is_clean());
+        // Its sibling, which the release gate does read, is not.
+        assert!(config_key_report("[ci]\nrelease_workflow = \"release\"\n").is_clean());
     }
 }

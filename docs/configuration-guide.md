@@ -224,7 +224,6 @@ goes out with the gap.
 build_workflow = "validation"      # validation workflow to patch
 release_workflow = "release"       # release workflow to patch
 requires_job = "common-tests"      # job regenerate-orb should require
-release_after_job = "release-my-tool"
 crate_tag_prefix = "my-tool-v"     # tags that trigger the orb-release workflow
 docker_namespace = "my-docker-org"
 docker_context = "docker-credentials"   # context holding Docker Hub creds
@@ -321,6 +320,7 @@ nothing:
   |-------------|-----|
   | `[ci].rust_image` | `[ci].build_executor` (an orb executor reference, not an image string) |
   | `[ci].live_regenerate` | `[ci].test_generation`, which gates the whole generation self-test chain |
+  | `[ci].release_after_job` | nothing: no longer read. The field is still accepted for now, so `init`/`update` warn and `config validate` fails until you delete it |
   | `[record].write_token_env` | nothing: the record step uses ambient authorization, so delete it |
 
 - **Unknown keys**, in any table, with the nearest known key when one is close (a typo).
