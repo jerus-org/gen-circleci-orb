@@ -44,9 +44,6 @@ CI workflow wiring:
       --crate-tag-prefix <CRATE_TAG_PREFIX>
           Tag prefix used by `toolkit/release_crate` for the crate (e.g.
           `gen-orb-mcp-v`)
-      --release-after-job <RELEASE_AFTER_JOB>
-          Job in the release workflow after which the generated release
-          jobs should be gated
       --ci-dir <CI_DIR>
           Path to the .circleci/ directory [default: .circleci]
       --git-push-subcommands <GIT_PUSH_SUBCOMMANDS>

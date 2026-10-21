@@ -389,6 +389,11 @@ build-container:
           docker push <docker-namespace>/<binary>:latest
 ```
 
+> **Out of date.** This describes the earlier design, which anchored these jobs in the release
+> workflow on `--release-after-job`. That option is retired and ignored: the orb release now runs
+> in the tag-triggered `orb-release:` workflow in `config.yml`, and `release.yml` only releases
+> the crate. This section needs rewriting to match.
+
 Added to the release workflow (one `ensure-orb-registered-<ns>` and one
 `orb-tools/publish` per namespace; shown here for two namespaces `ns1`/`ns2`):
 

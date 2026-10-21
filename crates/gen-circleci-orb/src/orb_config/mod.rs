@@ -546,6 +546,7 @@ git_push_subcommands = ["save"]
 build_workflow = "validation"
 release_workflow = "orb-release"
 requires_job = "toolkit/common_tests"
+# Retired, but an older config that still has it must keep loading.
 release_after_job = "publish-orb-jerus-org"
 crate_tag_prefix = "mytool-v"
 docker_namespace = "myns"
