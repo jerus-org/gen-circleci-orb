@@ -556,15 +556,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "crossbeam-channel"
-version = "0.5.17"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "98b0cc327b5bc766e7fda9c9260cc0fa81b43a8e240440422dff70788e3f9ef1"
-dependencies = [
- "crossbeam-utils",
-]
-
-[[package]]
 name = "crossbeam-deque"
 version = "0.8.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1699,9 +1690,9 @@ dependencies = [
 
 [[package]]
 name = "kdeets"
-version = "0.1.33"
+version = "0.1.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7a7416ae83d801945d614decb2fa642c628cdbf5b419f3fe4cadf88c8595cc26"
+checksum = "6d8f9fff4f029349c4ac3121a6ddc5d34ccd49c1a5ef1fe8ddd298c9e808308f"
 dependencies = [
  "clap",
  "clap-verbosity",
@@ -1856,6 +1847,15 @@ name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
+
+[[package]]
+name = "memmap2"
+version = "0.9.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6b0ca1155a9ecc25aa12e8313a119f32edf0255fea2f44839c4ac0a12b2ac157"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "miniz_oxide"
@@ -3200,28 +3200,23 @@ dependencies = [
 
 [[package]]
 name = "tame-index"
-version = "0.26.3"
+version = "0.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c51563c6639245219c077420e0a207e99b5e82e2e6bb78fd4898d42028ea7dde"
+checksum = "b8d46e6f909b681b684a8707868265738b40c39c55b4dc9defd5d2b6eb81fcf2"
 dependencies = [
  "bytes",
  "camino",
- "crossbeam-channel",
  "http",
  "libc",
  "memchr",
- "rayon",
- "reqwest 0.13.5",
+ "memmap2",
  "rustc-stable-hash",
  "semver",
  "serde",
  "serde_json",
- "sha2 0.10.9",
+ "sha2 0.11.1",
  "smol_str",
- "thiserror",
- "tokio",
  "toml-span",
- "twox-hash",
 ]
 
 [[package]]
@@ -3324,9 +3319,9 @@ checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
 
 [[package]]
 name = "tokio"
-version = "1.54.0"
+version = "1.54.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a0c168a474b95bfecfe908a65d4bdffc523144b649a74c09c286afb35d53e0bc"
+checksum = "b52fd3255258d26fac7264ab5a76b53c13367136dc011d3d6ad4f8ed070396a3"
 dependencies = [
  "bytes",
  "libc",
@@ -3594,12 +3589,6 @@ dependencies = [
  "snapbox",
  "toml_edit",
 ]
-
-[[package]]
-name = "twox-hash"
-version = "2.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "86a801b3cea342a06d468c8710662aa29e5e05e4f5c0d62f00bbb7f2ad7941c2"
 
 [[package]]
 name = "typenum"
