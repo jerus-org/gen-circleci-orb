@@ -644,11 +644,43 @@ pub fn patch_post_merge_regen(content: &str, opts: &PatchOpts) -> (String, Patch
         .insertions
         .push("post-merge check workflow steps".to_string());
 
+    settle_orbs_block_spacing(&mut lines);
+
     let mut output = lines.join("\n");
     if is_fresh_file || content.ends_with('\n') {
         output.push('\n');
     }
     (output, report)
+}
+
+/// Lay out the managed `orbs:` pin block the way a resync leaves it: the blank
+/// line that separates `orbs:` from the next top-level section sits before the
+/// block, not after it.
+///
+/// A resync strips the managed block and inserts it again at the end of
+/// `orbs:`, which is past that blank line. A file created from scratch is
+/// built the other way round (`workflows:` is added after the pins), so the
+/// blank line ends up after the block. The two layouts differ only in that
+/// blank line, but `update --check` compares text, so it failed straight after
+/// the first `update` and the next `update` rewrote the file (#457).
+fn settle_orbs_block_spacing(lines: &mut Vec<String>) {
+    let begin = managed_begin("  ");
+    let end = managed_end("  ");
+    let Some(end_at) = lines.iter().position(|l| *l == end) else {
+        return;
+    };
+    let Some(begin_at) = lines[..end_at].iter().rposition(|l| *l == begin) else {
+        return;
+    };
+    let blank_after = lines.get(end_at + 1).is_some_and(String::is_empty);
+    let section_follows = lines
+        .get(end_at + 2)
+        .is_some_and(|l| !l.is_empty() && indent_of(l) == 0);
+    let blank_before = begin_at > 0 && lines[begin_at - 1].is_empty();
+    if blank_after && section_follows && !blank_before {
+        lines.remove(end_at + 1);
+        lines.insert(begin_at, String::new());
+    }
 }
 
 /// Effective job names (an explicit `name:` override when present, else the
@@ -4584,6 +4616,107 @@ workflows:
         assert!(output.contains("  update_prlog:") && output.contains("    jobs:"));
         assert!(output.contains("name: post-merge-build-binary"));
         assert!(output.ends_with('\n'));
+    }
+
+    #[test]
+    fn a_freshly_created_post_merge_file_is_already_in_its_resynced_form() {
+        // #457: the first `update` created the file with a blank line after the
+        // managed orbs block; the next `update` (a strip and re-patch) moved it
+        // before the block, so `update --check` failed right after the first
+        // `update`, with an empty change summary. Creating the file must leave
+        // it exactly as a resync would.
+        let opts = opts_with_post_merge_regen();
+        let (first, _) = patch_post_merge_regen("", &opts);
+        let (resynced, _) = resync_post_merge_regen(&first, &opts);
+        assert_eq!(
+            first, resynced,
+            "first run:\n{first}\nresynced:\n{resynced}"
+        );
+        let (again, _) = resync_post_merge_regen(&resynced, &opts);
+        assert_eq!(resynced, again, "a further resync must change nothing");
+    }
+
+    /// Every kind of starting file must come out of the first patch in the form
+    /// a resync keeps (#457).
+    #[test]
+    fn patching_any_post_merge_file_leaves_it_in_its_resynced_form() {
+        let opts = opts_with_post_merge_regen();
+        let starts = [
+            ("empty", ""),
+            ("version only", "version: 2.1\n"),
+            (
+                "workflows but no orbs",
+                "version: 2.1\n\nworkflows:\n  update_prlog:\n    jobs:\n      - some-job\n",
+            ),
+            (
+                "orbs but no workflows",
+                "version: 2.1\n\norbs:\n  toolkit: jerus-org/circleci-toolkit@8.0.3\n",
+            ),
+            (
+                "orbs and workflows, no blank line between",
+                "version: 2.1\norbs:\n  toolkit: jerus-org/circleci-toolkit@8.0.3\nworkflows:\n  update_prlog:\n    jobs:\n      - some-job\n",
+            ),
+            (
+                "orbs and workflows, blank line between",
+                "version: 2.1\n\norbs:\n  toolkit: jerus-org/circleci-toolkit@8.0.3\n\nworkflows:\n  update_prlog:\n    jobs:\n      - some-job\n",
+            ),
+            (
+                "orbs, other workflow only",
+                "version: 2.1\n\norbs:\n  toolkit: jerus-org/circleci-toolkit@8.0.3\n\nworkflows:\n  other:\n    jobs:\n      - x\n",
+            ),
+        ];
+        for (name, start) in starts {
+            let (first, _) = patch_post_merge_regen(start, &opts);
+            let (resynced, _) = resync_post_merge_regen(&first, &opts);
+            assert_eq!(
+                first, resynced,
+                "{name}:\nfirst:\n{first}\nresynced:\n{resynced}"
+            );
+        }
+    }
+
+    fn spacing_lines(text: &str) -> Vec<String> {
+        text.lines().map(ToString::to_string).collect()
+    }
+
+    #[test]
+    fn settle_orbs_block_spacing_moves_the_blank_line_before_the_block() {
+        let mut lines = spacing_lines(
+            "orbs:\n  a: x/a@1\n  # >>> gen-circleci-orb (managed — edits overwritten by 'gen-circleci-orb update')\n  gen-circleci-orb: x/g@1\n  # <<< gen-circleci-orb\n\nworkflows:\n",
+        );
+        settle_orbs_block_spacing(&mut lines);
+        assert_eq!(
+            lines.join("\n"),
+            "orbs:\n  a: x/a@1\n\n  # >>> gen-circleci-orb (managed — edits overwritten by 'gen-circleci-orb update')\n  gen-circleci-orb: x/g@1\n  # <<< gen-circleci-orb\nworkflows:"
+        );
+    }
+
+    #[test]
+    fn settle_orbs_block_spacing_leaves_other_layouts_alone() {
+        let block = "  # >>> gen-circleci-orb (managed — edits overwritten by 'gen-circleci-orb update')\n  gen-circleci-orb: x/g@1\n  # <<< gen-circleci-orb";
+        for (name, text) in [
+            // Already in the resynced form.
+            (
+                "blank already before",
+                format!("orbs:\n  a: x/a@1\n\n{block}\nworkflows:"),
+            ),
+            // More pins follow the block: nothing separates sections here.
+            (
+                "pins after",
+                format!("orbs:\n{block}\n  b: x/b@1\n\nworkflows:"),
+            ),
+            // No blank line anywhere.
+            (
+                "no blank",
+                format!("orbs:\n  a: x/a@1\n{block}\nworkflows:"),
+            ),
+            // No managed block at all.
+            ("no block", "orbs:\n  a: x/a@1\n\nworkflows:".to_string()),
+        ] {
+            let mut lines = spacing_lines(&text);
+            settle_orbs_block_spacing(&mut lines);
+            assert_eq!(lines.join("\n"), text, "{name}");
+        }
     }
 
     #[test]
