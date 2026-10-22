@@ -13,7 +13,7 @@ from the dependency graph with [`cargo-about`](https://github.com/EmbarkStudios/
 
 ## Overview
 
-- **MIT License** — 336 crate(s)
+- **MIT License** — 329 crate(s)
 - **ISC License** — 22 crate(s)
 - **Unicode License v3** — 19 crate(s)
 - **Apache License 2.0** — 9 crate(s)
@@ -732,7 +732,7 @@ limitations under the License.
 
 Used by:
 
-- aws-lc-sys 0.45.0
+- aws-lc-sys 0.46.0
 - dunce 1.0.5
 - ryu 1.0.23
 - sync_wrapper 1.0.2
@@ -857,7 +857,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 Used by:
 
-- aws-lc-sys 0.45.0
+- aws-lc-sys 0.46.0
 
 ```text
 Copyright (c) <year> <owner>. 
@@ -878,8 +878,8 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
 
 Used by:
 
-- webpki-root-certs 1.0.9
-- webpki-roots 1.0.9
+- webpki-root-certs 1.0.10
+- webpki-roots 1.0.10
 
 ```text
 # Community Data License Agreement - Permissive - Version 2.0
@@ -1549,7 +1549,7 @@ CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 Used by:
 
-- rustls-webpki 0.103.15
+- rustls-webpki 0.103.16
 
 ```text
 Except as otherwise noted, this project is licensed under the following
@@ -1578,8 +1578,8 @@ third-party/chromium/LICENSE.
 
 Used by:
 
-- aws-lc-rs 1.18.1
-- aws-lc-sys 0.45.0
+- aws-lc-rs 1.18.2
+- aws-lc-sys 0.46.0
 
 ```text
 ISC License:
@@ -1658,42 +1658,6 @@ Used by:
 Copyright (c) 2006-2009 Graydon Hoare
 Copyright (c) 2009-2013 Mozilla Foundation
 Copyright (c) 2016 Artyom Pavlov
-
-Permission is hereby granted, free of charge, to any
-person obtaining a copy of this software and associated
-documentation files (the "Software"), to deal in the
-Software without restriction, including without
-limitation the rights to use, copy, modify, merge,
-publish, distribute, sublicense, and/or sell copies of
-the Software, and to permit persons to whom the Software
-is furnished to do so, subject to the following
-conditions:
-
-The above copyright notice and this permission notice
-shall be included in all copies or substantial portions
-of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
-ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
-TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
-PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
-SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
-IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-DEALINGS IN THE SOFTWARE.
-
-```
-
-## MIT License
-
-Used by:
-
-- rayon-core 1.13.0
-- rayon 1.12.0
-
-```text
-Copyright (c) 2010 The Rust Project Developers
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated
@@ -1864,10 +1828,10 @@ DEALINGS IN THE SOFTWARE.
 Used by:
 
 - backtrace 0.3.76
-- cc 1.7.0
+- cc 1.9.0
 - cfg-if 1.0.5
 - cmake 0.1.58
-- find-msvc-tools 0.1.14
+- find-msvc-tools 0.1.15
 - git2 0.21.0
 - jobserver 0.1.35
 - js-sys 0.3.106
@@ -1920,7 +1884,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- libz-sys 1.1.29
+- libz-sys 1.1.30
 
 ```text
 Copyright (c) 2014 Alex Crichton
@@ -2162,41 +2126,6 @@ THE SOFTWARE.
 
 Used by:
 
-- either 1.19.0
-
-```text
-Copyright (c) 2015
-
-Permission is hereby granted, free of charge, to any
-person obtaining a copy of this software and associated
-documentation files (the "Software"), to deal in the
-Software without restriction, including without
-limitation the rights to use, copy, modify, merge,
-publish, distribute, sublicense, and/or sell copies of
-the Software, and to permit persons to whom the Software
-is furnished to do so, subject to the following
-conditions:
-
-The above copyright notice and this permission notice
-shall be included in all copies or substantial portions
-of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
-ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
-TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
-PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
-SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
-IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-DEALINGS IN THE SOFTWARE.
-
-```
-
-## MIT License
-
-Used by:
-
 - base62 2.2.6
 
 ```text
@@ -2392,7 +2321,7 @@ SOFTWARE.
 
 Used by:
 
-- schannel 0.1.29
+- schannel 0.1.30
 
 ```text
 Copyright (c) 2015 steffengy
@@ -2589,8 +2518,8 @@ DEALINGS IN THE SOFTWARE.
 Used by:
 
 - hyper-rustls 0.27.10
-- rustls-native-certs 0.8.4
-- rustls 0.23.45
+- rustls-native-certs 0.8.5
+- rustls 0.23.46
 
 ```text
 Copyright (c) 2016 Joseph Birr-Pixton <jpixton@gmail.com>
@@ -2763,7 +2692,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- equivalent 1.0.2
+- equivalent 1.0.3
 
 ```text
 Copyright (c) 2016--2023
@@ -2928,7 +2857,7 @@ THE SOFTWARE.
 
 Used by:
 
-- sha2 0.11.0
+- sha2 0.11.1
 
 ```text
 Copyright (c) 2016-2026 The RustCrypto Project Developers
@@ -3199,7 +3128,7 @@ SOFTWARE.
 
 Used by:
 
-- arc-swap 1.9.2
+- arc-swap 1.9.3
 
 ```text
 Copyright (c) 2017 arc-swap developers
@@ -3911,7 +3840,7 @@ SOFTWARE.
 
 Used by:
 
-- tame-index 0.26.3
+- tame-index 0.27.0
 - toml-span 0.7.2
 
 ```text
@@ -4274,6 +4203,42 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
+- memmap2 0.9.12
+
+```text
+Copyright (c) 2020 Yevhenii Reizner
+Copyright (c) 2015 Dan Burkert
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+
+```
+
+## MIT License
+
+Used by:
+
 - cpufeatures 0.2.17
 
 ```text
@@ -4572,7 +4537,7 @@ THE SOFTWARE.
 
 Used by:
 
-- deranged 0.5.8
+- deranged 0.5.9
 
 ```text
 Copyright (c) 2024 Jacob Pratt et al.
@@ -4712,7 +4677,7 @@ SOFTWARE.
 
 Used by:
 
-- libc 0.2.190
+- libc 0.2.191
 
 ```text
 Copyright (c) The Rust Project Developers
@@ -4877,7 +4842,7 @@ OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWA
 
 Used by:
 
-- pcu 0.6.38
+- pcu 0.6.39
 
 ```text
 Copyright © 2025 Jeremiah Russell
@@ -4906,7 +4871,7 @@ THE SOFTWARE.
 
 Used by:
 
-- pcu-release-assets 0.1.5
+- pcu-release-assets 0.1.6
 
 ```text
 Copyright © 2026 Jeremiah Russell
@@ -5002,7 +4967,7 @@ SOFTWARE.
 
 Used by:
 
-- crc32fast 1.5.2
+- crc32fast 1.5.3
 
 ```text
 MIT License
@@ -5282,7 +5247,7 @@ SOFTWARE.
 
 Used by:
 
-- kdeets 0.1.32
+- kdeets 0.1.34
 
 ```text
 MIT License
@@ -5375,7 +5340,7 @@ SOFTWARE.
 
 Used by:
 
-- gen-circleci-orb 0.2.5
+- gen-circleci-orb 0.2.6
 
 ```text
 MIT License
@@ -5459,7 +5424,7 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 Used by:
 
 - tokio-util 0.7.20
-- tokio 1.53.2
+- tokio 1.54.1
 
 ```text
 MIT License
@@ -5699,7 +5664,7 @@ SOFTWARE.
 
 Used by:
 
-- octocrab 0.54.3
+- octocrab 0.54.5
 
 ```text
 MIT License (MIT)
@@ -5747,10 +5712,10 @@ Used by:
 - linux-raw-sys 0.12.1
 - once_cell 1.21.4
 - pathdiff 0.2.3
-- pest 2.9.3
-- pest_derive 2.9.3
-- pest_generator 2.9.3
-- pest_meta 2.9.3
+- pest 2.9.4
+- pest_derive 2.9.4
+- pest_generator 2.9.4
+- pest_meta 2.9.4
 - pin-project-internal 1.1.13
 - pin-project-lite 0.2.17
 - pin-project 1.1.13
@@ -5765,17 +5730,17 @@ Used by:
 - serde 1.0.229
 - serde_core 1.0.229
 - serde_derive 1.0.229
-- serde_json 1.0.151
+- serde_json 1.0.154
 - serde_path_to_error 0.1.20
 - serde_yaml 0.9.34+deprecated
 - simd_cesu8 1.2.0
-- smol_str 0.3.6
+- smol_str 0.3.7
 - syn 1.0.109
 - syn 2.0.119
-- syn 3.0.7
+- syn 3.0.9
 - thiserror-impl 2.0.21
 - thiserror 2.0.21
-- unicode-ident 1.0.26
+- unicode-ident 1.0.27
 - unsafe-libyaml 0.2.11
 - wasi 0.11.1+wasi-snapshot-preview1
 - zmij 1.0.23
@@ -6058,38 +6023,7 @@ SOFTWARE.
 
 Used by:
 
-- twox-hash 2.1.5
-
-```text
-The MIT License (MIT)
-
-Copyright (c) 2015 Jake Goulding
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-```
-
-## MIT License
-
-Used by:
-
-- combine 4.6.8
+- combine 4.6.9
 
 ```text
 The MIT License (MIT)
@@ -6214,7 +6148,7 @@ SOFTWARE.
 
 Used by:
 
-- aws-lc-sys 0.45.0
+- aws-lc-sys 0.46.0
 
 ```text
 The MIT License (MIT)
@@ -6439,9 +6373,9 @@ SOFTWARE.
 
 Used by:
 
-- async-compression 0.4.50
-- compression-codecs 0.4.45
-- compression-core 0.4.33
+- async-compression 0.4.51
+- compression-codecs 0.4.46
+- compression-core 0.4.34
 
 ```text
 The MIT License (MIT)
@@ -6465,46 +6399,6 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
-```
-
-## MIT License
-
-Used by:
-
-- crossbeam-channel 0.5.17
-- crossbeam-deque 0.8.8
-- crossbeam-epoch 0.9.21
-- crossbeam-utils 0.8.23
-
-```text
-The MIT License (MIT)
-
-Copyright (c) 2019 The Crossbeam Project Developers
-
-Permission is hereby granted, free of charge, to any
-person obtaining a copy of this software and associated
-documentation files (the "Software"), to deal in the
-Software without restriction, including without
-limitation the rights to use, copy, modify, merge,
-publish, distribute, sublicense, and/or sell copies of
-the Software, and to permit persons to whom the Software
-is furnished to do so, subject to the following
-conditions:
-
-The above copyright notice and this permission notice
-shall be included in all copies or substantial portions
-of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
-ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
-TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
-PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
-SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
-IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-DEALINGS IN THE SOFTWARE.
 
 ```
 
@@ -7049,7 +6943,7 @@ Exhibit B - "Incompatible With Secondary Licenses" Notice
 
 Used by:
 
-- unicode-ident 1.0.26
+- unicode-ident 1.0.27
 
 ```text
 UNICODE LICENSE V3

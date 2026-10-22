@@ -5,9 +5,37 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.6] - 2026-10-22
+
+Summary: Added[5], Changed[1], Documentation[2], Fixed[9]
+
+### Added
+
+ - feat(config): retire the unused [ci] release_after_job
+ - feat(config): let a custom run step set when
+ - feat(config): require every option of a rich job_group command to be addressed
+ - feat(config): flag retired and unknown config keys
+ - feat(config): reject unknown keys in rich-mode job_group tables
+
+### Fixed
+
+ - fix(update): settle the orbs block spacing for any post-merge file
+ - fix(update): create post-merge file already in its resynced form
+ - fix(config): apply review of the step when check
+ - fix(config): apply review of the option-coverage check
+ - fix(config): report a load failure with the key problems in config validate
+ - fix(deps): update rust crate rstest to 0.28.0
+ - fix(deps): update rust crate tokio to 1.54.0
+ - fix(deps): update rust crate pcu to 0.6.39
+ - fix(config): apply review of strict job_group key check
+
+### Changed
+
+ - refactor(config): derive the known job_group keys from the structs
+
 ## [0.2.5] - 2026-10-11
 
-Summary: Added[1], Fixed[7]
+Summary: Added[1], Chore[1], Fixed[7]
 
 ### Added
 
@@ -1094,7 +1122,8 @@ Summary: Added[2], Chore[1], Fixed[2], Testing[1]
 
 Summary: Chore[2]
 
-[Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.4...HEAD
+[Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.5...HEAD
+[0.2.5]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.1...v0.2.2
