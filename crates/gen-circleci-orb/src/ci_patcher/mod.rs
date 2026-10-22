@@ -672,7 +672,7 @@ fn settle_orbs_block_spacing(lines: &mut Vec<String>) {
     let Some(begin_at) = lines[..end_at].iter().rposition(|l| *l == begin) else {
         return;
     };
-    let blank_after = lines.get(end_at + 1).is_some_and(|l| l.is_empty());
+    let blank_after = lines.get(end_at + 1).is_some_and(String::is_empty);
     let section_follows = lines
         .get(end_at + 2)
         .is_some_and(|l| !l.is_empty() && indent_of(l) == 0);
