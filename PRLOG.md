@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - deps: update dependency circleci-public/circleci-cli to v1.7.0(pr [#512])
 - deps: update rust crate rstest to 0.28.0(pr [#513])
 - deps: lock file maintenance(pr [#519])
+- update: create the post-merge file already in its resynced form(pr [#518])
 
 ## [0.2.5] - 2026-10-11
 
@@ -1437,6 +1438,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#516]: https://github.com/jerus-org/gen-circleci-orb/pull/516
 [#517]: https://github.com/jerus-org/gen-circleci-orb/pull/517
 [#519]: https://github.com/jerus-org/gen-circleci-orb/pull/519
+[#518]: https://github.com/jerus-org/gen-circleci-orb/pull/518
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.5...HEAD
 [0.2.5]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.3...v0.2.4
