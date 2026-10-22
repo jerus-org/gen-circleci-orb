@@ -2,8 +2,4 @@
 # cargo-audit ignores (cargo-deny ignores live in deny.toml).
 [advisories]
 ignore = [
-    # unsafe-libyaml is unmaintained; reached through the direct, deprecated
-    # serde_yaml dependency. Interim ignore until serde_yaml is replaced
-    # (jerus-org/gen-circleci-orb#507) — remove this entry when that closes.
-    "RUSTSEC-2024-0449",
 ]

@@ -90,8 +90,8 @@ pub fn schema() -> Result<BTreeMap<String, JobSchema>> {
 }
 
 fn parse_job_schema(name: &str, src: &str) -> Result<JobSchema> {
-    let doc: serde_yaml::Value =
-        serde_yaml::from_str(src).with_context(|| format!("parsing orb job '{name}'"))?;
+    let doc: serde_norway::Value =
+        serde_norway::from_str(src).with_context(|| format!("parsing orb job '{name}'"))?;
     let mut out = JobSchema::new();
     if let Some(params) = doc.get("parameters").and_then(|p| p.as_mapping()) {
         for (k, v) in params {

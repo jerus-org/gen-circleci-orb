@@ -24,7 +24,7 @@ pub struct OrbCommand {
     pub description: String,
     #[serde(skip_serializing_if = "IndexMap::is_empty")]
     pub parameters: IndexMap<String, OrbParameter>,
-    pub steps: Vec<serde_yaml::Value>,
+    pub steps: Vec<serde_norway::Value>,
 }
 
 /// A single orb job definition (`src/jobs/<name>.yml`).
@@ -34,7 +34,7 @@ pub struct OrbJob {
     pub executor: String,
     #[serde(skip_serializing_if = "IndexMap::is_empty")]
     pub parameters: IndexMap<String, OrbParameter>,
-    pub steps: Vec<serde_yaml::Value>,
+    pub steps: Vec<serde_norway::Value>,
 }
 
 /// A single orb executor definition (`src/executors/<name>.yml`).
@@ -57,7 +57,7 @@ pub struct OrbParameter {
     pub param_type: String,
     pub description: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub default: Option<serde_yaml::Value>,
+    pub default: Option<serde_norway::Value>,
     #[serde(rename = "enum", skip_serializing_if = "Option::is_none")]
     pub enum_values: Option<Vec<String>>,
 }

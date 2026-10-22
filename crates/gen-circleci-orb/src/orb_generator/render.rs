@@ -761,7 +761,7 @@ fn render_command(sub: &SubCommand, effective_name: &str, config: Option<&OrbCon
         parameters,
         steps,
     };
-    serde_yaml::to_string(&cmd).unwrap()
+    serde_norway::to_string(&cmd).unwrap()
 }
 
 /// For each boolean parameter, emit a `when: condition: << parameters.X >>` step
@@ -773,7 +773,7 @@ fn build_boolean_flag_env_steps(
     sub: &SubCommand,
     effective_name: &str,
     config: Option<&OrbConfig>,
-) -> Vec<serde_yaml::Value> {
+) -> Vec<serde_norway::Value> {
     let mut steps = Vec::new();
     for p in &sub.parameters {
         if !matches!(p.param_type, ParamType::Boolean) {
@@ -785,34 +785,38 @@ fn build_boolean_flag_env_steps(
         let orb_name = resolve_param_orb_name(&sub.name, effective_name, &p.long_name, config);
         let env_var = env_var_name(&orb_name);
 
-        let mut run_map = serde_yaml::Mapping::new();
+        let mut run_map = serde_norway::Mapping::new();
         run_map.insert(
-            serde_yaml::Value::String("name".to_string()),
-            serde_yaml::Value::String(format!("Set {env_var} flag")),
+            serde_norway::Value::String("name".to_string()),
+            serde_norway::Value::String(format!("Set {env_var} flag")),
         );
         run_map.insert(
-            serde_yaml::Value::String("command".to_string()),
-            serde_yaml::Value::String(format!("echo 'export {env_var}=true' >> \"$BASH_ENV\"")),
+            serde_norway::Value::String("command".to_string()),
+            serde_norway::Value::String(format!("echo 'export {env_var}=true' >> \"$BASH_ENV\"")),
         );
-        let mut run_step = serde_yaml::Mapping::new();
+        let mut run_step = serde_norway::Mapping::new();
         run_step.insert(
-            serde_yaml::Value::String("run".to_string()),
-            serde_yaml::Value::Mapping(run_map),
+            serde_norway::Value::String("run".to_string()),
+            serde_norway::Value::Mapping(run_map),
         );
-        let inner_steps = serde_yaml::Value::Sequence(vec![serde_yaml::Value::Mapping(run_step)]);
+        let inner_steps =
+            serde_norway::Value::Sequence(vec![serde_norway::Value::Mapping(run_step)]);
 
-        let mut when_inner = serde_yaml::Mapping::new();
+        let mut when_inner = serde_norway::Mapping::new();
         when_inner.insert(
-            serde_yaml::Value::String("condition".to_string()),
-            serde_yaml::Value::String(format!("<< parameters.{orb_name} >>")),
+            serde_norway::Value::String("condition".to_string()),
+            serde_norway::Value::String(format!("<< parameters.{orb_name} >>")),
         );
-        when_inner.insert(serde_yaml::Value::String("steps".to_string()), inner_steps);
-        let mut when_map = serde_yaml::Mapping::new();
+        when_inner.insert(
+            serde_norway::Value::String("steps".to_string()),
+            inner_steps,
+        );
+        let mut when_map = serde_norway::Mapping::new();
         when_map.insert(
-            serde_yaml::Value::String("when".to_string()),
-            serde_yaml::Value::Mapping(when_inner),
+            serde_norway::Value::String("when".to_string()),
+            serde_norway::Value::Mapping(when_inner),
         );
-        steps.push(serde_yaml::Value::Mapping(when_map));
+        steps.push(serde_norway::Value::Mapping(when_map));
     }
     steps
 }
@@ -825,26 +829,26 @@ fn build_boolean_flag_env_steps(
 /// rejects an empty default for an enum — so an enum with no CLI default falls
 /// back to its first value. Other non-required params with no default get an
 /// empty string (the CircleCI convention for "optional/unset").
-fn orb_param_default(p: &crate::help_parser::types::Parameter) -> Option<serde_yaml::Value> {
+fn orb_param_default(p: &crate::help_parser::types::Parameter) -> Option<serde_norway::Value> {
     match &p.param_type {
         ParamType::Boolean => {
             let val = p.default.as_ref().map(|d| d == "true").unwrap_or(false);
-            Some(serde_yaml::Value::Bool(val))
+            Some(serde_norway::Value::Bool(val))
         }
-        ParamType::Enum(vals) => {
-            Some(serde_yaml::Value::String(p.default.clone().unwrap_or_else(
-                || vals.first().cloned().unwrap_or_default(),
-            )))
-        }
+        ParamType::Enum(vals) => Some(serde_norway::Value::String(
+            p.default
+                .clone()
+                .unwrap_or_else(|| vals.first().cloned().unwrap_or_default()),
+        )),
         ParamType::Integer if p.default.is_some() => Some(coerce_override_default(
             p.default.as_deref().expect("checked by guard"),
             "integer",
         )),
-        _ if !p.required && p.default.is_none() => Some(serde_yaml::Value::String(String::new())),
+        _ if !p.required && p.default.is_none() => Some(serde_norway::Value::String(String::new())),
         _ => p
             .default
             .as_ref()
-            .map(|d| serde_yaml::Value::String(d.clone())),
+            .map(|d| serde_norway::Value::String(d.clone())),
     }
 }
 
@@ -859,14 +863,14 @@ fn orb_param_default(p: &crate::help_parser::types::Parameter) -> Option<serde_y
 /// param renders as a quoted YAML string (`default: "true"`), which
 /// CircleCI's orb schema rejects as a type mismatch against `type:
 /// boolean`/`type: integer` (#347).
-fn coerce_override_default(raw: &str, param_type: &str) -> serde_yaml::Value {
+fn coerce_override_default(raw: &str, param_type: &str) -> serde_norway::Value {
     match param_type {
-        "boolean" => serde_yaml::Value::Bool(raw == "true"),
+        "boolean" => serde_norway::Value::Bool(raw == "true"),
         "integer" => raw
             .parse::<i64>()
-            .map(|n| serde_yaml::Value::Number(n.into()))
-            .unwrap_or_else(|_| serde_yaml::Value::String(raw.to_string())),
-        _ => serde_yaml::Value::String(raw.to_string()),
+            .map(|n| serde_norway::Value::Number(n.into()))
+            .unwrap_or_else(|_| serde_norway::Value::String(raw.to_string())),
+        _ => serde_norway::Value::String(raw.to_string()),
     }
 }
 
@@ -1092,7 +1096,7 @@ fn render_job(
         // required-ness.
         if let Some(param) = parameters.get_mut(key) {
             if param.default.is_none() {
-                param.default = Some(serde_yaml::Value::String(String::new()));
+                param.default = Some(serde_norway::Value::String(String::new()));
             }
         }
     }
@@ -1113,7 +1117,7 @@ fn render_job(
     }
 
     let invoke_step = build_invoke_step(sub, effective_name, RESERVED_JOB_PARAMS, config);
-    let mut steps = vec![serde_yaml::Value::String("checkout".to_string())];
+    let mut steps = vec![serde_norway::Value::String("checkout".to_string())];
     if is_orb_producing {
         steps.push(build_target_branch_switch_step());
     }
@@ -1122,7 +1126,7 @@ fn render_job(
         steps.push(build_resolve_workspace_param_step(key));
     }
     if opts.git_push_subcommands.contains(&sub.name) {
-        steps.push(serde_yaml::Value::String("set_https_remote".to_string()));
+        steps.push(serde_norway::Value::String("set_https_remote".to_string()));
     }
     // Load the configured SSH write key (and drop the read-only checkout key)
     // before invoking, so the end-of-workflow push authenticates with write
@@ -1141,7 +1145,7 @@ fn render_job(
         parameters,
         steps,
     };
-    serde_yaml::to_string(&job).unwrap()
+    serde_norway::to_string(&job).unwrap()
 }
 
 fn render_executor(binary_name: &str) -> String {
@@ -1151,7 +1155,7 @@ fn render_executor(binary_name: &str) -> String {
         OrbParameter {
             param_type: "string".to_string(),
             description: "Docker image tag.".to_string(),
-            default: Some(serde_yaml::Value::String("latest".to_string())),
+            default: Some(serde_norway::Value::String("latest".to_string())),
             enum_values: None,
         },
     );
@@ -1162,7 +1166,7 @@ fn render_executor(binary_name: &str) -> String {
         }],
         parameters: params,
     };
-    serde_yaml::to_string(&executor).unwrap()
+    serde_norway::to_string(&executor).unwrap()
 }
 
 fn render_cli_installer_stage(ver: &str) -> String {
@@ -1654,17 +1658,17 @@ fn build_run_step(
     effective_name: &str,
     run_name: &str,
     config: Option<&OrbConfig>,
-) -> serde_yaml::Value {
-    serde_yaml::Value::Mapping({
-        let mut m = serde_yaml::Mapping::new();
-        let mut run_map = serde_yaml::Mapping::new();
+) -> serde_norway::Value {
+    serde_norway::Value::Mapping({
+        let mut m = serde_norway::Mapping::new();
+        let mut run_map = serde_norway::Mapping::new();
         run_map.insert(
-            serde_yaml::Value::String("name".to_string()),
-            serde_yaml::Value::String(run_name.to_string()),
+            serde_norway::Value::String("name".to_string()),
+            serde_norway::Value::String(run_name.to_string()),
         );
         run_map.insert(
-            serde_yaml::Value::String("command".to_string()),
-            serde_yaml::Value::String(format!(
+            serde_norway::Value::String("command".to_string()),
+            serde_norway::Value::String(format!(
                 "<<include(scripts/{}.sh)>>",
                 effective_name.replace('-', "_")
             )),
@@ -1675,7 +1679,7 @@ fn build_run_step(
         // `[[ "${X}" = "true" ]]` check would fail and the flag would never be
         // added. They're set as real string env vars via `when` steps instead
         // (see build_boolean_flag_env_steps).
-        let mut env_map = serde_yaml::Mapping::new();
+        let mut env_map = serde_norway::Mapping::new();
         for p in &sub.parameters {
             if matches!(p.param_type, ParamType::Boolean) {
                 continue;
@@ -1683,19 +1687,19 @@ fn build_run_step(
             let orb_name = resolve_param_orb_name(&sub.name, effective_name, &p.long_name, config);
             let env_var = env_var_name(&orb_name);
             env_map.insert(
-                serde_yaml::Value::String(env_var),
-                serde_yaml::Value::String(format!("<< parameters.{orb_name} >>")),
+                serde_norway::Value::String(env_var),
+                serde_norway::Value::String(format!("<< parameters.{orb_name} >>")),
             );
         }
         if !env_map.is_empty() {
             run_map.insert(
-                serde_yaml::Value::String("environment".to_string()),
-                serde_yaml::Value::Mapping(env_map),
+                serde_norway::Value::String("environment".to_string()),
+                serde_norway::Value::Mapping(env_map),
             );
         }
         m.insert(
-            serde_yaml::Value::String("run".to_string()),
-            serde_yaml::Value::Mapping(run_map),
+            serde_norway::Value::String("run".to_string()),
+            serde_norway::Value::Mapping(run_map),
         );
         m
     })
@@ -1710,23 +1714,23 @@ fn build_invoke_step(
     effective_name: &str,
     skip: &[&str],
     config: Option<&OrbConfig>,
-) -> serde_yaml::Value {
-    let mut invoke_map = serde_yaml::Mapping::new();
+) -> serde_norway::Value {
+    let mut invoke_map = serde_norway::Mapping::new();
     for p in &sub.parameters {
         let Some(key) = resolve_job_param_key(sub, effective_name, p, skip, config) else {
             continue;
         };
         let value = format!("<< parameters.{key} >>");
         invoke_map.insert(
-            serde_yaml::Value::String(key),
-            serde_yaml::Value::String(value),
+            serde_norway::Value::String(key),
+            serde_norway::Value::String(value),
         );
     }
-    serde_yaml::Value::Mapping({
-        let mut m = serde_yaml::Mapping::new();
+    serde_norway::Value::Mapping({
+        let mut m = serde_norway::Mapping::new();
         m.insert(
-            serde_yaml::Value::String(effective_name.replace('-', "_")),
-            serde_yaml::Value::Mapping(invoke_map),
+            serde_norway::Value::String(effective_name.replace('-', "_")),
+            serde_norway::Value::Mapping(invoke_map),
         );
         m
     })
@@ -1736,70 +1740,73 @@ fn build_workspace_params() -> (OrbParameter, OrbParameter) {
     let attach = OrbParameter {
         param_type: "boolean".to_string(),
         description: "Attach a workspace before running the command (use when the binary was built in a prior job).".to_string(),
-        default: Some(serde_yaml::Value::Bool(false)),
+        default: Some(serde_norway::Value::Bool(false)),
         enum_values: None,
     };
     let root = OrbParameter {
         param_type: "string".to_string(),
         description: "Path at which to attach the workspace; also prepended to PATH (only used when attach_workspace is true).".to_string(),
-        default: Some(serde_yaml::Value::String("/tmp/workspace".to_string())),
+        default: Some(serde_norway::Value::String("/tmp/workspace".to_string())),
         enum_values: None,
     };
     (attach, root)
 }
 
-fn build_attach_workspace_step() -> serde_yaml::Value {
-    let mut attach_map = serde_yaml::Mapping::new();
+fn build_attach_workspace_step() -> serde_norway::Value {
+    let mut attach_map = serde_norway::Mapping::new();
     attach_map.insert(
-        serde_yaml::Value::String("at".to_string()),
-        serde_yaml::Value::String("<< parameters.workspace_root >>".to_string()),
+        serde_norway::Value::String("at".to_string()),
+        serde_norway::Value::String("<< parameters.workspace_root >>".to_string()),
     );
-    let mut add_path_env = serde_yaml::Mapping::new();
+    let mut add_path_env = serde_norway::Mapping::new();
     add_path_env.insert(
-        serde_yaml::Value::String("WORKSPACE_ROOT".to_string()),
-        serde_yaml::Value::String("<< parameters.workspace_root >>".to_string()),
+        serde_norway::Value::String("WORKSPACE_ROOT".to_string()),
+        serde_norway::Value::String("<< parameters.workspace_root >>".to_string()),
     );
-    let mut add_path_run = serde_yaml::Mapping::new();
+    let mut add_path_run = serde_norway::Mapping::new();
     add_path_run.insert(
-        serde_yaml::Value::String("name".to_string()),
-        serde_yaml::Value::String("Add workspace binaries to PATH".to_string()),
-    );
-    add_path_run.insert(
-        serde_yaml::Value::String("command".to_string()),
-        serde_yaml::Value::String("<<include(scripts/add-workspace-to-path.sh)>>".to_string()),
+        serde_norway::Value::String("name".to_string()),
+        serde_norway::Value::String("Add workspace binaries to PATH".to_string()),
     );
     add_path_run.insert(
-        serde_yaml::Value::String("environment".to_string()),
-        serde_yaml::Value::Mapping(add_path_env),
+        serde_norway::Value::String("command".to_string()),
+        serde_norway::Value::String("<<include(scripts/add-workspace-to-path.sh)>>".to_string()),
     );
-    let mut attach_ws_map = serde_yaml::Mapping::new();
+    add_path_run.insert(
+        serde_norway::Value::String("environment".to_string()),
+        serde_norway::Value::Mapping(add_path_env),
+    );
+    let mut attach_ws_map = serde_norway::Mapping::new();
     attach_ws_map.insert(
-        serde_yaml::Value::String("attach_workspace".to_string()),
-        serde_yaml::Value::Mapping(attach_map),
+        serde_norway::Value::String("attach_workspace".to_string()),
+        serde_norway::Value::Mapping(attach_map),
     );
-    let inner_steps = serde_yaml::Value::Sequence(vec![
-        serde_yaml::Value::Mapping(attach_ws_map),
-        serde_yaml::Value::Mapping({
-            let mut m = serde_yaml::Mapping::new();
+    let inner_steps = serde_norway::Value::Sequence(vec![
+        serde_norway::Value::Mapping(attach_ws_map),
+        serde_norway::Value::Mapping({
+            let mut m = serde_norway::Mapping::new();
             m.insert(
-                serde_yaml::Value::String("run".to_string()),
-                serde_yaml::Value::Mapping(add_path_run),
+                serde_norway::Value::String("run".to_string()),
+                serde_norway::Value::Mapping(add_path_run),
             );
             m
         }),
     ]);
-    let mut when_inner = serde_yaml::Mapping::new();
+    let mut when_inner = serde_norway::Mapping::new();
     when_inner.insert(
-        serde_yaml::Value::String("condition".to_string()),
-        serde_yaml::Value::String("<< parameters.attach_workspace >>".to_string()),
+        serde_norway::Value::String("condition".to_string()),
+        serde_norway::Value::String("<< parameters.attach_workspace >>".to_string()),
     );
-    when_inner.insert(serde_yaml::Value::String("steps".to_string()), inner_steps);
-    let mut when_map = serde_yaml::Mapping::new();
+    when_inner.insert(
+        serde_norway::Value::String("steps".to_string()),
+        inner_steps,
+    );
+    let mut when_map = serde_norway::Mapping::new();
     when_map.insert(
-        serde_yaml::Value::String("when".to_string()),
-        serde_yaml::Value::Mapping(when_inner),
+        serde_norway::Value::String("when".to_string()),
+        serde_norway::Value::Mapping(when_inner),
     );
-    serde_yaml::Value::Mapping(when_map)
+    serde_norway::Value::Mapping(when_map)
 }
 
 /// The two job parameters a `workspace_sourced` param (`resolved_key`, its
@@ -1818,7 +1825,7 @@ fn build_workspace_sourced_params(resolved_key: &str) -> (OrbParameter, OrbParam
              use the {resolved_key} parameter's own literal value instead. Requires \
              attach_workspace."
         ),
-        default: Some(serde_yaml::Value::String(String::new())),
+        default: Some(serde_norway::Value::String(String::new())),
         enum_values: None,
     };
     let source_file = OrbParameter {
@@ -1828,7 +1835,7 @@ fn build_workspace_sourced_params(resolved_key: &str) -> (OrbParameter, OrbParam
              (default) resolves to '<workspace_root>/versions.env' — calculate_versions' \
              own output path. Only used when {resolved_key}_env_var is set."
         ),
-        default: Some(serde_yaml::Value::String(String::new())),
+        default: Some(serde_norway::Value::String(String::new())),
         enum_values: None,
     };
     (env_var, source_file)
@@ -1842,59 +1849,62 @@ fn build_workspace_sourced_params(resolved_key: &str) -> (OrbParameter, OrbParam
 /// `environment:`-vs-`$BASH_ENV` precedence ordering between this step and
 /// the command's own `run` step. No-op when `<resolved_key>_env_var` is
 /// empty (the default): every existing literal-only consumer is unaffected.
-fn build_resolve_workspace_param_step(resolved_key: &str) -> serde_yaml::Value {
+fn build_resolve_workspace_param_step(resolved_key: &str) -> serde_norway::Value {
     let env_var_param = format!("{resolved_key}_env_var");
     let source_file_param = format!("{resolved_key}_source_file");
     let override_var = env_var_name(&format!("{resolved_key}_resolved"));
 
-    let mut run_map = serde_yaml::Mapping::new();
+    let mut run_map = serde_norway::Mapping::new();
     run_map.insert(
-        serde_yaml::Value::String("name".to_string()),
-        serde_yaml::Value::String(format!("Resolve {resolved_key} from attached workspace")),
-    );
-    run_map.insert(
-        serde_yaml::Value::String("command".to_string()),
-        serde_yaml::Value::String("<<include(scripts/resolve_workspace_param.sh)>>".to_string()),
-    );
-    let mut env_map = serde_yaml::Mapping::new();
-    env_map.insert(
-        serde_yaml::Value::String("GCO_TARGET_ENV_VAR".to_string()),
-        serde_yaml::Value::String(format!("<< parameters.{env_var_param} >>")),
-    );
-    env_map.insert(
-        serde_yaml::Value::String("GCO_SOURCE_FILE".to_string()),
-        serde_yaml::Value::String(format!("<< parameters.{source_file_param} >>")),
-    );
-    env_map.insert(
-        serde_yaml::Value::String("GCO_WORKSPACE_ROOT".to_string()),
-        serde_yaml::Value::String("<< parameters.workspace_root >>".to_string()),
-    );
-    env_map.insert(
-        serde_yaml::Value::String("GCO_OVERRIDE_VAR".to_string()),
-        serde_yaml::Value::String(override_var),
+        serde_norway::Value::String("name".to_string()),
+        serde_norway::Value::String(format!("Resolve {resolved_key} from attached workspace")),
     );
     run_map.insert(
-        serde_yaml::Value::String("environment".to_string()),
-        serde_yaml::Value::Mapping(env_map),
+        serde_norway::Value::String("command".to_string()),
+        serde_norway::Value::String("<<include(scripts/resolve_workspace_param.sh)>>".to_string()),
     );
-    let mut run_step = serde_yaml::Mapping::new();
+    let mut env_map = serde_norway::Mapping::new();
+    env_map.insert(
+        serde_norway::Value::String("GCO_TARGET_ENV_VAR".to_string()),
+        serde_norway::Value::String(format!("<< parameters.{env_var_param} >>")),
+    );
+    env_map.insert(
+        serde_norway::Value::String("GCO_SOURCE_FILE".to_string()),
+        serde_norway::Value::String(format!("<< parameters.{source_file_param} >>")),
+    );
+    env_map.insert(
+        serde_norway::Value::String("GCO_WORKSPACE_ROOT".to_string()),
+        serde_norway::Value::String("<< parameters.workspace_root >>".to_string()),
+    );
+    env_map.insert(
+        serde_norway::Value::String("GCO_OVERRIDE_VAR".to_string()),
+        serde_norway::Value::String(override_var),
+    );
+    run_map.insert(
+        serde_norway::Value::String("environment".to_string()),
+        serde_norway::Value::Mapping(env_map),
+    );
+    let mut run_step = serde_norway::Mapping::new();
     run_step.insert(
-        serde_yaml::Value::String("run".to_string()),
-        serde_yaml::Value::Mapping(run_map),
+        serde_norway::Value::String("run".to_string()),
+        serde_norway::Value::Mapping(run_map),
     );
-    let inner_steps = serde_yaml::Value::Sequence(vec![serde_yaml::Value::Mapping(run_step)]);
-    let mut when_inner = serde_yaml::Mapping::new();
+    let inner_steps = serde_norway::Value::Sequence(vec![serde_norway::Value::Mapping(run_step)]);
+    let mut when_inner = serde_norway::Mapping::new();
     when_inner.insert(
-        serde_yaml::Value::String("condition".to_string()),
-        serde_yaml::Value::String(format!("<< parameters.{env_var_param} >>")),
+        serde_norway::Value::String("condition".to_string()),
+        serde_norway::Value::String(format!("<< parameters.{env_var_param} >>")),
     );
-    when_inner.insert(serde_yaml::Value::String("steps".to_string()), inner_steps);
-    let mut when_map = serde_yaml::Mapping::new();
+    when_inner.insert(
+        serde_norway::Value::String("steps".to_string()),
+        inner_steps,
+    );
+    let mut when_map = serde_norway::Mapping::new();
     when_map.insert(
-        serde_yaml::Value::String("when".to_string()),
-        serde_yaml::Value::Mapping(when_inner),
+        serde_norway::Value::String("when".to_string()),
+        serde_norway::Value::Mapping(when_inner),
     );
-    serde_yaml::Value::Mapping(when_map)
+    serde_norway::Value::Mapping(when_map)
 }
 
 /// The generic script `build_resolve_workspace_param_step` includes: given
@@ -1939,7 +1949,7 @@ fn build_persist_orb_param() -> OrbParameter {
                       jobs (pack, review, the end-of-workflow push job) operate on it \
                       without an immediate push. Default false."
             .to_string(),
-        default: Some(serde_yaml::Value::Bool(false)),
+        default: Some(serde_norway::Value::Bool(false)),
         enum_values: None,
     }
 }
@@ -1955,7 +1965,7 @@ fn build_check_ci_wiring_param() -> OrbParameter {
                       freshly-built release binary is ahead of the published orb pin, \
                       so the check would deadlock the publish)."
             .to_string(),
-        default: Some(serde_yaml::Value::Bool(false)),
+        default: Some(serde_norway::Value::Bool(false)),
         enum_values: None,
     }
 }
@@ -1964,34 +1974,37 @@ fn build_check_ci_wiring_param() -> OrbParameter {
 /// --check` so a consumer whose CI wiring has drifted from the current generator
 /// flow gets a failing build with guidance. Delivered via the orb version (this
 /// step is part of the orb job), so even a config on the old wiring triggers it.
-fn build_check_ci_wiring_step() -> serde_yaml::Value {
-    let mut run_map = serde_yaml::Mapping::new();
+fn build_check_ci_wiring_step() -> serde_norway::Value {
+    let mut run_map = serde_norway::Mapping::new();
     run_map.insert(
-        serde_yaml::Value::String("name".to_string()),
-        serde_yaml::Value::String("Check the CI wiring is current".to_string()),
+        serde_norway::Value::String("name".to_string()),
+        serde_norway::Value::String("Check the CI wiring is current".to_string()),
     );
     run_map.insert(
-        serde_yaml::Value::String("command".to_string()),
-        serde_yaml::Value::String("gen-circleci-orb update --check".to_string()),
+        serde_norway::Value::String("command".to_string()),
+        serde_norway::Value::String("gen-circleci-orb update --check".to_string()),
     );
-    let mut run_step = serde_yaml::Mapping::new();
+    let mut run_step = serde_norway::Mapping::new();
     run_step.insert(
-        serde_yaml::Value::String("run".to_string()),
-        serde_yaml::Value::Mapping(run_map),
+        serde_norway::Value::String("run".to_string()),
+        serde_norway::Value::Mapping(run_map),
     );
-    let inner_steps = serde_yaml::Value::Sequence(vec![serde_yaml::Value::Mapping(run_step)]);
-    let mut when_inner = serde_yaml::Mapping::new();
+    let inner_steps = serde_norway::Value::Sequence(vec![serde_norway::Value::Mapping(run_step)]);
+    let mut when_inner = serde_norway::Mapping::new();
     when_inner.insert(
-        serde_yaml::Value::String("condition".to_string()),
-        serde_yaml::Value::String("<< parameters.check_ci_wiring >>".to_string()),
+        serde_norway::Value::String("condition".to_string()),
+        serde_norway::Value::String("<< parameters.check_ci_wiring >>".to_string()),
     );
-    when_inner.insert(serde_yaml::Value::String("steps".to_string()), inner_steps);
-    let mut when_map = serde_yaml::Mapping::new();
+    when_inner.insert(
+        serde_norway::Value::String("steps".to_string()),
+        inner_steps,
+    );
+    let mut when_map = serde_norway::Mapping::new();
     when_map.insert(
-        serde_yaml::Value::String("when".to_string()),
-        serde_yaml::Value::Mapping(when_inner),
+        serde_norway::Value::String("when".to_string()),
+        serde_norway::Value::Mapping(when_inner),
     );
-    serde_yaml::Value::Mapping(when_map)
+    serde_norway::Value::Mapping(when_map)
 }
 
 /// Optional string job parameter naming a branch to switch onto before invoking
@@ -2009,7 +2022,7 @@ fn build_target_branch_param() -> OrbParameter {
                       generate invocation, and any auto-record push it makes, operates on \
                       the right branch."
             .to_string(),
-        default: Some(serde_yaml::Value::String(String::new())),
+        default: Some(serde_norway::Value::String(String::new())),
         enum_values: None,
     }
 }
@@ -2037,45 +2050,48 @@ echo "export CIRCLE_BRANCH=\"${TARGET_BRANCH}\"" >> "$BASH_ENV"
 /// the branch passed as `TARGET_BRANCH`: orb-tools' review (RC009) rejects an
 /// inline `run` command longer than 64 characters, and the post-merge check
 /// and release gate review the generated orb.
-fn build_target_branch_switch_step() -> serde_yaml::Value {
-    let mut env = serde_yaml::Mapping::new();
+fn build_target_branch_switch_step() -> serde_norway::Value {
+    let mut env = serde_norway::Mapping::new();
     env.insert(
-        serde_yaml::Value::String("TARGET_BRANCH".to_string()),
-        serde_yaml::Value::String("<< parameters.target_branch >>".to_string()),
+        serde_norway::Value::String("TARGET_BRANCH".to_string()),
+        serde_norway::Value::String("<< parameters.target_branch >>".to_string()),
     );
-    let mut run_map = serde_yaml::Mapping::new();
+    let mut run_map = serde_norway::Mapping::new();
     run_map.insert(
-        serde_yaml::Value::String("name".to_string()),
-        serde_yaml::Value::String("Switch onto target_branch".to_string()),
+        serde_norway::Value::String("name".to_string()),
+        serde_norway::Value::String("Switch onto target_branch".to_string()),
     );
     run_map.insert(
-        serde_yaml::Value::String("command".to_string()),
-        serde_yaml::Value::String(format!(
+        serde_norway::Value::String("command".to_string()),
+        serde_norway::Value::String(format!(
             "<<include({SWITCH_TO_TARGET_BRANCH_SCRIPT_PATH})>>"
         )),
     );
     run_map.insert(
-        serde_yaml::Value::String("environment".to_string()),
-        serde_yaml::Value::Mapping(env),
+        serde_norway::Value::String("environment".to_string()),
+        serde_norway::Value::Mapping(env),
     );
-    let mut run_step = serde_yaml::Mapping::new();
+    let mut run_step = serde_norway::Mapping::new();
     run_step.insert(
-        serde_yaml::Value::String("run".to_string()),
-        serde_yaml::Value::Mapping(run_map),
+        serde_norway::Value::String("run".to_string()),
+        serde_norway::Value::Mapping(run_map),
     );
-    let inner_steps = serde_yaml::Value::Sequence(vec![serde_yaml::Value::Mapping(run_step)]);
-    let mut when_inner = serde_yaml::Mapping::new();
+    let inner_steps = serde_norway::Value::Sequence(vec![serde_norway::Value::Mapping(run_step)]);
+    let mut when_inner = serde_norway::Mapping::new();
     when_inner.insert(
-        serde_yaml::Value::String("condition".to_string()),
-        serde_yaml::Value::String("<< parameters.target_branch >>".to_string()),
+        serde_norway::Value::String("condition".to_string()),
+        serde_norway::Value::String("<< parameters.target_branch >>".to_string()),
     );
-    when_inner.insert(serde_yaml::Value::String("steps".to_string()), inner_steps);
-    let mut when_map = serde_yaml::Mapping::new();
+    when_inner.insert(
+        serde_norway::Value::String("steps".to_string()),
+        inner_steps,
+    );
+    let mut when_map = serde_norway::Mapping::new();
     when_map.insert(
-        serde_yaml::Value::String("when".to_string()),
-        serde_yaml::Value::Mapping(when_inner),
+        serde_norway::Value::String("when".to_string()),
+        serde_norway::Value::Mapping(when_inner),
     );
-    serde_yaml::Value::Mapping(when_map)
+    serde_norway::Value::Mapping(when_map)
 }
 
 /// Optional string job parameter naming the SSH key fingerprint used to push the
@@ -2093,7 +2109,7 @@ fn build_ssh_fingerprint_param() -> OrbParameter {
                       the read-only checkout key is dropped from the agent. Empty (default) \
                       falls back to the ambient environment credentials."
             .to_string(),
-        default: Some(serde_yaml::Value::String(String::new())),
+        default: Some(serde_norway::Value::String(String::new())),
         enum_values: None,
     }
 }
@@ -2102,84 +2118,91 @@ fn build_ssh_fingerprint_param() -> OrbParameter {
 /// and remove the read-only checkout key (`~/.ssh/id_rsa.pub`) from the agent so
 /// the subsequent push authenticates with the write key. Mirrors the toolkit
 /// push pattern. No-op when the fingerprint is empty.
-fn build_ssh_setup_step() -> serde_yaml::Value {
-    let mut fingerprints = serde_yaml::Mapping::new();
+fn build_ssh_setup_step() -> serde_norway::Value {
+    let mut fingerprints = serde_norway::Mapping::new();
     fingerprints.insert(
-        serde_yaml::Value::String("fingerprints".to_string()),
-        serde_yaml::Value::Sequence(vec![serde_yaml::Value::String(
+        serde_norway::Value::String("fingerprints".to_string()),
+        serde_norway::Value::Sequence(vec![serde_norway::Value::String(
             "<< parameters.ssh_fingerprint >>".to_string(),
         )]),
     );
-    let mut add_keys_step = serde_yaml::Mapping::new();
+    let mut add_keys_step = serde_norway::Mapping::new();
     add_keys_step.insert(
-        serde_yaml::Value::String("add_ssh_keys".to_string()),
-        serde_yaml::Value::Mapping(fingerprints),
+        serde_norway::Value::String("add_ssh_keys".to_string()),
+        serde_norway::Value::Mapping(fingerprints),
     );
-    let mut trim_run = serde_yaml::Mapping::new();
+    let mut trim_run = serde_norway::Mapping::new();
     trim_run.insert(
-        serde_yaml::Value::String("name".to_string()),
-        serde_yaml::Value::String("Drop read-only checkout key from agent".to_string()),
+        serde_norway::Value::String("name".to_string()),
+        serde_norway::Value::String("Drop read-only checkout key from agent".to_string()),
     );
     trim_run.insert(
-        serde_yaml::Value::String("command".to_string()),
-        serde_yaml::Value::String("ssh-add -d ~/.ssh/id_rsa.pub || true".to_string()),
+        serde_norway::Value::String("command".to_string()),
+        serde_norway::Value::String("ssh-add -d ~/.ssh/id_rsa.pub || true".to_string()),
     );
-    let mut trim_step = serde_yaml::Mapping::new();
+    let mut trim_step = serde_norway::Mapping::new();
     trim_step.insert(
-        serde_yaml::Value::String("run".to_string()),
-        serde_yaml::Value::Mapping(trim_run),
+        serde_norway::Value::String("run".to_string()),
+        serde_norway::Value::Mapping(trim_run),
     );
-    let inner_steps = serde_yaml::Value::Sequence(vec![
-        serde_yaml::Value::Mapping(add_keys_step),
-        serde_yaml::Value::Mapping(trim_step),
+    let inner_steps = serde_norway::Value::Sequence(vec![
+        serde_norway::Value::Mapping(add_keys_step),
+        serde_norway::Value::Mapping(trim_step),
     ]);
-    let mut when_inner = serde_yaml::Mapping::new();
+    let mut when_inner = serde_norway::Mapping::new();
     when_inner.insert(
-        serde_yaml::Value::String("condition".to_string()),
-        serde_yaml::Value::String("<< parameters.ssh_fingerprint >>".to_string()),
+        serde_norway::Value::String("condition".to_string()),
+        serde_norway::Value::String("<< parameters.ssh_fingerprint >>".to_string()),
     );
-    when_inner.insert(serde_yaml::Value::String("steps".to_string()), inner_steps);
-    let mut when_map = serde_yaml::Mapping::new();
+    when_inner.insert(
+        serde_norway::Value::String("steps".to_string()),
+        inner_steps,
+    );
+    let mut when_map = serde_norway::Mapping::new();
     when_map.insert(
-        serde_yaml::Value::String("when".to_string()),
-        serde_yaml::Value::Mapping(when_inner),
+        serde_norway::Value::String("when".to_string()),
+        serde_norway::Value::Mapping(when_inner),
     );
-    serde_yaml::Value::Mapping(when_map)
+    serde_norway::Value::Mapping(when_map)
 }
 
 /// Conditional step: when `persist_orb_workspace` is true, persist the orb dir
 /// (named by the `orb_dir` parameter) to the workspace, rooted at the repo so the
 /// path stays `<< parameters.orb_dir >>` for downstream `attach_workspace` jobs.
-fn build_persist_orb_step() -> serde_yaml::Value {
-    let mut persist_map = serde_yaml::Mapping::new();
+fn build_persist_orb_step() -> serde_norway::Value {
+    let mut persist_map = serde_norway::Mapping::new();
     persist_map.insert(
-        serde_yaml::Value::String("root".to_string()),
-        serde_yaml::Value::String(".".to_string()),
+        serde_norway::Value::String("root".to_string()),
+        serde_norway::Value::String(".".to_string()),
     );
     persist_map.insert(
-        serde_yaml::Value::String("paths".to_string()),
-        serde_yaml::Value::Sequence(vec![serde_yaml::Value::String(
+        serde_norway::Value::String("paths".to_string()),
+        serde_norway::Value::Sequence(vec![serde_norway::Value::String(
             "<< parameters.orb_dir >>".to_string(),
         )]),
     );
-    let mut persist_step = serde_yaml::Mapping::new();
+    let mut persist_step = serde_norway::Mapping::new();
     persist_step.insert(
-        serde_yaml::Value::String("persist_to_workspace".to_string()),
-        serde_yaml::Value::Mapping(persist_map),
+        serde_norway::Value::String("persist_to_workspace".to_string()),
+        serde_norway::Value::Mapping(persist_map),
     );
-    let inner_steps = serde_yaml::Value::Sequence(vec![serde_yaml::Value::Mapping(persist_step)]);
-    let mut when_inner = serde_yaml::Mapping::new();
+    let inner_steps =
+        serde_norway::Value::Sequence(vec![serde_norway::Value::Mapping(persist_step)]);
+    let mut when_inner = serde_norway::Mapping::new();
     when_inner.insert(
-        serde_yaml::Value::String("condition".to_string()),
-        serde_yaml::Value::String("<< parameters.persist_orb_workspace >>".to_string()),
+        serde_norway::Value::String("condition".to_string()),
+        serde_norway::Value::String("<< parameters.persist_orb_workspace >>".to_string()),
     );
-    when_inner.insert(serde_yaml::Value::String("steps".to_string()), inner_steps);
-    let mut when_map = serde_yaml::Mapping::new();
+    when_inner.insert(
+        serde_norway::Value::String("steps".to_string()),
+        inner_steps,
+    );
+    let mut when_map = serde_norway::Mapping::new();
     when_map.insert(
-        serde_yaml::Value::String("when".to_string()),
-        serde_yaml::Value::Mapping(when_inner),
+        serde_norway::Value::String("when".to_string()),
+        serde_norway::Value::Mapping(when_inner),
     );
-    serde_yaml::Value::Mapping(when_map)
+    serde_norway::Value::Mapping(when_map)
 }
 
 fn cli_param_to_orb_param(p: &crate::help_parser::types::Parameter) -> OrbParameter {
@@ -2489,23 +2512,23 @@ fn build_job_group_invoke_step(
     (sub, effective_name): &ResolvedStep,
     keys: &HashMap<(usize, String), String>,
     config: Option<&OrbConfig>,
-) -> serde_yaml::Value {
-    let mut invoke_map = serde_yaml::Mapping::new();
+) -> serde_norway::Value {
+    let mut invoke_map = serde_norway::Mapping::new();
     for p in &sub.parameters {
         let Some(job_name) = keys.get(&(step_idx, p.long_name.clone())) else {
             continue;
         };
         let command_key = resolve_param_orb_name(&sub.name, effective_name, &p.long_name, config);
         invoke_map.insert(
-            serde_yaml::Value::String(command_key),
-            serde_yaml::Value::String(format!("<< parameters.{job_name} >>")),
+            serde_norway::Value::String(command_key),
+            serde_norway::Value::String(format!("<< parameters.{job_name} >>")),
         );
     }
-    serde_yaml::Value::Mapping({
-        let mut m = serde_yaml::Mapping::new();
+    serde_norway::Value::Mapping({
+        let mut m = serde_norway::Mapping::new();
         m.insert(
-            serde_yaml::Value::String(effective_name.replace('-', "_")),
-            serde_yaml::Value::Mapping(invoke_map),
+            serde_norway::Value::String(effective_name.replace('-', "_")),
+            serde_norway::Value::Mapping(invoke_map),
         );
         m
     })
@@ -2516,11 +2539,11 @@ fn build_job_group_invoke_step(
 /// `true`/`false` become YAML booleans (orb boolean parameters reject quoted
 /// string values); every other value — string literals, integers, and
 /// `<< parameters.x >>` references — is emitted as a plain string.
-fn with_value_to_yaml(value: &str) -> serde_yaml::Value {
+fn with_value_to_yaml(value: &str) -> serde_norway::Value {
     match value {
-        "true" => serde_yaml::Value::Bool(true),
-        "false" => serde_yaml::Value::Bool(false),
-        other => serde_yaml::Value::String(other.to_string()),
+        "true" => serde_norway::Value::Bool(true),
+        "false" => serde_norway::Value::Bool(false),
+        other => serde_norway::Value::String(other.to_string()),
     }
 }
 
@@ -2528,24 +2551,27 @@ fn with_value_to_yaml(value: &str) -> serde_yaml::Value {
 ///
 /// With no parameter values the step is a bare list item (`- set_https_remote`);
 /// otherwise it is a mapping (`- generate: {format: binary, ...}`).
-fn build_with_invoke_step(key: &str, with: Option<&IndexMap<String, String>>) -> serde_yaml::Value {
+fn build_with_invoke_step(
+    key: &str,
+    with: Option<&IndexMap<String, String>>,
+) -> serde_norway::Value {
     match with {
         Some(values) if !values.is_empty() => {
-            let mut params_map = serde_yaml::Mapping::new();
+            let mut params_map = serde_norway::Mapping::new();
             for (name, value) in values {
                 params_map.insert(
-                    serde_yaml::Value::String(name.clone()),
+                    serde_norway::Value::String(name.clone()),
                     with_value_to_yaml(value),
                 );
             }
-            let mut m = serde_yaml::Mapping::new();
+            let mut m = serde_norway::Mapping::new();
             m.insert(
-                serde_yaml::Value::String(key.to_string()),
-                serde_yaml::Value::Mapping(params_map),
+                serde_norway::Value::String(key.to_string()),
+                serde_norway::Value::Mapping(params_map),
             );
-            serde_yaml::Value::Mapping(m)
+            serde_norway::Value::Mapping(m)
         }
-        _ => serde_yaml::Value::String(key.to_string()),
+        _ => serde_norway::Value::String(key.to_string()),
     }
 }
 
@@ -2569,43 +2595,43 @@ fn build_custom_run_step(
     command: Option<&str>,
     environment: Option<&IndexMap<String, String>>,
     when: Option<&str>,
-) -> serde_yaml::Value {
-    let mut run_map = serde_yaml::Mapping::new();
+) -> serde_norway::Value {
+    let mut run_map = serde_norway::Mapping::new();
     run_map.insert(
-        serde_yaml::Value::String("name".to_string()),
-        serde_yaml::Value::String(name.to_string()),
+        serde_norway::Value::String("name".to_string()),
+        serde_norway::Value::String(name.to_string()),
     );
     if let Some(cmd) = command {
         run_map.insert(
-            serde_yaml::Value::String("command".to_string()),
-            serde_yaml::Value::String(cmd.to_string()),
+            serde_norway::Value::String("command".to_string()),
+            serde_norway::Value::String(cmd.to_string()),
         );
     }
     if let Some(env) = environment {
-        let mut env_map = serde_yaml::Mapping::new();
+        let mut env_map = serde_norway::Mapping::new();
         for (key, value) in env {
             env_map.insert(
-                serde_yaml::Value::String(key.clone()),
-                serde_yaml::Value::String(value.clone()),
+                serde_norway::Value::String(key.clone()),
+                serde_norway::Value::String(value.clone()),
             );
         }
         run_map.insert(
-            serde_yaml::Value::String("environment".to_string()),
-            serde_yaml::Value::Mapping(env_map),
+            serde_norway::Value::String("environment".to_string()),
+            serde_norway::Value::Mapping(env_map),
         );
     }
     if let Some(when) = when {
         run_map.insert(
-            serde_yaml::Value::String("when".to_string()),
-            serde_yaml::Value::String(when.to_string()),
+            serde_norway::Value::String("when".to_string()),
+            serde_norway::Value::String(when.to_string()),
         );
     }
-    let mut m = serde_yaml::Mapping::new();
+    let mut m = serde_norway::Mapping::new();
     m.insert(
-        serde_yaml::Value::String("run".to_string()),
-        serde_yaml::Value::Mapping(run_map),
+        serde_norway::Value::String("run".to_string()),
+        serde_norway::Value::Mapping(run_map),
     );
-    serde_yaml::Value::Mapping(m)
+    serde_norway::Value::Mapping(m)
 }
 
 /// A declared rich-mode parameter's CircleCI type: explicit `type`, else
@@ -2827,7 +2853,7 @@ fn render_rich_job_group(
         }
     }
 
-    let mut steps: Vec<serde_yaml::Value> = Vec::new();
+    let mut steps: Vec<serde_norway::Value> = Vec::new();
     let mut uses_attach_workspace = false;
     for step in group.step.as_deref().unwrap_or_default() {
         if let Some(builtin) = &step.builtin {
@@ -2837,7 +2863,7 @@ fn render_rich_job_group(
                     uses_attach_workspace = true;
                 }
                 // checkout and any other built-in step name emit as a bare step.
-                other => steps.push(serde_yaml::Value::String(other.to_string())),
+                other => steps.push(serde_norway::Value::String(other.to_string())),
             }
         } else if let Some(run_name) = &step.run {
             // Externalize the script to a scripts/ file and reference it via
@@ -2889,7 +2915,7 @@ fn render_rich_job_group(
         parameters,
         steps,
     };
-    serde_yaml::to_string(&job).unwrap()
+    serde_norway::to_string(&job).unwrap()
 }
 
 /// Carry `[subcommand.<step>.param.<flag>] default` overrides onto a
@@ -2957,7 +2983,7 @@ fn render_job_group(
     parameters.insert("workspace_root".to_string(), root_param);
 
     let mut steps = vec![
-        serde_yaml::Value::String("checkout".to_string()),
+        serde_norway::Value::String("checkout".to_string()),
         build_attach_workspace_step(),
     ];
     for (idx, step) in steps_resolved.iter().enumerate() {
@@ -2975,7 +3001,7 @@ fn render_job_group(
         parameters,
         steps,
     };
-    serde_yaml::to_string(&job).unwrap()
+    serde_norway::to_string(&job).unwrap()
 }
 
 #[cfg(test)]
@@ -3104,10 +3130,10 @@ mod tests {
         };
         let files = generate(&cli, &default_opts(), Some(&config));
         let job = &files[&PathBuf::from("src/jobs/report_and_upload.yml")];
-        let parsed: serde_yaml::Value = serde_yaml::from_str(job).unwrap();
+        let parsed: serde_norway::Value = serde_norway::from_str(job).unwrap();
         assert_eq!(
             parsed["parameters"]["file"]["default"],
-            serde_yaml::Value::String("coverage/lcov.info".to_string()),
+            serde_norway::Value::String("coverage/lcov.info".to_string()),
             "group parameter must carry the override default:\n{job}"
         );
     }
@@ -3172,7 +3198,7 @@ mod tests {
         let orb = cli_param_to_orb_param(&p);
         assert_eq!(
             orb.default,
-            Some(serde_yaml::Value::String("binstall".to_string()))
+            Some(serde_norway::Value::String("binstall".to_string()))
         );
     }
 
@@ -3192,7 +3218,7 @@ mod tests {
                 ..Default::default()
             }],
         );
-        let want = Some(serde_yaml::Value::String("binstall".to_string()));
+        let want = Some(serde_norway::Value::String("binstall".to_string()));
         assert_eq!(
             build_orb_parameters(&sub, "demo", &[], None)["method"].default,
             want
@@ -4718,7 +4744,7 @@ mod tests {
         let sub = make_leaf("cmd", params);
         let files = generate(&make_cli("mytool", vec![sub]), &default_opts(), None);
         let content = &files[&PathBuf::from("src/commands/cmd.yml")];
-        // serde_yaml serialises an empty string as ''
+        // serde_norway serialises an empty string as ''
         assert!(
             content.contains("default: ''"),
             "optional no-default string param must have default: '' so consumers can omit it:\n{content}"
@@ -8904,7 +8930,7 @@ mod tests {
             ]),
             ..Default::default()
         });
-        let value: serde_yaml::Value = serde_yaml::from_str(&job).unwrap();
+        let value: serde_norway::Value = serde_norway::from_str(&job).unwrap();
         let steps = value["steps"].as_sequence().unwrap();
         assert_eq!(steps[0]["run"]["when"], "always", "{job}");
         assert_eq!(steps[1]["run"]["when"], "on_fail", "{job}");
