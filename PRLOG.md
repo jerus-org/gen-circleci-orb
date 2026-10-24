@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - deps: update dependency circleci-public/circleci-cli to v1.11.0(pr [#524])
+- deps: update rust:1-slim-trixie docker digest to aab4239(pr [#521])
 
 ## [0.2.6] - 2026-10-22
 
@@ -1446,6 +1447,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#519]: https://github.com/jerus-org/gen-circleci-orb/pull/519
 [#518]: https://github.com/jerus-org/gen-circleci-orb/pull/518
 [#524]: https://github.com/jerus-org/gen-circleci-orb/pull/524
+[#521]: https://github.com/jerus-org/gen-circleci-orb/pull/521
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.6...HEAD
 [0.2.6]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.4...v0.2.5
