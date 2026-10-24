@@ -2121,9 +2121,9 @@ checksum = "df94ce210e5bc13cb6651479fa48d14f601d9858cfe0467f43ae157023b938d3"
 
 [[package]]
 name = "pcu"
-version = "0.6.39"
+version = "0.6.40"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7c0a1fa2b75b72a365eca6f548908b9635966425b5342bb39413e0a3a6a41f4a"
+checksum = "4c00b05e193d76e823ce9b8c23686e4199ee262324ed9cb0ef8975e37d843500"
 dependencies = [
  "base62",
  "base64 0.23.1",
@@ -2162,9 +2162,9 @@ dependencies = [
 
 [[package]]
 name = "pcu-release-assets"
-version = "0.1.6"
+version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bd4449c365614b5eb9e5f16fdd133ebc60469f6c7169856586bb1607eb235241"
+checksum = "edf40e69e54905b506f23bde398bad177c35e18aa83f7833ba0252426a91c29b"
 dependencies = [
  "gql_client",
  "http",
