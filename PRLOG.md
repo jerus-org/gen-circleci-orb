@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - deps: update rust:1-slim-trixie docker digest to b8e062b(pr [#528])
 - deps: update dependency gen-orb-mcp to v0.2.6(pr [#529])
 - deps: update rust crate similar to 3.2.1(pr [#530])
+- deps: update dependency circleci-public/circleci-cli to v1.13.0(pr [#531])
 
 ## [0.2.6] - 2026-10-22
 
@@ -1462,6 +1463,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#528]: https://github.com/jerus-org/gen-circleci-orb/pull/528
 [#529]: https://github.com/jerus-org/gen-circleci-orb/pull/529
 [#530]: https://github.com/jerus-org/gen-circleci-orb/pull/530
+[#531]: https://github.com/jerus-org/gen-circleci-orb/pull/531
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.6...HEAD
 [0.2.6]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.4...v0.2.5
