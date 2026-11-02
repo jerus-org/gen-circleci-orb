@@ -112,11 +112,12 @@ runner = "<< parameters.runner >>"
 
 | Field | Meaning |
 |-------|---------|
-| `builtin = "checkout"` | A built-in step (`checkout`, `attach_workspace`) |
+| `builtin = "checkout"` | A built-in step (`checkout`, `attach_workspace`, or `store_artifacts` / `store_test_results` with arguments in `[job_group.step.with]`; see below) |
 | `command = "prime"` | Invoke one of the tool's generated commands. Values come from `[job_group.step.with]`; every option of the command must be set there or listed in `defaults` (see below) |
 | `orb = "some-orb/setup"` | Invoke a third-party orb command, values from `[job_group.step.with]` |
 | `run = "Set up git"` + `script` + `[job_group.step.environment]` | A custom `run` step: `run` is the step name, `script` the shell body, `environment` the env block |
 | `when = "always"` | On a `run` step only: when the step runs, `always`, `on_success` (CircleCI's default) or `on_fail`. See below. |
+| `condition = "failures_file"` | Orthogonal to the above — settable on *any* step except `attach_workspace`. Runs the step only when the named job parameter is set (a non-empty string, or `true`). The parameter must be declared in `[[job_group.parameter]]`. See below. |
 | `requires_git_auth = true` | Orthogonal to the above — settable on *any* step. Marks it as needing the authenticated (SSH-backed) git remote CircleCI's checkout injects, before a later `set_https_remote` step strips it. See the ordering rule below. |
 
 An unsupported or misspelt key in `[[job_group]]`, `[[job_group.step]]` or `[[job_group.parameter]]`
@@ -140,6 +141,49 @@ CircleCI accepts `when` on a `run` step but not on the invocation of an orb comm
 `generate`, as is any value other than `always`, `on_success` or `on_fail`. To run a generated
 command regardless of earlier failures, wrap it in a `run` step. The ordering rules below apply to
 a step with `when` like any other.
+
+**Keep a file a step writes.** A file written inside a job is lost when the job ends unless a step
+stores it. `store_artifacts` (`path`, optional `destination`) and `store_test_results` (`path`) take
+their arguments from `[job_group.step.with]`, as literals or `<< parameters.x >>`, and `condition`
+makes the step run only when a path was given. CircleCI runs these steps even when an earlier step
+failed (they are skipped only when the job is cancelled or times out), so no `when` is needed to keep
+the file after a failing gate:
+
+```toml
+[[job_group.parameter]]
+name = "failures_file"
+description = "Path of the failures file to keep as an artifact (empty: none)."
+default = ""
+
+[[job_group.step]]
+builtin = "store_artifacts"
+condition = "failures_file"
+
+[job_group.step.with]
+path = "<< parameters.failures_file >>"
+```
+
+renders
+
+```yaml
+- when:
+    condition: << parameters.failures_file >>
+    steps:
+      - store_artifacts:
+          path: << parameters.failures_file >>
+```
+
+`generate` rejects `with` on a built-in that takes no arguments (`checkout`, `attach_workspace`), a
+`store_artifacts` or `store_test_results` step without a `path`, a `with` key the built-in does not
+accept, and a `condition` that names a parameter the job group does not declare, all reported
+together. `with` on a built-in step used to be dropped silently, leaving an invalid bare
+`- store_artifacts`.
+
+**Not supported yet: `persist_to_workspace`, `save_cache` and `restore_cache`.** CircleCI requires
+list arguments for these (`paths`, `keys`), and `with` values are strings, so a job group cannot
+express them. They are an error from `generate`, bare or with a `with` table, instead of rendering a
+step CircleCI rejects. Use a custom `run` step, or an orb command that wraps the step, in the
+meantime.
 
 Two step targets are worth knowing about:
 

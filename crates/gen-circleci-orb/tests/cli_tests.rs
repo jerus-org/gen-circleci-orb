@@ -71,5 +71,14 @@ fn cli_tests() {
                 "fixture-cli",
                 std::path::Path::new(env!("CARGO_BIN_EXE_fixture-cli")),
             );
+
+        // `with` on a built-in that takes none, a missing `path`, and a
+        // `condition` naming an undeclared parameter (#527).
+        cases
+            .case("tests/cmd/generate_fixture_builtin_with.toml")
+            .register_bin(
+                "fixture-cli",
+                std::path::Path::new(env!("CARGO_BIN_EXE_fixture-cli")),
+            );
     }
 }

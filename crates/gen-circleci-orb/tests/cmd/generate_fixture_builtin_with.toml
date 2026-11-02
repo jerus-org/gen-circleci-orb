@@ -1,0 +1,12 @@
+bin.name = "gen-circleci-orb"
+args = ["generate", "--binary", "fixture-cli", "--orb-namespace", "jerus-org", "--output", ".", "--no-record"]
+status.code = 1
+env.remove = ["RUST_BACKTRACE", "RUST_LIB_BACKTRACE"]
+stdout = "..."
+stderr = """
+...
+Error: invalid job_group step(s):
+job group "build_all", builtin "checkout": `with` is not accepted on this built-in step; only `store_artifacts`, `store_test_results` take arguments
+job group "build_all", builtin "store_artifacts": `with` must set `path`
+job group "build_all", builtin "store_artifacts": `condition = "failures_file"` is not a parameter declared by the job group (the job group declares no parameters; add a `[[job_group.parameter]]` entry)
+"""

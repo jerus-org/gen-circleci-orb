@@ -1,0 +1,11 @@
+[[job_group]]
+name = "build_all"
+
+[[job_group.step]]
+builtin = "checkout"
+[job_group.step.with]
+path = "src"
+
+[[job_group.step]]
+builtin = "store_artifacts"
+condition = "failures_file"
