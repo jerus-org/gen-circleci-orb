@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- arguments and a condition on built-in steps(pr [#534])
+
 ### Fixed
 
 - deps: update dependency circleci-public/circleci-cli to v1.11.0(pr [#524])
@@ -1464,6 +1468,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#529]: https://github.com/jerus-org/gen-circleci-orb/pull/529
 [#530]: https://github.com/jerus-org/gen-circleci-orb/pull/530
 [#531]: https://github.com/jerus-org/gen-circleci-orb/pull/531
+[#534]: https://github.com/jerus-org/gen-circleci-orb/pull/534
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.6...HEAD
 [0.2.6]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.4...v0.2.5
