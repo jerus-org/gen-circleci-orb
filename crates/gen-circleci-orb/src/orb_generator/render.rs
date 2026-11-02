@@ -1777,29 +1777,20 @@ fn build_attach_workspace_step() -> serde_yaml::Value {
         serde_yaml::Value::String("attach_workspace".to_string()),
         serde_yaml::Value::Mapping(attach_map),
     );
-    let inner_steps = serde_yaml::Value::Sequence(vec![
-        serde_yaml::Value::Mapping(attach_ws_map),
-        serde_yaml::Value::Mapping({
-            let mut m = serde_yaml::Mapping::new();
-            m.insert(
-                serde_yaml::Value::String("run".to_string()),
-                serde_yaml::Value::Mapping(add_path_run),
-            );
-            m
-        }),
-    ]);
-    let mut when_inner = serde_yaml::Mapping::new();
-    when_inner.insert(
-        serde_yaml::Value::String("condition".to_string()),
-        serde_yaml::Value::String("<< parameters.attach_workspace >>".to_string()),
-    );
-    when_inner.insert(serde_yaml::Value::String("steps".to_string()), inner_steps);
-    let mut when_map = serde_yaml::Mapping::new();
-    when_map.insert(
-        serde_yaml::Value::String("when".to_string()),
-        serde_yaml::Value::Mapping(when_inner),
-    );
-    serde_yaml::Value::Mapping(when_map)
+    wrap_steps_in_condition(
+        vec![
+            serde_yaml::Value::Mapping(attach_ws_map),
+            serde_yaml::Value::Mapping({
+                let mut m = serde_yaml::Mapping::new();
+                m.insert(
+                    serde_yaml::Value::String("run".to_string()),
+                    serde_yaml::Value::Mapping(add_path_run),
+                );
+                m
+            }),
+        ],
+        "attach_workspace",
+    )
 }
 
 /// The two job parameters a `workspace_sourced` param (`resolved_key`, its
@@ -2549,6 +2540,27 @@ fn build_with_invoke_step(key: &str, with: Option<&IndexMap<String, String>>) ->
     }
 }
 
+/// Wrap steps in `when: {condition: << parameters.<param> >>, steps: [...]}`,
+/// so they run only when the job parameter is set (a non-empty string, or
+/// `true`). Shared by `attach_workspace` and a step's `condition` (#527).
+fn wrap_steps_in_condition(steps: Vec<serde_yaml::Value>, param: &str) -> serde_yaml::Value {
+    let mut when_inner = serde_yaml::Mapping::new();
+    when_inner.insert(
+        serde_yaml::Value::String("condition".to_string()),
+        serde_yaml::Value::String(format!("<< parameters.{param} >>")),
+    );
+    when_inner.insert(
+        serde_yaml::Value::String("steps".to_string()),
+        serde_yaml::Value::Sequence(steps),
+    );
+    let mut when_map = serde_yaml::Mapping::new();
+    when_map.insert(
+        serde_yaml::Value::String("when".to_string()),
+        serde_yaml::Value::Mapping(when_inner),
+    );
+    serde_yaml::Value::Mapping(when_map)
+}
+
 /// Build a custom `run:` step (named, with inline shell body and optional env block).
 /// Convert an arbitrary step name into a snake_case identifier suitable for a
 /// script filename (e.g. "Set up git and environment" -> "set_up_git_and_environment").
@@ -2830,15 +2842,17 @@ fn render_rich_job_group(
     let mut steps: Vec<serde_yaml::Value> = Vec::new();
     let mut uses_attach_workspace = false;
     for step in group.step.as_deref().unwrap_or_default() {
-        if let Some(builtin) = &step.builtin {
-            match builtin.as_str() {
+        let rendered: Option<serde_yaml::Value> = if let Some(builtin) = &step.builtin {
+            Some(match builtin.as_str() {
                 "attach_workspace" => {
-                    steps.push(build_attach_workspace_step());
                     uses_attach_workspace = true;
+                    build_attach_workspace_step()
                 }
-                // checkout and any other built-in step name emit as a bare step.
-                other => steps.push(serde_yaml::Value::String(other.to_string())),
-            }
+                // `with` is validated by `validate_job_group_steps`: only
+                // `store_artifacts` / `store_test_results` carry arguments, so
+                // checkout and any other built-in emit bare (#527).
+                other => build_with_invoke_step(other, step.with.as_ref()),
+            })
         } else if let Some(run_name) = &step.run {
             // Externalize the script to a scripts/ file and reference it via
             // <<include(...)>> so the generated orb stays RC009-compliant
@@ -2851,18 +2865,23 @@ fn render_rich_job_group(
                 );
                 format!("<<include(scripts/{script_name}.sh)>>")
             });
-            steps.push(build_custom_run_step(
+            Some(build_custom_run_step(
                 run_name,
                 command.as_deref(),
                 step.environment.as_ref(),
                 step.when.as_deref(),
-            ));
+            ))
         } else if let Some(orb_ref) = &step.orb {
-            steps.push(build_with_invoke_step(orb_ref, step.with.as_ref()));
-        } else if let Some(command) = &step.command {
-            let key = command.replace('-', "_");
-            steps.push(build_with_invoke_step(&key, step.with.as_ref()));
-        }
+            Some(build_with_invoke_step(orb_ref, step.with.as_ref()))
+        } else {
+            step.command.as_ref().map(|command| {
+                build_with_invoke_step(&command.replace('-', "_"), step.with.as_ref())
+            })
+        };
+        steps.extend(rendered.map(|value| match &step.condition {
+            Some(param) => wrap_steps_in_condition(vec![value], param),
+            None => value,
+        }));
     }
 
     if uses_attach_workspace {
@@ -8884,6 +8903,122 @@ mod tests {
             job.contains("force: true"),
             "boolean literal must coerce to YAML bool:\n{job}"
         );
+    }
+
+    #[test]
+    fn rich_builtin_store_artifacts_renders_with_arguments_and_condition() {
+        use crate::orb_config::{JobGroup, JobGroupParam, JobGroupStep};
+        let job = render_rich(JobGroup {
+            name: "sync_and_publish".to_string(),
+            parameter: Some(vec![JobGroupParam {
+                name: "failures_file".to_string(),
+                ..Default::default()
+            }]),
+            step: Some(vec![
+                JobGroupStep {
+                    builtin: Some("checkout".to_string()),
+                    ..Default::default()
+                },
+                JobGroupStep {
+                    builtin: Some("store_artifacts".to_string()),
+                    with: Some(
+                        [(
+                            "path".to_string(),
+                            "<< parameters.failures_file >>".to_string(),
+                        )]
+                        .into_iter()
+                        .collect(),
+                    ),
+                    condition: Some("failures_file".to_string()),
+                    ..Default::default()
+                },
+            ]),
+            ..Default::default()
+        });
+        let value: serde_yaml::Value = serde_yaml::from_str(&job).unwrap();
+        let steps = value["steps"].as_sequence().unwrap();
+        assert_eq!(steps[0], "checkout", "{job}");
+        let when = &steps[1]["when"];
+        assert_eq!(when["condition"], "<< parameters.failures_file >>", "{job}");
+        assert_eq!(
+            when["steps"][0]["store_artifacts"]["path"], "<< parameters.failures_file >>",
+            "{job}"
+        );
+    }
+
+    #[test]
+    fn rich_condition_wraps_run_command_and_orb_steps_and_store_test_results() {
+        use crate::orb_config::{JobGroup, JobGroupParam, JobGroupStep};
+        let gated = |step: JobGroupStep| JobGroupStep {
+            condition: Some("enabled".to_string()),
+            ..step
+        };
+        let job = render_rich(JobGroup {
+            name: "sync_and_publish".to_string(),
+            parameter: Some(vec![JobGroupParam {
+                name: "enabled".to_string(),
+                ..Default::default()
+            }]),
+            step: Some(vec![
+                gated(JobGroupStep {
+                    run: Some("Upload".to_string()),
+                    script: Some("true".to_string()),
+                    ..Default::default()
+                }),
+                gated(JobGroupStep {
+                    command: Some("generate".to_string()),
+                    ..Default::default()
+                }),
+                gated(JobGroupStep {
+                    orb: Some("toolkit/setup".to_string()),
+                    ..Default::default()
+                }),
+                gated(JobGroupStep {
+                    builtin: Some("store_test_results".to_string()),
+                    with: Some(
+                        [("path".to_string(), "results".to_string())]
+                            .into_iter()
+                            .collect(),
+                    ),
+                    ..Default::default()
+                }),
+            ]),
+            ..Default::default()
+        });
+        let value: serde_yaml::Value = serde_yaml::from_str(&job).unwrap();
+        let steps = value["steps"].as_sequence().unwrap();
+        assert_eq!(steps.len(), 4, "{job}");
+        for step in steps {
+            assert_eq!(
+                step["when"]["condition"], "<< parameters.enabled >>",
+                "{job}"
+            );
+        }
+        assert_eq!(
+            steps[0]["when"]["steps"][0]["run"]["name"], "Upload",
+            "{job}"
+        );
+        assert_eq!(steps[1]["when"]["steps"][0], "generate", "{job}");
+        assert_eq!(steps[2]["when"]["steps"][0], "toolkit/setup", "{job}");
+        assert_eq!(
+            steps[3]["when"]["steps"][0]["store_test_results"]["path"], "results",
+            "{job}"
+        );
+    }
+
+    #[test]
+    fn rich_builtin_without_with_or_condition_is_unchanged() {
+        use crate::orb_config::{JobGroup, JobGroupStep};
+        let job = render_rich(JobGroup {
+            name: "sync_and_publish".to_string(),
+            step: Some(vec![JobGroupStep {
+                builtin: Some("checkout".to_string()),
+                ..Default::default()
+            }]),
+            ..Default::default()
+        });
+        let value: serde_yaml::Value = serde_yaml::from_str(&job).unwrap();
+        assert_eq!(value["steps"][0], "checkout", "{job}");
     }
 
     #[test]

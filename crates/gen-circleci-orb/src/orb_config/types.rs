@@ -516,7 +516,9 @@ pub struct JobGroupParam {
 ///
 /// Exactly one of the discriminant fields should be set:
 ///
-/// * [`builtin`](Self::builtin) — a built-in step (`checkout`, `attach_workspace`).
+/// * [`builtin`](Self::builtin) — a built-in step (`checkout`, `attach_workspace`,
+///   or `store_artifacts` / `store_test_results` with their arguments in
+///   [`with`](Self::with)).
 /// * [`command`](Self::command) — invoke a tool-generated orb command (e.g. `prime`),
 ///   or the synthetic `set_https_remote` command. Parameter values come from
 ///   [`with`](Self::with) (literals or `<< parameters.x >>` references); when
@@ -546,7 +548,17 @@ pub struct JobGroupStep {
     /// the invocation of an orb command, so setting it on any other kind of
     /// step is an error (gen-circleci-orb#503).
     pub when: Option<String>,
+    /// Arguments of the step. On a `command` or `orb` step these are the
+    /// command's parameters; on a `builtin` step only `store_artifacts`
+    /// (`path`, `destination`) and `store_test_results` (`path`) take
+    /// arguments, and any other built-in rejects `with` (gen-circleci-orb#527).
     pub with: Option<IndexMap<String, String>>,
+    /// Name of a job parameter that gates the step: it runs only when that
+    /// parameter is set (a non-empty string, or `true`), rendered as a
+    /// CircleCI `when: {condition: << parameters.x >>}` block around the step.
+    /// The parameter must be declared in the job group's `parameter` list
+    /// (gen-circleci-orb#527).
+    pub condition: Option<String>,
     /// For a `command` step: options of the command deliberately left at the
     /// command's own default, named as `with` names them (the command's
     /// orb-facing parameter names). Every option of the invoked command must be

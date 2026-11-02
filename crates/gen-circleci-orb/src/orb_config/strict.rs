@@ -388,6 +388,7 @@ mod tests {
                 "script",
                 "when",
                 "with",
+                "condition",
                 "defaults",
                 "environment",
                 "requires_git_auth",

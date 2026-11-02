@@ -1164,6 +1164,7 @@ pub(crate) fn validate_job_group_steps(
         .flat_map(|group| {
             let mut errors = job_group_step_order_errors(group, git_push_subcommands);
             errors.extend(job_group_step_when_errors(group));
+            errors.extend(job_group_builtin_step_errors(group));
             errors
         })
         .collect();
@@ -1209,6 +1210,126 @@ fn job_group_step_when_errors(group: &orb_config::JobGroup) -> Vec<String> {
         }
     }
     errors
+}
+
+/// Built-in steps that take arguments in `with` (#527): the keys each requires
+/// and the further keys it accepts. Every other built-in takes no arguments.
+const BUILTIN_STEP_ARGS: [(&str, &[&str], &[&str]); 2] = [
+    ("store_artifacts", &["path"], &["destination"]),
+    ("store_test_results", &["path"], &[]),
+];
+
+/// Built-ins CircleCI requires arguments for that a job group's `with` cannot
+/// express yet: `paths` and `keys` are lists, and `with` values are strings.
+/// Used bare, or with a `with` table that is dropped, they render a step
+/// CircleCI rejects, so they are an error rather than a silent miscompile.
+const UNSUPPORTED_ARG_BUILTINS: [&str; 3] = ["persist_to_workspace", "save_cache", "restore_cache"];
+
+/// A rich-mode step's `with` on a built-in step, and its `condition` (#527).
+///
+/// `store_artifacts` needs a `path` and `store_test_results` a `path`; without
+/// one CircleCI rejects the step, which `generate` used to write out bare, with
+/// `with` dropped. Any other built-in takes no arguments, so `with` on it is an
+/// error, as is a key the built-in does not accept. `condition` must name a job
+/// parameter the group declares (or one `attach_workspace` injects), and is not
+/// accepted on `attach_workspace`, which is already gated on its own parameter.
+fn job_group_builtin_step_errors(group: &orb_config::JobGroup) -> Vec<String> {
+    let steps = group.step.as_deref().unwrap_or_default();
+    let mut declared: Vec<&str> = group
+        .parameter
+        .iter()
+        .flatten()
+        .map(|p| p.name.as_str())
+        .collect();
+    if steps
+        .iter()
+        .any(|s| s.builtin.as_deref() == Some("attach_workspace"))
+    {
+        declared.extend(["attach_workspace", "workspace_root"]);
+    }
+
+    let mut errors = Vec::new();
+    for step in steps {
+        let context = format!(
+            "job group {:?}, {}",
+            group.name,
+            describe_job_group_step(step)
+        );
+        if let Some(builtin) = step.builtin.as_deref() {
+            if UNSUPPORTED_ARG_BUILTINS.contains(&builtin) {
+                errors.push(format!(
+                    "{context}: `{builtin}` needs list arguments that a job group `with` cannot \
+                     express yet; use a custom `run` step or an orb command instead"
+                ));
+                continue;
+            }
+            let with_keys: Vec<&str> = step
+                .with
+                .iter()
+                .flat_map(|w| w.keys().map(String::as_str))
+                .collect();
+            match BUILTIN_STEP_ARGS.iter().find(|(name, ..)| *name == builtin) {
+                Some((_, required, optional)) => {
+                    let missing: Vec<&&str> = required
+                        .iter()
+                        .filter(|k| !with_keys.contains(*k))
+                        .collect();
+                    if !missing.is_empty() {
+                        errors.push(format!(
+                            "{context}: `with` must set {}",
+                            quote_list(missing.into_iter().copied())
+                        ));
+                    }
+                    let unknown: Vec<&str> = with_keys
+                        .iter()
+                        .copied()
+                        .filter(|k| !required.contains(k) && !optional.contains(k))
+                        .collect();
+                    if !unknown.is_empty() {
+                        errors.push(format!(
+                            "{context}: `with` key(s) {} not accepted (accepted: {})",
+                            quote_list(unknown),
+                            quote_list(required.iter().chain(optional.iter()).copied())
+                        ));
+                    }
+                }
+                None if !with_keys.is_empty() => errors.push(format!(
+                    "{context}: `with` is not accepted on this built-in step; only {} take arguments",
+                    quote_list(BUILTIN_STEP_ARGS.iter().map(|(name, ..)| *name))
+                )),
+                None => {}
+            }
+        }
+        if let Some(param) = step.condition.as_deref() {
+            if step.builtin.as_deref() == Some("attach_workspace") {
+                errors.push(format!(
+                    "{context}: `condition` is not accepted on `attach_workspace`, which \
+                     already runs only when its `attach_workspace` parameter is set"
+                ));
+            } else if !declared.contains(&param) {
+                let known = if declared.is_empty() {
+                    "the job group declares no parameters; add a `[[job_group.parameter]]` entry"
+                        .to_string()
+                } else {
+                    format!("declared: {}", quote_list(declared.iter().copied()))
+                };
+                errors.push(format!(
+                    "{context}: `condition = {param:?}` is not a parameter declared by the job \
+                     group ({known})"
+                ));
+            }
+        }
+    }
+    errors
+}
+
+/// `` `a`, `b` `` for an error message.
+fn quote_list<'a>(items: impl IntoIterator<Item = &'a str>) -> String {
+    items
+        .into_iter()
+        .map(|i| format!("`{i}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// One rich-mode job_group's share of [`validate_job_group_steps`]'s
@@ -4066,6 +4187,189 @@ mod tests {
             step: Some(steps),
             ..Default::default()
         }
+    }
+
+    fn with_args(
+        mut step: crate::orb_config::JobGroupStep,
+        args: &[(&str, &str)],
+    ) -> crate::orb_config::JobGroupStep {
+        step.with = Some(
+            args.iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+        );
+        step
+    }
+
+    fn with_condition(
+        mut step: crate::orb_config::JobGroupStep,
+        param: &str,
+    ) -> crate::orb_config::JobGroupStep {
+        step.condition = Some(param.to_string());
+        step
+    }
+
+    fn group_declaring(
+        mut group: crate::orb_config::JobGroup,
+        params: &[&str],
+    ) -> crate::orb_config::JobGroup {
+        group.parameter = Some(
+            params
+                .iter()
+                .map(|name| crate::orb_config::JobGroupParam {
+                    name: name.to_string(),
+                    ..Default::default()
+                })
+                .collect(),
+        );
+        group
+    }
+
+    #[test]
+    fn builtin_store_artifacts_with_path_and_condition_is_accepted() {
+        let group = group_declaring(
+            rich_group(
+                "report",
+                vec![with_condition(
+                    with_args(
+                        step_builtin("store_artifacts"),
+                        &[
+                            ("path", "<< parameters.failures_file >>"),
+                            ("destination", "gate"),
+                        ],
+                    ),
+                    "failures_file",
+                )],
+            ),
+            &["failures_file"],
+        );
+        assert!(validate_job_group_steps(&[group], &[]).is_ok());
+    }
+
+    #[test]
+    fn builtin_store_artifacts_without_path_is_an_error() {
+        let group = rich_group("report", vec![step_builtin("store_artifacts")]);
+        let err = validate_job_group_steps(&[group], &[])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("report")
+                && err.contains("store_artifacts")
+                && err.contains("`with` must set `path`"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn builtin_with_unknown_key_is_an_error() {
+        let group = rich_group(
+            "report",
+            vec![with_args(
+                step_builtin("store_test_results"),
+                &[("path", "t"), ("destination", "d")],
+            )],
+        );
+        let err = validate_job_group_steps(&[group], &[])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("`destination`") && err.contains("accepted: `path`"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn with_on_a_builtin_that_takes_no_arguments_is_an_error() {
+        let group = rich_group(
+            "report",
+            vec![
+                with_args(step_builtin("checkout"), &[("path", "src")]),
+                with_args(step_builtin("attach_workspace"), &[("at", "/x")]),
+            ],
+        );
+        let err = validate_job_group_steps(&[group], &[])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("builtin \"checkout\"") && err.contains("builtin \"attach_workspace\""),
+            "both steps must be reported together: {err}"
+        );
+        assert!(
+            err.contains("`store_artifacts`, `store_test_results`"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn builtins_needing_list_arguments_are_an_error_bare_or_with_with() {
+        let group = rich_group(
+            "report",
+            vec![
+                step_builtin("persist_to_workspace"),
+                with_args(step_builtin("save_cache"), &[("key", "k")]),
+                step_builtin("restore_cache"),
+            ],
+        );
+        let err = validate_job_group_steps(&[group], &[])
+            .unwrap_err()
+            .to_string();
+        for name in ["persist_to_workspace", "save_cache", "restore_cache"] {
+            assert!(
+                err.contains(&format!("builtin \"{name}\"")) && err.contains("list arguments"),
+                "{name} must be reported: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn undeclared_condition_with_no_parameters_says_to_declare_one() {
+        let group = rich_group(
+            "report",
+            vec![with_condition(
+                with_args(step_builtin("store_artifacts"), &[("path", "p")]),
+                "failures_file",
+            )],
+        );
+        let err = validate_job_group_steps(&[group], &[])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("declares no parameters") && !err.contains("declared: )"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn condition_must_name_a_declared_parameter() {
+        let group = rich_group(
+            "report",
+            vec![with_condition(
+                with_args(step_builtin("store_artifacts"), &[("path", "p")]),
+                "failures_file",
+            )],
+        );
+        let err = validate_job_group_steps(&[group], &[])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("`condition = \"failures_file\"` is not a parameter declared"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn condition_on_attach_workspace_is_an_error() {
+        let group = rich_group(
+            "report",
+            vec![with_condition(
+                step_builtin("attach_workspace"),
+                "attach_workspace",
+            )],
+        );
+        let err = validate_job_group_steps(&[group], &[])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("already runs only when"), "got: {err}");
     }
 
     fn with_when(
