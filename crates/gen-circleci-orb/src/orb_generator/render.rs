@@ -58,18 +58,32 @@ pub struct GenerateOpts {
 /// The container is built from the crate that was *just* published, so the
 /// build races the sparse index. The gate retries a bounded number of times and
 /// then fails loudly — never silently installing the previous version (#200).
-/// Only the size of the window is tunable: a release that outruns it stalls
-/// half-published, with the crate on crates.io and no container or orb (#236).
+/// The wait between tries starts at `seconds` and doubles up to `max_seconds`:
+/// an index outage is outlasted with a handful of requests, not hundreds, so
+/// the gate does not add load to a crates.io that is already struggling (#526).
+///
+/// When the gate expires the release stalls half-published, with the crate on
+/// crates.io and no container or orb (#236).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CrateWait {
     /// How many times to try the install before failing loudly.
     pub attempts: u32,
-    /// Seconds to wait between tries.
+    /// Seconds to wait before the second try; each later wait doubles.
     pub seconds: u32,
+    /// Ceiling on the wait between two tries.
+    pub max_seconds: u32,
 }
 
-/// 40 x 15s — 39 sleeps, so ~9m45s of waiting. Twice the window that proved too
-/// short on the 0.1.4 release.
+impl CrateWait {
+    /// Seconds the gate waits in total, before its per-wait jitter.
+    pub fn window_seconds(&self) -> u64 {
+        crate::orb_config::crate_wait_window_seconds(self.attempts, self.seconds, self.max_seconds)
+    }
+}
+
+/// 16 tries, 15s doubling to 300s — 15 waits, so 57m45s. That outlasts the
+/// ~45 minute index lag of the 2026-10-26 crates.io incident (#526) with 16
+/// requests, where the earlier 40 x 15s covered ~10 minutes with 40.
 ///
 /// The numbers live in `orb_config`, which is where a consumer sets them: the
 /// same values seed `[orb]`'s defaults, so a saved config and an unconfigured
@@ -79,6 +93,7 @@ impl Default for CrateWait {
         Self {
             attempts: crate::orb_config::DEFAULT_CRATE_WAIT_ATTEMPTS,
             seconds: crate::orb_config::DEFAULT_CRATE_WAIT_SECONDS,
+            max_seconds: crate::orb_config::DEFAULT_CRATE_WAIT_MAX_SECONDS,
         }
     }
 }
@@ -1305,9 +1320,17 @@ fn render_binstall_dockerfile(binary: &str, opts: &GenerateOpts) -> String {
 /// Split over `\` continuations so every line stays inside the Dockerfile line
 /// limit (docker:S7020), even for a binary name far longer than this crate's.
 fn render_propagation_gate(binary: &str, crate_wait: &CrateWait) -> String {
-    let CrateWait { attempts, seconds } = crate_wait;
+    let CrateWait {
+        attempts,
+        seconds,
+        max_seconds,
+    } = crate_wait;
+    let window = describe_window(crate_wait.window_seconds());
+    let index_url = format!("https://index.crates.io/{}", sparse_index_path(binary));
     let mut out = String::new();
-    out.push_str("    && { err=/tmp/cargo-install.err; n=0; \\\n");
+    out.push_str(&format!(
+        "    && {{ err=/tmp/cargo-install.err; n=0; s={seconds}; \\\n"
+    ));
     out.push_str(&format!(
         "       until cargo install {binary} --locked \\\n"
     ));
@@ -1319,19 +1342,70 @@ fn render_propagation_gate(binary: &str, crate_wait: &CrateWait) -> String {
     out.push_str("         grep -q \"failed to compile\" \"$err\" \\\n");
     out.push_str("           && echo \"build failed, not an index delay\" >&2 && exit 1; \\\n");
     out.push_str("         n=$((n+1)); \\\n");
-    out.push_str(&format!("         [ \"$n\" -ge {attempts} ] \\\n"));
-    out.push_str("           && echo \"crates.io index never served ${CRATE_VERSION}\" >&2 \\\n");
-    out.push_str("           && exit 1; \\\n");
-    out.push_str("         echo \"waiting for crates.io index: ${CRATE_VERSION} (try $n)\"; \\\n");
+    // On giving up, say what happened and what to do: the release is left
+    // half-published, and the person reading this log needs to know that, how
+    // to finish it, and that the window is theirs to change (#526).
+    out.push_str(&format!("         if [ \"$n\" -ge {attempts} ]; then \\\n"));
+    out.push_str(&format!(
+        "           echo \"crates.io index never served ${{CRATE_VERSION}} after {attempts} tries (~{window})\" >&2; \\\n"
+    ));
+    out.push_str(&format!(
+        "           echo \"polled: {index_url}\" >&2; \\\n"
+    ));
+    out.push_str(
+        "           echo \"The crate is published, but this container was not built\" >&2; \\\n",
+    );
+    out.push_str("           echo \"and the orb was not published.\" >&2; \\\n");
+    out.push_str(
+        "           echo \"Once the index serves it, re-run the tag's workflow from the failed job.\" >&2; \\\n",
+    );
+    out.push_str(
+        "           echo \"The wait is capped at an hour in total; the waits are set by [orb] crate_wait_*.\" >&2; \\\n",
+    );
+    out.push_str("           exit 1; \\\n");
+    out.push_str("         fi; \\\n");
+    // A little random jitter (up to 20%) so runs started together do not poll
+    // in step. `od` may be missing from a slim image: no jitter then, not a
+    // failure.
+    out.push_str("         j=$(od -An -N1 -tu1 /dev/urandom 2>/dev/null); \\\n");
+    out.push_str("         w=$((s + ${j:-0} % (s / 5 + 1))); \\\n");
+    out.push_str(
+        "         echo \"waiting for crates.io index: ${CRATE_VERSION} (try $n, next in ${w}s)\"; \\\n",
+    );
     // Drop cargo's local index cache so the next attempt makes a full request.
     // Cheap insurance on the one layer we control; it cannot touch CDN edge
     // staleness.
     out.push_str(
         "         rm -rf \"${CARGO_HOME:-/usr/local/cargo}\"/registry/index/*/.cache; \\\n",
     );
-    out.push_str(&format!("         sleep {seconds}; \\\n"));
+    out.push_str("         sleep \"$w\"; \\\n");
+    out.push_str(&format!(
+        "         s=$((s * 2)); [ \"$s\" -le {max_seconds} ] || s={max_seconds}; \\\n"
+    ));
     out.push_str("       done; }\n");
     out
+}
+
+/// A duration for the gate's failure message: `45s`, or whole minutes (`57m`).
+fn describe_window(seconds: u64) -> String {
+    if seconds < 60 {
+        format!("{seconds}s")
+    } else {
+        format!("{}m", seconds / 60)
+    }
+}
+
+/// Where the crates.io sparse index keeps a crate: `1/x`, `2/xx`, `3/x/xxx`,
+/// else `ab/cd/name` from the first four letters, all lower-case. Gives the
+/// failure message the exact URL that was being polled (#526).
+fn sparse_index_path(crate_name: &str) -> String {
+    let name = crate_name.to_ascii_lowercase();
+    match name.len() {
+        0 | 1 => format!("1/{name}"),
+        2 => format!("2/{name}"),
+        3 => format!("3/{}/{name}", &name[..1]),
+        _ => format!("{}/{}/{name}", &name[..2], &name[2..4]),
+    }
 }
 
 /// Splits a `cargo_tools` entry into `(crate_name, binary_name, version)`.
@@ -5800,18 +5874,27 @@ mod tests {
     }
 
     /// The retry loop IS the crates.io propagation gate. Five minutes was not
-    /// enough on the 0.1.4 release: the crate had published, the index had not
-    /// caught up, and the release stalled half-published (#236).
+    /// enough on the 0.1.4 release (#236), nor was ten minutes on the
+    /// 2026-10-26 crates.io incident (#526): the crate had published, the index
+    /// had not caught up, and the release stalled half-published.
     #[test]
-    fn dockerfile_crate_wait_defaults_to_ten_minutes() {
+    fn dockerfile_crate_wait_defaults_to_backing_off_for_an_hour() {
         let dockerfile = render_dockerfile("mytool", &default_opts());
         assert!(
-            dockerfile.contains(r#"[ "$n" -ge 40 ]"#),
-            "default gate must allow 40 attempts:\n{dockerfile}"
+            dockerfile.contains(r#"[ "$n" -ge 16 ]"#),
+            "default gate must allow 16 attempts:\n{dockerfile}"
         );
         assert!(
-            dockerfile.contains("sleep 15"),
-            "default gate must sleep 15s between attempts:\n{dockerfile}"
+            dockerfile.contains("s=15;"),
+            "the first wait must be 15s:\n{dockerfile}"
+        );
+        assert!(
+            dockerfile.contains(r#"s=$((s * 2)); [ "$s" -le 300 ] || s=300;"#),
+            "the waits must double up to 300s:\n{dockerfile}"
+        );
+        assert!(
+            dockerfile.contains(r#"sleep "$w""#),
+            "the gate must sleep the jittered wait:\n{dockerfile}"
         );
         assert!(
             dockerfile.contains("crates.io index never served ${CRATE_VERSION}"),
@@ -5819,21 +5902,121 @@ mod tests {
         );
     }
 
-    /// A consumer can widen the window without waiting for a generator release.
+    /// A consumer can change the window without waiting for a generator release.
     #[test]
     fn dockerfile_crate_wait_is_configurable() {
         let opts = GenerateOpts {
             crate_wait: CrateWait {
-                attempts: 60,
+                attempts: 6,
                 seconds: 30,
+                max_seconds: 120,
             },
             ..default_opts()
         };
         let dockerfile = render_dockerfile("mytool", &opts);
         assert!(
-            dockerfile.contains(r#"[ "$n" -ge 60 ]"#) && dockerfile.contains("sleep 30"),
-            "configured attempts/interval must reach the Dockerfile:\n{dockerfile}"
+            dockerfile.contains(r#"[ "$n" -ge 6 ]"#)
+                && dockerfile.contains("s=30;")
+                && dockerfile.contains(r#"[ "$s" -le 120 ] || s=120;"#),
+            "configured attempts/waits must reach the Dockerfile:\n{dockerfile}"
         );
+    }
+
+    /// When the gate gives up the log must say what state the release is in
+    /// and what to do: the crate is published, the container and orb are not,
+    /// and re-running the workflow from the failed job finishes it (#526).
+    #[test]
+    fn dockerfile_timeout_explains_the_half_published_release() {
+        let dockerfile = render_dockerfile("mytool", &default_opts());
+        let commands = joined_commands(&dockerfile);
+        for expected in [
+            "after 16 tries (~57m)",
+            "polled: https://index.crates.io/my/to/mytool",
+            "The crate is published, but this container was not built",
+            "and the orb was not published.",
+            "re-run the tag's workflow from the failed job",
+            "The wait is capped at an hour in total",
+        ] {
+            assert!(
+                commands.contains(expected),
+                "timeout message must contain {expected:?}:\n{dockerfile}"
+            );
+        }
+    }
+
+    /// Run the generated gate under `sh`, as Docker would, with `cargo` and
+    /// `sleep` stubbed: the waits must double from the first, stop at the cap,
+    /// stay within the 20% jitter, and a never-served index must end in the
+    /// explained failure with a non-zero status.
+    #[cfg(unix)]
+    #[test]
+    fn dockerfile_gate_backs_off_and_gives_up_when_run_under_sh() {
+        let gate = render_propagation_gate(
+            "mytool",
+            &CrateWait {
+                attempts: 7,
+                seconds: 15,
+                max_seconds: 100,
+            },
+        );
+        let script = format!(
+            "CRATE_VERSION=1.2.3\n\
+             cargo() {{ echo 'error: could not find' >&2; return 101; }}\n\
+             sleep() {{ echo \"SLEEP $1\"; }}\n\
+             true {gate}"
+        );
+        let out = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(&script)
+            .output()
+            .expect("sh runs");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            !out.status.success(),
+            "must fail when never served:\n{stderr}"
+        );
+        let sleeps: Vec<u64> = stdout
+            .lines()
+            .filter_map(|l| l.strip_prefix("SLEEP "))
+            .map(|n| n.parse().unwrap())
+            .collect();
+        let bases = [15u64, 30, 60, 100, 100, 100];
+        assert_eq!(sleeps.len(), bases.len(), "6 waits for 7 tries:\n{stdout}");
+        for (slept, base) in sleeps.iter().zip(bases) {
+            assert!(
+                (base..=base + base / 5).contains(slept),
+                "wait {slept} outside {base}..={}:\n{stdout}",
+                base + base / 5
+            );
+        }
+        assert!(
+            stderr.contains("crates.io index never served 1.2.3 after 7 tries")
+                && stderr.contains("polled: https://index.crates.io/my/to/mytool"),
+            "{stderr}"
+        );
+        assert!(stderr.contains("The crate is published"), "{stderr}");
+    }
+
+    #[test]
+    fn sparse_index_path_follows_the_crates_io_layout() {
+        assert_eq!(sparse_index_path("a"), "1/a");
+        assert_eq!(sparse_index_path("ab"), "2/ab");
+        assert_eq!(sparse_index_path("abc"), "3/a/abc");
+        assert_eq!(sparse_index_path("serde"), "se/rd/serde");
+        assert_eq!(sparse_index_path("Jci-Coverage"), "jc/i-/jci-coverage");
+    }
+
+    #[test]
+    fn describe_window_reads_as_seconds_or_whole_minutes() {
+        assert_eq!(describe_window(45), "45s");
+        assert_eq!(describe_window(60), "1m");
+        assert_eq!(describe_window(3465), "57m");
+    }
+
+    #[test]
+    fn crate_wait_default_window_is_just_under_an_hour() {
+        assert_eq!(CrateWait::default().window_seconds(), 3465);
     }
 
     /// cargo caches sparse-index lookups under $CARGO_HOME. Dropping the local
@@ -5848,7 +6031,7 @@ mod tests {
         let fail = dockerfile
             .find("crates.io index never served")
             .expect("gate must fail loudly");
-        let sleep = dockerfile.find("sleep 15").expect("gate must sleep");
+        let sleep = dockerfile.find(r#"sleep "$w""#).expect("gate must sleep");
         assert!(
             fail < bust && bust < sleep,
             "the cache bust belongs inside the retry body, after the bail-out and \
@@ -6043,7 +6226,7 @@ mod tests {
             "the gate must recognise a build failure:\n{dockerfile}"
         );
         let detect = dockerfile.find("failed to compile").unwrap();
-        let sleep = dockerfile.find("sleep 15").expect("gate must sleep");
+        let sleep = dockerfile.find(r#"sleep "$w""#).expect("gate must sleep");
         assert!(
             detect < sleep,
             "a build failure must bail out before the retry sleeps:\n{dockerfile}"

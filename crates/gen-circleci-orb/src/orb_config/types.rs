@@ -241,16 +241,46 @@ pub struct CiSection {
 
 /// Default number of `cargo install` attempts in the generated Dockerfile's
 /// crates.io propagation gate.
-pub const DEFAULT_CRATE_WAIT_ATTEMPTS: u32 = 40;
-/// Default seconds between those attempts. 40 x 15s is 39 sleeps, ~9m45s.
+pub const DEFAULT_CRATE_WAIT_ATTEMPTS: u32 = 16;
+/// Default seconds before the second attempt. Each later wait doubles, up to
+/// [`DEFAULT_CRATE_WAIT_MAX_SECONDS`]: 15, 30, 60, 120, 240, then 300 apiece,
+/// so the 15 waits of 16 attempts add up to 57m45s (see
+/// [`crate_wait_window_seconds`]).
 pub const DEFAULT_CRATE_WAIT_SECONDS: u32 = 15;
-/// Ceiling on `crate_wait_attempts`.
+/// Default ceiling on the wait between two attempts.
+pub const DEFAULT_CRATE_WAIT_MAX_SECONDS: u32 = 300;
+/// Ceiling on `crate_wait_seconds` and `crate_wait_max_seconds`.
+///
+/// A wait prints nothing, and CircleCI ends a step that prints nothing for ten
+/// minutes, so a single wait must stay well inside that even with the gate's
+/// up-to-20% jitter added: 450s plus 20% is 540s.
+pub const MAX_CRATE_WAIT_INTERVAL_SECONDS: u32 = 450;
+/// Ceiling on the total time the gate waits (the sum of its waits, before the
+/// per-wait jitter).
 ///
 /// Past some point a "window" is just a hang: the job sits until CircleCI's own
 /// timeout kills it, which is a worse outcome than the loud failure the gate
-/// exists to produce. 240 attempts is an hour at the default interval — far
-/// beyond any propagation delay ever observed.
-pub const MAX_CRATE_WAIT_ATTEMPTS: u32 = 240;
+/// exists to produce. An hour is beyond any propagation delay ever observed (the
+/// longest, a crates.io incident, was about 45 minutes), and it is the ceiling
+/// the fixed-interval gate had (240 tries x 15s). It also makes the old default
+/// of 40 attempts, which every saved config carries, resolve to the new default
+/// of 16.
+pub const MAX_CRATE_WAIT_WINDOW_SECONDS: u32 = 3600;
+
+/// Seconds the gate waits in total: the sum of the `attempts - 1` waits between
+/// attempts, the first `initial` seconds and each later one double the one
+/// before, up to `cap`. The generated gate adds up to 20% random jitter to each
+/// wait, so the real window can run that much longer.
+pub fn crate_wait_window_seconds(attempts: u32, initial: u32, cap: u32) -> u64 {
+    let mut wait = u64::from(initial.max(1));
+    let cap = u64::from(cap.max(initial.max(1)));
+    let mut total = 0;
+    for _ in 1..attempts {
+        total += wait;
+        wait = (wait * 2).min(cap);
+    }
+    total
+}
 
 /// Directory the generated orb source is written to, relative to the repo root.
 pub const DEFAULT_ORB_DIR: &str = "orb";
@@ -354,21 +384,28 @@ pub struct OrbSection {
     /// Set this to `true` to ship in spite of the gap — the missing input is
     /// then logged as a warning — while the generator is taught the shape.
     pub allow_unparsed_help: Option<bool>,
-    /// How many times the generated Dockerfile retries `cargo install` while
+    /// How many times the generated Dockerfile tries `cargo install` while
     /// waiting for crates.io to serve the version being released.
     ///
     /// The container is built from the crate that was just published, so it
-    /// races the sparse index. When the gate expires the release stalls
+    /// races the sparse index. The wait between tries starts at
+    /// `crate_wait_seconds` and doubles up to `crate_wait_max_seconds`, so a
+    /// long window costs few requests. When the gate expires the release stalls
     /// half-published — crate on crates.io, no container, no orb — so raise
-    /// this (or `crate_wait_seconds`) if a release keeps outrunning it.
+    /// this (or the waits) if a release keeps outrunning it.
     ///
     /// Unlike the `Option` fields around it this carries a real default rather
     /// than "unset", so a saved config states the value in force and gives the
     /// consumer the knob already written out. Floored at 1 and capped at
     /// [`MAX_CRATE_WAIT_ATTEMPTS`].
     pub crate_wait_attempts: u32,
-    /// Seconds between those retries. Floored at 1 — a zero would spin.
+    /// Seconds before the second try; each later wait doubles. Floored at 1 —
+    /// a zero would spin — and capped at [`MAX_CRATE_WAIT_INTERVAL_SECONDS`].
     pub crate_wait_seconds: u32,
+    /// Ceiling on the wait between two tries, so a long window is a few slow
+    /// requests, not many fast ones. Never below `crate_wait_seconds`, and
+    /// capped at [`MAX_CRATE_WAIT_INTERVAL_SECONDS`].
+    pub crate_wait_max_seconds: u32,
 }
 
 /// Hand-written because `derive(Default)` would give the crate-wait settings
@@ -397,6 +434,7 @@ impl Default for OrbSection {
             allow_unparsed_help: None,
             crate_wait_attempts: DEFAULT_CRATE_WAIT_ATTEMPTS,
             crate_wait_seconds: DEFAULT_CRATE_WAIT_SECONDS,
+            crate_wait_max_seconds: DEFAULT_CRATE_WAIT_MAX_SECONDS,
         }
     }
 }
