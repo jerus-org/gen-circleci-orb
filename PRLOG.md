@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - arguments and a condition on built-in steps(pr [#534])
+- back off the crates.io propagation wait and explain a timeout(pr [#535])
 
 ### Fixed
 
@@ -1469,6 +1470,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#530]: https://github.com/jerus-org/gen-circleci-orb/pull/530
 [#531]: https://github.com/jerus-org/gen-circleci-orb/pull/531
 [#534]: https://github.com/jerus-org/gen-circleci-orb/pull/534
+[#535]: https://github.com/jerus-org/gen-circleci-orb/pull/535
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.6...HEAD
 [0.2.6]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.4...v0.2.5
