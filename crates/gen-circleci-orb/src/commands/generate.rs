@@ -581,27 +581,55 @@ pub(crate) fn resolve_apt_packages(
 /// There is no CLI flag: this is a property of the project's release, not of a
 /// single run. The config always carries a value — `[orb]` defaults supply one
 /// when the file omits the key — so this only has to keep that value sane:
-/// floored at 1, and capped at [`MAX_CRATE_WAIT_ATTEMPTS`], since a window long
+/// floored at 1, each wait capped at [`MAX_CRATE_WAIT_INTERVAL_SECONDS`], and
+/// the total capped at [`MAX_CRATE_WAIT_WINDOW_SECONDS`], since a window long
 /// enough to outlast the CI job timeout is a hang rather than a window (#236).
+/// The waits double from `crate_wait_seconds` up to `crate_wait_max_seconds`
+/// (#526).
 pub(crate) fn resolve_crate_wait(
     config: &crate::orb_config::OrbConfig,
 ) -> orb_generator::render::CrateWait {
-    use crate::orb_config::MAX_CRATE_WAIT_ATTEMPTS;
+    use crate::orb_config::{MAX_CRATE_WAIT_INTERVAL_SECONDS, MAX_CRATE_WAIT_WINDOW_SECONDS};
     use orb_generator::render::CrateWait;
     let section = config.orb.clone().unwrap_or_default();
 
-    if section.crate_wait_attempts > MAX_CRATE_WAIT_ATTEMPTS {
+    let seconds = section
+        .crate_wait_seconds
+        .clamp(1, MAX_CRATE_WAIT_INTERVAL_SECONDS);
+    let max_seconds = section
+        .crate_wait_max_seconds
+        .clamp(seconds, MAX_CRATE_WAIT_INTERVAL_SECONDS);
+    if section.crate_wait_seconds > MAX_CRATE_WAIT_INTERVAL_SECONDS
+        || section.crate_wait_max_seconds > MAX_CRATE_WAIT_INTERVAL_SECONDS
+    {
         tracing::warn!(
-            "[orb] crate_wait_attempts = {} exceeds the {MAX_CRATE_WAIT_ATTEMPTS} \
-             maximum; using {MAX_CRATE_WAIT_ATTEMPTS}",
-            section.crate_wait_attempts
+            "[orb] crate_wait_seconds / crate_wait_max_seconds exceed the \
+             {MAX_CRATE_WAIT_INTERVAL_SECONDS}s maximum for one wait; capped"
+        );
+    }
+
+    // Keep the whole window under the ceiling: take the most attempts that fit.
+    // Each wait is at least a second, so this loop is bounded by the ceiling.
+    let wanted = section.crate_wait_attempts.max(1);
+    let ceiling = u64::from(MAX_CRATE_WAIT_WINDOW_SECONDS);
+    let (mut attempts, mut wait, mut window) = (1, u64::from(seconds), 0);
+    while attempts < wanted && window + wait <= ceiling {
+        window += wait;
+        wait = (wait * 2).min(u64::from(max_seconds));
+        attempts += 1;
+    }
+    if attempts < wanted {
+        tracing::warn!(
+            "[orb] crate_wait_attempts = {wanted} would wait longer than the \
+             {MAX_CRATE_WAIT_WINDOW_SECONDS}s limit (a window that long is a hang); \
+             using {attempts}. Raise crate_wait_max_seconds for fewer, slower tries, \
+             or lower crate_wait_attempts"
         );
     }
     CrateWait {
-        attempts: section
-            .crate_wait_attempts
-            .clamp(1, MAX_CRATE_WAIT_ATTEMPTS),
-        seconds: section.crate_wait_seconds.max(1),
+        attempts,
+        seconds,
+        max_seconds,
     }
 }
 
@@ -2922,15 +2950,17 @@ mod tests {
         use crate::orb_config::{OrbConfig, OrbSection};
         let config = OrbConfig {
             orb: Some(OrbSection {
-                crate_wait_attempts: 60,
+                crate_wait_attempts: 10,
                 crate_wait_seconds: 30,
+                crate_wait_max_seconds: 120,
                 ..OrbSection::default()
             }),
             ..OrbConfig::default()
         };
         let wait = resolve_crate_wait(&config);
-        assert_eq!(wait.attempts, 60);
+        assert_eq!(wait.attempts, 10);
         assert_eq!(wait.seconds, 30);
+        assert_eq!(wait.max_seconds, 120);
     }
 
     /// Zero attempts is not a gate at all, and zero seconds is a busy-loop.
@@ -2944,6 +2974,7 @@ mod tests {
             orb: Some(OrbSection {
                 crate_wait_attempts: 0,
                 crate_wait_seconds: 0,
+                crate_wait_max_seconds: 0,
                 ..OrbSection::default()
             }),
             ..OrbConfig::default()
@@ -2951,14 +2982,52 @@ mod tests {
         let wait = resolve_crate_wait(&config);
         assert_eq!(wait.attempts, 1);
         assert_eq!(wait.seconds, 1);
+        assert_eq!(wait.max_seconds, 1, "the cap is never below the first wait");
     }
 
-    /// A value big enough to outlast the CircleCI job timeout is not a window,
-    /// it is a hang. Clamp it and say so.
+    /// The cap on the waits can never sit below the first wait, or the
+    /// doubling would shrink.
     #[test]
-    fn resolve_crate_wait_clamps_absurd_attempts() {
-        use crate::orb_config::MAX_CRATE_WAIT_ATTEMPTS;
+    fn resolve_crate_wait_raises_a_cap_below_the_first_wait() {
         use crate::orb_config::{OrbConfig, OrbSection};
+        let config = OrbConfig {
+            orb: Some(OrbSection {
+                crate_wait_seconds: 60,
+                crate_wait_max_seconds: 10,
+                ..OrbSection::default()
+            }),
+            ..OrbConfig::default()
+        };
+        let wait = resolve_crate_wait(&config);
+        assert_eq!((wait.seconds, wait.max_seconds), (60, 60));
+    }
+
+    /// One wait prints nothing, and CircleCI ends a step silent for ten
+    /// minutes, so a single wait is capped well inside that.
+    #[test]
+    fn resolve_crate_wait_caps_one_wait() {
+        use crate::orb_config::{OrbConfig, OrbSection, MAX_CRATE_WAIT_INTERVAL_SECONDS};
+        let config = OrbConfig {
+            orb: Some(OrbSection {
+                crate_wait_seconds: 100_000,
+                crate_wait_max_seconds: 100_000,
+                ..OrbSection::default()
+            }),
+            ..OrbConfig::default()
+        };
+        let wait = resolve_crate_wait(&config);
+        assert_eq!(wait.seconds, MAX_CRATE_WAIT_INTERVAL_SECONDS);
+        assert_eq!(wait.max_seconds, MAX_CRATE_WAIT_INTERVAL_SECONDS);
+    }
+
+    /// A window long enough to outlast the CircleCI job timeout is not a
+    /// window, it is a hang. Keep the most attempts that fit under the ceiling
+    /// and say so.
+    #[test]
+    fn resolve_crate_wait_clamps_the_total_window() {
+        use crate::orb_config::{
+            crate_wait_window_seconds, OrbConfig, OrbSection, MAX_CRATE_WAIT_WINDOW_SECONDS,
+        };
         let config = OrbConfig {
             orb: Some(OrbSection {
                 crate_wait_attempts: 100_000,
@@ -2966,9 +3035,34 @@ mod tests {
             }),
             ..OrbConfig::default()
         };
+        let wait = resolve_crate_wait(&config);
+        let window = |attempts| crate_wait_window_seconds(attempts, wait.seconds, wait.max_seconds);
+        let ceiling = u64::from(MAX_CRATE_WAIT_WINDOW_SECONDS);
+        assert!(window(wait.attempts) <= ceiling, "{wait:?}");
+        assert!(
+            window(wait.attempts + 1) > ceiling,
+            "must keep the most attempts that fit: {wait:?}"
+        );
+    }
+
+    /// An explicit `crate_wait_attempts = 40` was the default of earlier
+    /// releases, so every saved config carries it. At the new doubling it is
+    /// over the ceiling, and is trimmed to exactly the new default window
+    /// rather than left to hang.
+    #[test]
+    fn resolve_crate_wait_trims_the_old_default_of_forty_attempts() {
+        use crate::orb_config::{OrbConfig, OrbSection};
+        let config = OrbConfig {
+            orb: Some(OrbSection {
+                crate_wait_attempts: 40,
+                crate_wait_seconds: 15,
+                ..OrbSection::default()
+            }),
+            ..OrbConfig::default()
+        };
         assert_eq!(
-            resolve_crate_wait(&config).attempts,
-            MAX_CRATE_WAIT_ATTEMPTS
+            resolve_crate_wait(&config),
+            orb_generator::render::CrateWait::default()
         );
     }
 
@@ -2985,13 +3079,13 @@ mod tests {
         // seconds configured, attempts left unset
         let seconds_only = OrbConfig {
             orb: Some(OrbSection {
-                crate_wait_seconds: 30,
+                crate_wait_seconds: 10,
                 ..OrbSection::default()
             }),
             ..OrbConfig::default()
         };
         let wait = resolve_crate_wait(&seconds_only);
-        assert_eq!(wait.seconds, 30, "the configured value must survive");
+        assert_eq!(wait.seconds, 10, "the configured value must survive");
         assert_eq!(
             wait.attempts, default.attempts,
             "the unset setting must take its default"
@@ -3000,13 +3094,13 @@ mod tests {
         // attempts configured, seconds left unset
         let attempts_only = OrbConfig {
             orb: Some(OrbSection {
-                crate_wait_attempts: 60,
+                crate_wait_attempts: 10,
                 ..OrbSection::default()
             }),
             ..OrbConfig::default()
         };
         let wait = resolve_crate_wait(&attempts_only);
-        assert_eq!(wait.attempts, 60, "the configured value must survive");
+        assert_eq!(wait.attempts, 10, "the configured value must survive");
         assert_eq!(
             wait.seconds, default.seconds,
             "the unset setting must take its default"

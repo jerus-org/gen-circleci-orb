@@ -7,7 +7,7 @@ use crate::{
     help_parser::types::CliDefinition,
     orb_config::{
         non_empty, CiSection, OrbConfig, OrbSection, PostMergeCheckConfig, RecordConfig,
-        DEFAULT_CRATE_WAIT_ATTEMPTS, DEFAULT_CRATE_WAIT_SECONDS,
+        DEFAULT_CRATE_WAIT_ATTEMPTS, DEFAULT_CRATE_WAIT_MAX_SECONDS, DEFAULT_CRATE_WAIT_SECONDS,
     },
     output_writer,
 };
@@ -680,6 +680,11 @@ pub(crate) fn build_bootstrap_config(
                 .as_ref()
                 .map(|o| o.crate_wait_seconds)
                 .unwrap_or(DEFAULT_CRATE_WAIT_SECONDS),
+            crate_wait_max_seconds: existing
+                .orb
+                .as_ref()
+                .map(|o| o.crate_wait_max_seconds)
+                .unwrap_or(DEFAULT_CRATE_WAIT_MAX_SECONDS),
         }),
         ci: None, // populated by run() after gathering extras
         orbs: existing.orbs.clone(),
@@ -3120,8 +3125,9 @@ mod tests {
                 rustup_components: Some(vec!["llvm-tools-preview".to_string()]),
                 custom_files: Some(vec!["src/scripts/build-container.sh".to_string()]),
                 allow_unparsed_help: Some(true),
-                crate_wait_attempts: 60,
+                crate_wait_attempts: 12,
                 crate_wait_seconds: 20,
+                crate_wait_max_seconds: 200,
                 ..OrbSection::default()
             }),
             ..OrbConfig::default()
@@ -3152,8 +3158,9 @@ mod tests {
             Some(&["src/scripts/build-container.sh".to_string()][..])
         );
         assert_eq!(orb.allow_unparsed_help, Some(true));
-        assert_eq!(orb.crate_wait_attempts, 60);
+        assert_eq!(orb.crate_wait_attempts, 12);
         assert_eq!(orb.crate_wait_seconds, 20);
+        assert_eq!(orb.crate_wait_max_seconds, 200);
     }
 
     // ── #271: the subcommand entries are merged, not rebuilt ───────────────

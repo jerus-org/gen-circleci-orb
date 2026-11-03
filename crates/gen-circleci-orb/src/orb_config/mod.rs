@@ -2,10 +2,11 @@ mod strict;
 mod types;
 
 pub use types::{
-    CiSection, ExtraJob, JobGroup, JobGroupParam, JobGroupStep, OrbConfig, OrbSection,
-    ParamOverride, PostMergeCheckConfig, PostMergeRegenConfig, RecordConfig, SubcommandConfig,
-    DEFAULT_BASE_IMAGE, DEFAULT_BUILDER_IMAGE, DEFAULT_CRATE_WAIT_ATTEMPTS,
-    DEFAULT_CRATE_WAIT_SECONDS, DEFAULT_INSTALL_METHOD, DEFAULT_ORB_DIR, MAX_CRATE_WAIT_ATTEMPTS,
+    crate_wait_window_seconds, CiSection, ExtraJob, JobGroup, JobGroupParam, JobGroupStep,
+    OrbConfig, OrbSection, ParamOverride, PostMergeCheckConfig, PostMergeRegenConfig, RecordConfig,
+    SubcommandConfig, DEFAULT_BASE_IMAGE, DEFAULT_BUILDER_IMAGE, DEFAULT_CRATE_WAIT_ATTEMPTS,
+    DEFAULT_CRATE_WAIT_MAX_SECONDS, DEFAULT_CRATE_WAIT_SECONDS, DEFAULT_INSTALL_METHOD,
+    DEFAULT_ORB_DIR, MAX_CRATE_WAIT_INTERVAL_SECONDS, MAX_CRATE_WAIT_WINDOW_SECONDS,
     MCP_DEFAULT_BASE_IMAGE,
 };
 
@@ -1279,8 +1280,9 @@ steps:
             "base_image = \"debian:13-slim\"\n",
             "builder_image = \"rust:1-slim-trixie\"\n",
             "install_method = \"binstall\"\n",
-            "crate_wait_attempts = 40\n",
+            "crate_wait_attempts = 16\n",
             "crate_wait_seconds = 15\n",
+            "crate_wait_max_seconds = 300\n",
         );
         std::fs::write(&path, original).unwrap();
 
@@ -1421,23 +1423,32 @@ steps:
     /// which as an attempt count would mean "never wait".
     #[test]
     fn orb_section_default_carries_the_crate_wait_defaults() {
-        use crate::orb_config::{DEFAULT_CRATE_WAIT_ATTEMPTS, DEFAULT_CRATE_WAIT_SECONDS};
+        use crate::orb_config::{
+            DEFAULT_CRATE_WAIT_ATTEMPTS, DEFAULT_CRATE_WAIT_MAX_SECONDS, DEFAULT_CRATE_WAIT_SECONDS,
+        };
         let section = OrbSection::default();
         assert_eq!(section.crate_wait_attempts, DEFAULT_CRATE_WAIT_ATTEMPTS);
         assert_eq!(section.crate_wait_seconds, DEFAULT_CRATE_WAIT_SECONDS);
+        assert_eq!(
+            section.crate_wait_max_seconds,
+            DEFAULT_CRATE_WAIT_MAX_SECONDS
+        );
     }
 
     /// A config written before these settings existed must still load, taking
     /// the defaults rather than zeroes.
     #[test]
     fn config_without_crate_wait_keys_loads_the_defaults() {
-        use crate::orb_config::{DEFAULT_CRATE_WAIT_ATTEMPTS, DEFAULT_CRATE_WAIT_SECONDS};
+        use crate::orb_config::{
+            DEFAULT_CRATE_WAIT_ATTEMPTS, DEFAULT_CRATE_WAIT_MAX_SECONDS, DEFAULT_CRATE_WAIT_SECONDS,
+        };
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("gen-circleci-orb.toml");
         std::fs::write(&path, "[orb]\nbinary = \"mytool\"\n").unwrap();
         let orb = load_config(&path).unwrap().orb.unwrap();
         assert_eq!(orb.crate_wait_attempts, DEFAULT_CRATE_WAIT_ATTEMPTS);
         assert_eq!(orb.crate_wait_seconds, DEFAULT_CRATE_WAIT_SECONDS);
+        assert_eq!(orb.crate_wait_max_seconds, DEFAULT_CRATE_WAIT_MAX_SECONDS);
     }
 
     /// Saving writes the values out, so the config documents the knobs and the
@@ -1456,8 +1467,9 @@ steps:
         save_config(&path, &config).unwrap();
         let written = std::fs::read_to_string(&path).unwrap();
         assert!(
-            written.contains("crate_wait_attempts = 40")
-                && written.contains("crate_wait_seconds = 15"),
+            written.contains("crate_wait_attempts = 16")
+                && written.contains("crate_wait_seconds = 15")
+                && written.contains("crate_wait_max_seconds = 300"),
             "the written config must show the defaults in force:\n{written}"
         );
     }

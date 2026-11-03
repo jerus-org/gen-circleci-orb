@@ -93,23 +93,33 @@ for it, exactly as before. Entries are validated (letters, digits, `-`, `_`, `.`
 digit so an entry can never read as a `rustup` option), then sorted and de-duplicated so
 regeneration is stable. The Dockerfile lists one component per line, like `cargo_tools`.
 
-### `crate_wait_attempts` / `crate_wait_seconds` — the crates.io propagation gate
+### `crate_wait_attempts` / `crate_wait_seconds` / `crate_wait_max_seconds` — the crates.io propagation gate
 
 ```toml
 [orb]
-crate_wait_attempts = 40   # default: 40 (maximum 240)
-crate_wait_seconds = 15    # default: 15  → 39 sleeps, so ~9m45s of waiting
+crate_wait_attempts = 16      # default: 16 tries
+crate_wait_seconds = 15       # default: 15 — the first wait; each later wait doubles
+crate_wait_max_seconds = 300  # default: 300 — the longest single wait
 ```
 
-Unlike the other `[orb]` keys these two are always written out, so a saved config states the
-window in force and hands you the knob rather than leaving you to discover it. Deleting a line
-does not disable anything — it restores the default, which is then written back on the next save.
+Unlike the other `[orb]` keys these are always written out, so a saved config states the window in
+force and hands you the knobs rather than leaving you to discover them. Deleting a line does not
+disable anything — it restores the default, which is then written back on the next save.
 
 The orb's container is built from the crate that was **just** published, so the build races the
 crates.io sparse index. The generated Dockerfile retries `cargo install <binary> --version
 "${CRATE_VERSION}"` on a bounded loop. The bound and the loud failure are deliberate: without the
 pinned version the install would silently resolve the *previous* release and ship a container whose
 binary does not match its own tag.
+
+**The waits back off.** The first wait is `crate_wait_seconds`; every later wait doubles, up to
+`crate_wait_max_seconds`. With the defaults the 15 waits are 15, 30, 60, 120, 240 and then 300
+seconds apiece — 57m45s in all, plus up to 20% random jitter on each wait so runs started together
+do not poll in step. A normal release, where the index lags by seconds, is noticed within a wait or
+two; an index outage is outlasted with 16 requests rather than the hundreds a fixed short interval
+would make, so the gate does not add load to a crates.io that is already struggling. (A fixed
+10-minute window, 40 tries 15 seconds apart, was exhausted by the crates.io incident of 2026-10-26,
+when the index entry for a release landed about 45 minutes after it was published.)
 
 Only an index delay is waited out. A **build** failure — `cargo install` reporting `failed to
 compile` — stops the loop immediately, because it is deterministic: retrying it recompiles the whole
@@ -120,15 +130,37 @@ full request rather than a conditional one. Cargo revalidates per invocation any
 clear staleness at the CDN edge — it is cheap insurance on the one layer the build controls, not the
 mechanism that makes waiting work.
 
-If the gate expires the release stalls **half-published** — the crate is on crates.io, the container
-was never built, and the orb was never published — and recovering means re-running the tag's release
-workflow by hand. Raise these if a release keeps outrunning the window; the default is twice the
-window that proved too short in practice.
+**If the gate expires** the release stalls **half-published**: the crate is on crates.io, the
+container was never built, and the orb was never published. The log says so, in place of a bare
+"never served":
 
-Both are floored at 1: zero attempts is not a gate, and a zero interval is a busy-loop.
-`crate_wait_attempts` is capped at 240 — an hour at the default interval — because a window long
-enough to outlast the CI job timeout is a hang, not a window, and a hang is a worse outcome than the
-loud failure the gate exists to produce.
+```
+crates.io index never served 0.0.13 after 16 tries (~57m)
+polled: https://index.crates.io/jc/i-/jci-coverage
+The crate is published, but this container was not built
+and the orb was not published.
+Once the index serves it, re-run the tag's workflow from the failed job.
+The wait is capped at an hour in total; the waits are set by [orb] crate_wait_*.
+```
+
+The defaults already use nearly the whole hour the gate may wait, so raising `crate_wait_attempts` on
+its own would be trimmed back; if the index is still behind, re-run once it has caught up. Re-running
+is safe and idempotent. crates.io's "new version published" email to the publisher is sent
+only after the index update is confirmed, so receiving it is a good cue to re-run.
+
+Limits, so that a setting cannot turn the gate into a hang:
+
+- `crate_wait_attempts` and the waits are floored at 1.
+- `crate_wait_seconds` and `crate_wait_max_seconds` are capped at 450 seconds: a wait prints nothing,
+  CircleCI ends a step that prints nothing for ten minutes, and the jitter can add 20%.
+  `crate_wait_max_seconds` is never below `crate_wait_seconds`.
+- The total of the waits is capped at one hour (about what the defaults use). If `crate_wait_attempts`
+  would wait longer, `generate` warns and uses the most attempts that fit.
+
+**Upgrading.** Configs saved by earlier releases carry `crate_wait_attempts = 40` and
+`crate_wait_seconds = 15`, which were the old defaults for a fixed 15-second interval. With backoff
+that is over the one-hour cap, so `generate` warns and trims it to 16 attempts — exactly the new
+default. Set `crate_wait_attempts = 16` to silence the warning.
 
 ### `git_push_subcommands` — subcommands that push to git
 
