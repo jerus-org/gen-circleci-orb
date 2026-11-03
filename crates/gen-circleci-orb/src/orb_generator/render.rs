@@ -2230,10 +2230,12 @@ fn build_ssh_setup_step() -> serde_yaml::Value {
 const DROP_CHECKOUT_KEY_SCRIPT_PATH: &str = "scripts/drop-checkout-key.sh";
 
 /// Drops the read-only checkout key from the agent, but only once the write key
-/// is really there. `add_ssh_keys` succeeds as a no-op when the key is not
-/// available (a forked PR build, where CircleCI withholds the project's
-/// additional SSH keys), and dropping the checkout key then would leave the
-/// agent with no key at all (#537). The fingerprint (passed as
+/// is really there. The fingerprint is configured on a forked PR build too (it
+/// is a pipeline value, not a secret), but CircleCI's fork policy adds no
+/// additional SSH keys, so `add_ssh_keys` succeeds as a no-op; it is the agent's
+/// contents, not the configuration, that say whether the key was added.
+/// Dropping the checkout key then would leave the agent with no key at all
+/// (#537). The fingerprint (passed as
 /// `SSH_FINGERPRINT`) is matched in both of the forms `ssh-add -l -E` prints
 /// (`MD5:aa:bb:...` and `SHA256:...`), without the algorithm prefix a consumer
 /// may have copied along with it; an OpenSSH without `-E` (before 6.8) lists
@@ -2242,9 +2244,13 @@ const DROP_CHECKOUT_KEY_SCRIPT_PATH: &str = "scripts/drop-checkout-key.sh";
 /// (RC009) rejects a long inline `run` command.
 const DROP_CHECKOUT_KEY_SCRIPT: &str = r#"fp="${SSH_FINGERPRINT#SHA256:}"; fp="${fp#MD5:}"
 if [ -n "$fp" ] && { ssh-add -l -E md5 || ssh-add -l; ssh-add -l -E sha256; } 2>/dev/null | grep -qiF -- "$fp"; then
-  ssh-add -d ~/.ssh/id_rsa.pub || true
+  if ssh-add -d ~/.ssh/id_rsa.pub; then
+    echo "Write key loaded: dropped the read-only checkout key from the agent."
+  else
+    echo "Write key loaded, but the read-only checkout key was not in the agent: nothing to drop."
+  fi
 else
-  echo "Write key not loaded (a forked pull request build has none); keeping the checkout key."
+  echo "Write key not loaded (CircleCI adds no SSH keys to forked pull request builds): keeping the checkout key."
 fi
 "#;
 
@@ -5542,7 +5548,11 @@ mod tests {
     /// the real one prints (`ssh-add -l -E md5|sha256`), and report whether it
     /// dropped the checkout key (#537).
     #[cfg(unix)]
-    fn drop_script_drops_key(fingerprint: &str, agent_has_write_key: bool) -> (bool, String) {
+    fn drop_script_drops_key(
+        fingerprint: &str,
+        agent_has_write_key: bool,
+        drop_succeeds: bool,
+    ) -> (bool, String) {
         let write_key = if agent_has_write_key {
             r#"echo "256 $1 write@key (ED25519)""#
         } else {
@@ -5554,9 +5564,14 @@ mod tests {
                '-l  ') echo '2048 aa:bb:cc:dd checkout@ci (RSA)'; {write_plain};;\n\
                '-l -E md5') echo '2048 MD5:aa:bb:cc:dd checkout@ci (RSA)'; {write_md5};;\n\
                '-l -E sha256') echo '2048 SHA256:Y2hlY2tvdXQ checkout@ci (RSA)'; {write_sha};;\n\
-               '-d '*) echo DROPPED;;\n\
+               '-d '*) {drop_result};;\n\
              esac; }}\n\
              {body}",
+            drop_result = if drop_succeeds {
+                "echo DROPPED"
+            } else {
+                "return 1"
+            },
             write_plain = write_key.replace("$1", "11:22:33:44"),
             write_md5 = write_key.replace("$1", "MD5:11:22:33:44"),
             write_sha = write_key.replace("$1", "SHA256:d3JpdGVrZXk"),
@@ -5581,9 +5596,23 @@ mod tests {
     fn checkout_key_is_kept_when_the_write_key_was_not_loaded() {
         // A forked PR build: add_ssh_keys was a no-op, the agent holds only the
         // checkout key, so there is nothing to replace it with.
-        let (dropped, out) = drop_script_drops_key("11:22:33:44", false);
+        let (dropped, out) = drop_script_drops_key("11:22:33:44", false, true);
         assert!(!dropped, "{out}");
-        assert!(out.contains("keeping the checkout key"), "{out}");
+        assert!(
+            out.contains("Write key not loaded")
+                && out.contains("CircleCI adds no SSH keys to forked pull request builds")
+                && out.contains("keeping the checkout key"),
+            "{out}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_drop_is_reported_and_does_not_fail_the_step() {
+        // The write key is loaded but `ssh-add -d` finds no such identity.
+        let (dropped, out) = drop_script_drops_key("11:22:33:44", true, false);
+        assert!(!dropped, "{out}");
+        assert!(out.contains("nothing to drop"), "{out}");
     }
 
     #[cfg(unix)]
@@ -5597,8 +5626,12 @@ mod tests {
             "d3JpdGVrZXk",
             "SHA256:d3JpdGVrZXk",
         ] {
-            let (dropped, out) = drop_script_drops_key(fingerprint, true);
+            let (dropped, out) = drop_script_drops_key(fingerprint, true, true);
             assert!(dropped, "{fingerprint}: {out}");
+            assert!(
+                out.contains("dropped the read-only checkout key from the agent"),
+                "the drop must be reported: {out}"
+            );
         }
     }
 

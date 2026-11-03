@@ -222,9 +222,11 @@ is off). So `regenerate-orb` cannot record on a fork build, and it does not pret
   `gen-circleci-orb generate` and commit the result to the pull request branch. Nothing is written,
   so `pack-orb` and `review-orb` only ever see what the pull request really commits, and a stale orb
   cannot be merged green and then fail the post-merge check.
-- The job's `add_ssh_keys` step is a no-op with no key to load (the log says "There are no configured
-  ssh keys to install"). The step that drops the read-only checkout key from the agent runs only once
-  the write key is really loaded, so a fork build keeps its checkout key.
+- The job's `add_ssh_keys` step is a no-op on a fork build: the fingerprint is configured (it is a
+  pipeline value, not a secret), but CircleCI's fork policy adds no SSH keys, and the log says "There
+  are no configured ssh keys to install". The step that drops the read-only checkout key looks at the
+  agent, not the configuration, and drops it only once the write key is really there, saying which it
+  did. A fork build therefore keeps its checkout key.
 - A fork build is recognised by CircleCI's `CIRCLE_PR_REPONAME`, which is set only on those. It
   applies to projects connected through the OAuth app; GitHub App pipelines are never built on forks.
 
