@@ -1635,7 +1635,16 @@ impl Generate {
         // --check and --dry-run both write nothing, but for different reasons
         // (see WriteMode): --check wants a verdict with no narration, --dry-run
         // wants the narration.
-        let mode = if self.check {
+        //
+        // A forked-PR build that would otherwise record only *checks*: CI
+        // cannot push to a fork, so regenerating there would leave the
+        // regenerated source in the workspace for pack and review to validate
+        // while the PR commits something else (#537).
+        let would_record = !self.no_record
+            && !self.dry_run
+            && orb_config.record.as_ref().is_some_and(|r| r.enabled);
+        let fork_check = !self.check && would_record && is_fork_build(&|k| std::env::var(k).ok());
+        let mode = if self.check || fork_check {
             output_writer::WriteMode::Verify
         } else if self.dry_run {
             output_writer::WriteMode::Preview
@@ -1654,6 +1663,14 @@ impl Generate {
         // packing/publishing so a drifted or hand-edited orb is never published.
         if self.check {
             return verify_no_drift(&report);
+        }
+        if fork_check {
+            verify_fork_build_in_sync(&report)?;
+            println!(
+                "Forked pull request build: the committed orb matches the generator. \
+                 Nothing recorded (CI cannot push to a fork)."
+            );
+            return Ok(());
         }
 
         // Auto-record is config-driven: only when `[record].enabled = true` and
@@ -1701,6 +1718,25 @@ fn verify_no_drift(report: &output_writer::WriteReport) -> Result<()> {
     Ok(())
 }
 
+/// On a forked-PR build the committed orb must already match the generator:
+/// CI cannot record the regenerated source onto the fork's branch, so unlike a
+/// regular PR build it cannot fix drift, and must not pass as though it had.
+fn verify_fork_build_in_sync(report: &output_writer::WriteReport) -> Result<()> {
+    let drift = report.created + report.updated + report.removed;
+    if drift > 0 {
+        anyhow::bail!(
+            "this build is of a forked pull request, where CI cannot record the regenerated \
+             orb, and the committed orb is out of sync with the generator: {} to create, {} to \
+             update, {} to remove. Run `gen-circleci-orb generate` and commit the result to the \
+             pull request branch.",
+            report.created,
+            report.updated,
+            report.removed,
+        );
+    }
+    Ok(())
+}
+
 /// Whether the current CI branch is one we should record (commit + push) to.
 /// We only record on a regular PR branch:
 /// - never on `main`, unless `allow_main` is true — a push there would
@@ -1727,14 +1763,14 @@ fn should_record_on_branch_allowing_main(
     if branch == "main" && !allow_main {
         return false;
     }
-    // CIRCLE_PR_REPONAME is set only on builds originating from a fork.
-    if get("CIRCLE_PR_REPONAME")
-        .map(|s| !s.is_empty())
-        .unwrap_or(false)
-    {
-        return false;
-    }
-    true
+    !is_fork_build(&get)
+}
+
+/// Whether this CI build comes from a forked pull request: `CIRCLE_PR_REPONAME`
+/// is set only on those. Such a build has no write access to the fork and no
+/// secrets (CircleCI withholds them by default), so it cannot record.
+fn is_fork_build(get: &impl Fn(&str) -> Option<String>) -> bool {
+    get("CIRCLE_PR_REPONAME").is_some_and(|s| !s.is_empty())
 }
 
 /// Bot identity + GPG material for recording (committing) the regenerated orb.
@@ -2004,6 +2040,39 @@ mod tests {
             ..Default::default()
         })
         .is_err());
+    }
+
+    #[test]
+    fn fork_build_is_marked_by_a_non_empty_pr_reponame() {
+        let fork = |k: &str| (k == "CIRCLE_PR_REPONAME").then(|| "contributor-fork".to_string());
+        assert!(is_fork_build(&fork));
+        assert!(!is_fork_build(&|_: &str| None));
+        // Set but empty is not a fork build.
+        let empty = |k: &str| (k == "CIRCLE_PR_REPONAME").then(String::new);
+        assert!(!is_fork_build(&empty));
+    }
+
+    #[test]
+    fn fork_build_in_sync_passes_and_drift_fails_with_the_instruction() {
+        let in_sync = output_writer::WriteReport {
+            unchanged: 33,
+            ..Default::default()
+        };
+        assert!(verify_fork_build_in_sync(&in_sync).is_ok());
+
+        let drifted = output_writer::WriteReport {
+            created: 1,
+            updated: 2,
+            removed: 3,
+            unchanged: 27,
+        };
+        let err = verify_fork_build_in_sync(&drifted).unwrap_err().to_string();
+        assert!(
+            err.contains("forked pull request")
+                && err.contains("1 to create, 2 to update, 3 to remove")
+                && err.contains("Run `gen-circleci-orb generate` and commit the result"),
+            "{err}"
+        );
     }
 
     /// Build a git repo with `orb/src/foo.yml` committed, then return the repo.

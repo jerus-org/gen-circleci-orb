@@ -210,6 +210,30 @@ jerus-org/pcu#1089), so the regenerated source never landed. It is deprecated:
   warns when used.
 - `init`'s `--post-merge-regen*` flags are aliases of the `--post-merge-check*` flags.
 
+## Pull requests from forks
+
+CI cannot push to a fork's branch, and CircleCI withholds the project's secrets and additional SSH
+keys from forked pull request builds by default ("Pass secrets to builds from forked pull requests"
+is off). So `regenerate-orb` cannot record on a fork build, and it does not pretend to:
+
+- With `[record]` enabled, a fork build **checks** the committed orb against the generator instead of
+  regenerating it. If they match, the job passes and records nothing. If they differ, the job
+  **fails** with the count of files to create, update and remove and the instruction to run
+  `gen-circleci-orb generate` and commit the result to the pull request branch. Nothing is written,
+  so `pack-orb` and `review-orb` only ever see what the pull request really commits, and a stale orb
+  cannot be merged green and then fail the post-merge check.
+- The job's `add_ssh_keys` step is a no-op with no key to load (the log says "There are no configured
+  ssh keys to install"). The step that drops the read-only checkout key from the agent runs only once
+  the write key is really loaded, so a fork build keeps its checkout key.
+- A fork build is recognised by CircleCI's `CIRCLE_PR_REPONAME`, which is set only on those. It
+  applies to projects connected through the OAuth app; GitHub App pipelines are never built on forks.
+
+Without `[record]` enabled the job never recorded in the first place and behaves as it did: it
+regenerates into the workspace and the post-merge check is what catches drift.
+
+A fork PR that does not change the CLI's help output, the generator pin, or anything else that feeds
+the orb passes untouched.
+
 ## Verifying it live
 
 1. Merge a PR on a branch that doesn't match `branch_patterns`: the chain's jobs halt with "Not a
@@ -220,6 +244,9 @@ jerus-org/pcu#1089), so the regenerated source never landed. It is deprecated:
    `regenerate-orb` regenerates and records the orb on the PR branch, `pack-orb` and `review-orb`
    are skipped, and Renovate keeps updating the PR. After the merge the chain tests the result.
 4. Run a release: the gate jobs pass before the approval is offered, then the orb publishes.
+5. Open a PR from a fork that changes the CLI's help output without regenerating the orb:
+   `regenerate-orb` fails, giving the count of files that are out of date and the instruction to
+   run `generate` and commit.
 
 ## Renovate and the recorded commit
 

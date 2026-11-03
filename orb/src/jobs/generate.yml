@@ -125,7 +125,9 @@ steps:
         - << parameters.ssh_fingerprint >>
     - run:
         name: Drop read-only checkout key from agent
-        command: ssh-add -d ~/.ssh/id_rsa.pub || true
+        command: <<include(scripts/drop-checkout-key.sh)>>
+        environment:
+          SSH_FINGERPRINT: << parameters.ssh_fingerprint >>
 - generate:
     binary: << parameters.binary >>
     config: << parameters.config >>
