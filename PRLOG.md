@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - deps: update dependency gen-orb-mcp to v0.2.6(pr [#529])
 - deps: update rust crate similar to 3.2.1(pr [#530])
 - deps: update dependency circleci-public/circleci-cli to v1.13.0(pr [#531])
+- orb: a fork build checks the committed orb and keeps its checkout key(pr [#538])
 
 ## [0.2.6] - 2026-10-22
 
@@ -1471,6 +1472,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#531]: https://github.com/jerus-org/gen-circleci-orb/pull/531
 [#534]: https://github.com/jerus-org/gen-circleci-orb/pull/534
 [#535]: https://github.com/jerus-org/gen-circleci-orb/pull/535
+[#538]: https://github.com/jerus-org/gen-circleci-orb/pull/538
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.6...HEAD
 [0.2.6]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.4...v0.2.5
