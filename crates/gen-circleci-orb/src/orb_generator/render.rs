@@ -193,6 +193,19 @@ pub fn generate(
         );
     }
 
+    // drop-checkout-key.sh — generated only when an orb-producing job includes
+    // it (its ssh setup step), like switch-to-target-branch.sh.
+    let drop_include = format!("<<include({DROP_CHECKOUT_KEY_SCRIPT_PATH})>>");
+    if files
+        .values()
+        .any(|content| content.contains(&drop_include))
+    {
+        files.insert(
+            PathBuf::from("src").join(DROP_CHECKOUT_KEY_SCRIPT_PATH),
+            DROP_CHECKOUT_KEY_SCRIPT.to_string(),
+        );
+    }
+
     // resolve_workspace_param.sh — generated only when at least one param,
     // anywhere in the tree, is configured `workspace_sourced = true`.
     // Unlike add-workspace-to-path.sh, this script is genuinely unused by
@@ -2180,6 +2193,11 @@ fn build_ssh_setup_step() -> serde_yaml::Value {
         serde_yaml::Value::String("add_ssh_keys".to_string()),
         serde_yaml::Value::Mapping(fingerprints),
     );
+    let mut trim_env = serde_yaml::Mapping::new();
+    trim_env.insert(
+        serde_yaml::Value::String("SSH_FINGERPRINT".to_string()),
+        serde_yaml::Value::String("<< parameters.ssh_fingerprint >>".to_string()),
+    );
     let mut trim_run = serde_yaml::Mapping::new();
     trim_run.insert(
         serde_yaml::Value::String("name".to_string()),
@@ -2187,30 +2205,54 @@ fn build_ssh_setup_step() -> serde_yaml::Value {
     );
     trim_run.insert(
         serde_yaml::Value::String("command".to_string()),
-        serde_yaml::Value::String("ssh-add -d ~/.ssh/id_rsa.pub || true".to_string()),
+        serde_yaml::Value::String(format!("<<include({DROP_CHECKOUT_KEY_SCRIPT_PATH})>>")),
+    );
+    trim_run.insert(
+        serde_yaml::Value::String("environment".to_string()),
+        serde_yaml::Value::Mapping(trim_env),
     );
     let mut trim_step = serde_yaml::Mapping::new();
     trim_step.insert(
         serde_yaml::Value::String("run".to_string()),
         serde_yaml::Value::Mapping(trim_run),
     );
-    let inner_steps = serde_yaml::Value::Sequence(vec![
-        serde_yaml::Value::Mapping(add_keys_step),
-        serde_yaml::Value::Mapping(trim_step),
-    ]);
-    let mut when_inner = serde_yaml::Mapping::new();
-    when_inner.insert(
-        serde_yaml::Value::String("condition".to_string()),
-        serde_yaml::Value::String("<< parameters.ssh_fingerprint >>".to_string()),
-    );
-    when_inner.insert(serde_yaml::Value::String("steps".to_string()), inner_steps);
-    let mut when_map = serde_yaml::Mapping::new();
-    when_map.insert(
-        serde_yaml::Value::String("when".to_string()),
-        serde_yaml::Value::Mapping(when_inner),
-    );
-    serde_yaml::Value::Mapping(when_map)
+    wrap_steps_in_condition(
+        vec![
+            serde_yaml::Value::Mapping(add_keys_step),
+            serde_yaml::Value::Mapping(trim_step),
+        ],
+        "ssh_fingerprint",
+    )
 }
+
+/// Where `build_ssh_setup_step` includes its key-drop commands from, relative
+/// to the orb's `src/`.
+const DROP_CHECKOUT_KEY_SCRIPT_PATH: &str = "scripts/drop-checkout-key.sh";
+
+/// Drops the read-only checkout key from the agent, but only once the write key
+/// is really there. The fingerprint is configured on a forked PR build too (it
+/// is a pipeline value, not a secret), but CircleCI's fork policy adds no
+/// additional SSH keys, so `add_ssh_keys` succeeds as a no-op; it is the agent's
+/// contents, not the configuration, that say whether the key was added.
+/// Dropping the checkout key then would leave the agent with no key at all
+/// (#537). The fingerprint (passed as
+/// `SSH_FINGERPRINT`) is matched in both of the forms `ssh-add -l -E` prints
+/// (`MD5:aa:bb:...` and `SHA256:...`), without the algorithm prefix a consumer
+/// may have copied along with it; an OpenSSH without `-E` (before 6.8) lists
+/// MD5 fingerprints by default, hence the plain `ssh-add -l` fallback. In a
+/// script file because orb-tools' review
+/// (RC009) rejects a long inline `run` command.
+const DROP_CHECKOUT_KEY_SCRIPT: &str = r#"fp="${SSH_FINGERPRINT#SHA256:}"; fp="${fp#MD5:}"
+if [ -n "$fp" ] && { ssh-add -l -E md5 || ssh-add -l; ssh-add -l -E sha256; } 2>/dev/null | grep -qiF -- "$fp"; then
+  if ssh-add -d ~/.ssh/id_rsa.pub; then
+    echo "Write key loaded: dropped the read-only checkout key from the agent."
+  else
+    echo "Write key loaded, but the read-only checkout key was not in the agent: nothing to drop."
+  fi
+else
+  echo "Write key not loaded (CircleCI adds no SSH keys to forked pull request builds): keeping the checkout key."
+fi
+"#;
 
 /// Conditional step: when `persist_orb_workspace` is true, persist the orb dir
 /// (named by the `orb_dir` parameter) to the workspace, rooted at the repo so the
@@ -5490,9 +5532,107 @@ mod tests {
             "the SSH setup must be gated on / use the ssh_fingerprint param:\n{job}"
         );
         assert!(
-            job.contains("ssh-add -d"),
+            job.contains("name: Drop read-only checkout key from agent")
+                && job.contains("command: <<include(scripts/drop-checkout-key.sh)>>")
+                && job.contains("SSH_FINGERPRINT: << parameters.ssh_fingerprint >>"),
             "must trim the read-only checkout key from the agent:\n{job}"
         );
+        let script = &files[&PathBuf::from("src/scripts/drop-checkout-key.sh")];
+        assert!(
+            script.contains("ssh-add -d"),
+            "the script must drop the checkout key:\n{script}"
+        );
+    }
+
+    /// Run the key-drop script under `sh` with `ssh-add` stubbed to print what
+    /// the real one prints (`ssh-add -l -E md5|sha256`), and report whether it
+    /// dropped the checkout key (#537).
+    #[cfg(unix)]
+    fn drop_script_drops_key(
+        fingerprint: &str,
+        agent_has_write_key: bool,
+        drop_succeeds: bool,
+    ) -> (bool, String) {
+        let write_key = if agent_has_write_key {
+            r#"echo "256 $1 write@key (ED25519)""#
+        } else {
+            ":"
+        };
+        let script = format!(
+            "SSH_FINGERPRINT='{fingerprint}'\n\
+             ssh_add() {{ case \"$1 $2 $3\" in\n\
+               '-l  ') echo '2048 aa:bb:cc:dd checkout@ci (RSA)'; {write_plain};;\n\
+               '-l -E md5') echo '2048 MD5:aa:bb:cc:dd checkout@ci (RSA)'; {write_md5};;\n\
+               '-l -E sha256') echo '2048 SHA256:Y2hlY2tvdXQ checkout@ci (RSA)'; {write_sha};;\n\
+               '-d '*) {drop_result};;\n\
+             esac; }}\n\
+             {body}",
+            drop_result = if drop_succeeds {
+                "echo DROPPED"
+            } else {
+                "return 1"
+            },
+            write_plain = write_key.replace("$1", "11:22:33:44"),
+            write_md5 = write_key.replace("$1", "MD5:11:22:33:44"),
+            write_sha = write_key.replace("$1", "SHA256:d3JpdGVrZXk"),
+            body = DROP_CHECKOUT_KEY_SCRIPT.replace("ssh-add", "ssh_add"),
+        );
+        let out = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(&script)
+            .output()
+            .expect("sh runs");
+        let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+        assert!(
+            out.status.success(),
+            "{stdout}{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        (stdout.contains("DROPPED"), stdout)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn checkout_key_is_kept_when_the_write_key_was_not_loaded() {
+        // A forked PR build: add_ssh_keys was a no-op, the agent holds only the
+        // checkout key, so there is nothing to replace it with.
+        let (dropped, out) = drop_script_drops_key("11:22:33:44", false, true);
+        assert!(!dropped, "{out}");
+        assert!(
+            out.contains("Write key not loaded")
+                && out.contains("CircleCI adds no SSH keys to forked pull request builds")
+                && out.contains("keeping the checkout key"),
+            "{out}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_drop_is_reported_and_does_not_fail_the_step() {
+        // The write key is loaded but `ssh-add -d` finds no such identity.
+        let (dropped, out) = drop_script_drops_key("11:22:33:44", true, false);
+        assert!(!dropped, "{out}");
+        assert!(out.contains("nothing to drop"), "{out}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn checkout_key_is_dropped_once_the_write_key_is_loaded() {
+        // The fingerprint as CircleCI shows it, with or without a prefix, in
+        // either algorithm.
+        for fingerprint in [
+            "11:22:33:44",
+            "MD5:11:22:33:44",
+            "d3JpdGVrZXk",
+            "SHA256:d3JpdGVrZXk",
+        ] {
+            let (dropped, out) = drop_script_drops_key(fingerprint, true, true);
+            assert!(dropped, "{fingerprint}: {out}");
+            assert!(
+                out.contains("dropped the read-only checkout key from the agent"),
+                "the drop must be reported: {out}"
+            );
+        }
     }
 
     #[test]

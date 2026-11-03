@@ -647,3 +647,150 @@ fn generate_rejects_a_bare_short_param_section_leaking_onto_the_nested_leaf() {
         "the error must say where the entry belongs:\n{stderr}"
     );
 }
+
+/// A `generate` run against `fixture-cli` in `dir` with auto-record configured,
+/// as the managed `regenerate-orb` job runs it. `fork` makes it a build of a
+/// forked pull request (`CIRCLE_PR_REPONAME` set); otherwise the CircleCI
+/// variables are cleared, because CI's own environment would otherwise leak
+/// into the run.
+#[cfg(feature = "test-fixtures")]
+fn generate_with_record_configured(dir: &std::path::Path, fork: bool) -> std::process::Output {
+    let config_path = dir.join("gen-circleci-orb.toml");
+    if !config_path.exists() {
+        std::fs::write(
+            &config_path,
+            "[record]\nenabled = true\ngpg_key_env = \"BOT_GPG_KEY\"\n\
+             gpg_trust_env = \"BOT_TRUST\"\nuser_name_env = \"BOT_USER_NAME\"\n\
+             user_email_env = \"BOT_USER_EMAIL\"\nsigning_key_env = \"BOT_SIGN_KEY\"\n",
+        )
+        .unwrap();
+    }
+    let fixture_bin = std::path::Path::new(env!("CARGO_BIN_EXE_fixture-cli"));
+    let existing_path = std::env::var_os("PATH").unwrap_or_default();
+    let mut paths: Vec<_> = std::env::split_paths(&existing_path).collect();
+    paths.insert(0, fixture_bin.parent().unwrap().to_path_buf());
+    let mut command = Command::new(env!("CARGO_BIN_EXE_gen-circleci-orb"));
+    command
+        .args([
+            "generate",
+            "--binary",
+            "fixture-cli",
+            "--orb-namespace",
+            "jerus-org",
+            "--output",
+            dir.to_str().unwrap(),
+        ])
+        .env("PATH", std::env::join_paths(paths).unwrap())
+        .env_remove("CIRCLE_BRANCH")
+        .env_remove("CIRCLE_PR_REPONAME");
+    if fork {
+        command
+            .env("CIRCLE_BRANCH", "pull/7")
+            .env("CIRCLE_PR_REPONAME", "contributor-fork");
+    }
+    command.output().unwrap()
+}
+
+/// gen-circleci-orb#537: CI cannot record onto a fork's branch, so a
+/// forked-PR build whose committed orb already matches the generator passes,
+/// and records and writes nothing.
+#[test]
+#[cfg(feature = "test-fixtures")]
+fn a_fork_build_with_an_orb_in_sync_passes_and_changes_nothing() {
+    let dir = TempDir::new().unwrap();
+    assert!(generate_with_record_configured(dir.path(), false)
+        .status
+        .success());
+    let dockerfile = dir.path().join("orb/Dockerfile");
+    let before = std::fs::read(&dockerfile).unwrap();
+
+    let out = generate_with_record_configured(dir.path(), true);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{stdout}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        stdout.contains("Forked pull request build: the committed orb matches the generator."),
+        "{stdout}"
+    );
+    assert_eq!(std::fs::read(&dockerfile).unwrap(), before);
+}
+
+/// gen-circleci-orb#537: a forked-PR build whose committed orb differs from
+/// the generator must fail, not regenerate it in the workspace and pass: pack
+/// and review would then validate source the pull request does not commit. The
+/// committed files are left as they were.
+#[test]
+#[cfg(feature = "test-fixtures")]
+fn a_fork_build_with_drift_fails_and_leaves_the_orb_untouched() {
+    let dir = TempDir::new().unwrap();
+    assert!(generate_with_record_configured(dir.path(), false)
+        .status
+        .success());
+    let job = dir.path().join("orb/src/jobs/build.yml");
+    let mut edited = std::fs::read_to_string(&job).unwrap();
+    edited.push_str("# hand edit\n");
+    std::fs::write(&job, &edited).unwrap();
+
+    let out = generate_with_record_configured(dir.path(), true);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "must fail on drift");
+    assert!(
+        stderr.contains("forked pull request")
+            && stderr.contains("1 to update")
+            && stderr.contains("Run `gen-circleci-orb generate` and commit the result"),
+        "{stderr}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&job).unwrap(),
+        edited,
+        "a fork build must not write"
+    );
+}
+
+/// The contrast: the same drift on a regular (non-fork) build is regenerated,
+/// as before.
+#[test]
+#[cfg(feature = "test-fixtures")]
+fn a_regular_build_with_drift_still_regenerates() {
+    let dir = TempDir::new().unwrap();
+    assert!(generate_with_record_configured(dir.path(), false)
+        .status
+        .success());
+    let job = dir.path().join("orb/src/jobs/build.yml");
+    let original = std::fs::read_to_string(&job).unwrap();
+    std::fs::write(&job, format!("{original}# hand edit\n")).unwrap();
+
+    let out = generate_with_record_configured(dir.path(), false);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(std::fs::read_to_string(&job).unwrap(), original);
+}
+
+/// Without `[record]` the job never recorded, so a fork build is unchanged:
+/// it regenerates into the workspace, as before.
+#[test]
+#[cfg(feature = "test-fixtures")]
+fn a_fork_build_without_record_configured_still_regenerates() {
+    let dir = TempDir::new().unwrap();
+    std::fs::write(dir.path().join("gen-circleci-orb.toml"), "[orb]\n").unwrap();
+    assert!(generate_with_record_configured(dir.path(), false)
+        .status
+        .success());
+    let job = dir.path().join("orb/src/jobs/build.yml");
+    let original = std::fs::read_to_string(&job).unwrap();
+    std::fs::write(&job, format!("{original}# hand edit\n")).unwrap();
+
+    let out = generate_with_record_configured(dir.path(), true);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(std::fs::read_to_string(&job).unwrap(), original);
+}
