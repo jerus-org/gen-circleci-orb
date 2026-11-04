@@ -12,6 +12,9 @@ orbs:
   # gen-orb-mcp owns the MCP build). Declared here (not in a managed block) so
   # `update` skips re-inserting it and stays round-trip stable.
   gen-orb-mcp: jerus-org/gen-orb-mcp@0.2.6
+  # Early pre-release, adopted to widen jci-coverage's test pool beyond its own
+  # repository. Used by the separate `coverage` workflow below.
+  jci-coverage: jerus-org/jci-coverage@0.0.19
   # >>> gen-circleci-orb (managed — edits overwritten by 'gen-circleci-orb update')
   gen-circleci-orb: jerus-org/gen-circleci-orb@0.2.6
   # <<< gen-circleci-orb
@@ -88,6 +91,7 @@ workflows:
       # unconditionally regardless of test_generation — it validates wiring
       # vs. gen-circleci-orb.toml using the container's own pinned CLI, a
       # pure text diff unrelated to generation-content validity.
+
       # >>> gen-circleci-orb (managed — edits overwritten by 'gen-circleci-orb update')
       - gen-circleci-orb/build_rust_binary:
           name: build-binary
@@ -115,6 +119,21 @@ workflows:
               ignore:
                 - main
       # <<< gen-circleci-orb
+  # Coverage through the jci-coverage orb (OtterWise), alongside the Codecov
+  # coverage in `validation` above. A workflow of its own on purpose: it reports
+  # as its own check, so an early pre-release failing here does not turn the
+  # `validation` check red. Needs OTTERWISE_TOKEN set as a project environment
+  # variable, which a forked PR build (/pull/N) does not get, so those are
+  # skipped, and `main` is skipped as it is in `validation`.
+  coverage:
+    jobs:
+      - jci-coverage/report_complexity_and_upload:
+          package: gen-circleci-orb
+          filters:
+            branches:
+              ignore:
+                - /pull\/[0-9]+/
+                - main
 
   # >>> gen-circleci-orb (managed — edits overwritten by 'gen-circleci-orb update')
   orb-release:
