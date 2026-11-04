@@ -5,9 +5,26 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.7] - 2026-11-04
+
+Summary: Added[2], Fixed[5]
+
+### Added
+
+ - feat(orb): back off the crates.io propagation wait and explain a timeout
+ - feat(job_group): arguments and a condition on built-in steps
+
+### Fixed
+
+ - fix(orb): report whether the checkout key was dropped, and why not
+ - fix(orb): a fork build checks the committed orb and keeps its checkout key
+ - fix(deps): update rust crate similar to 3.2.1
+ - fix(deps): update rust crate uuid to 1.29.0
+ - fix(deps): update rust crate pcu to 0.6.40
+
 ## [0.2.6] - 2026-10-22
 
-Summary: Added[5], Changed[1], Documentation[2], Fixed[9]
+Summary: Added[5], Changed[1], Chore[1], Documentation[2], Fixed[9]
 
 ### Added
 
@@ -1122,7 +1139,8 @@ Summary: Added[2], Chore[1], Fixed[2], Testing[1]
 
 Summary: Chore[2]
 
-[Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.5...HEAD
+[Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.6...HEAD
+[0.2.6]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.2...v0.2.3

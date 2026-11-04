@@ -307,7 +307,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 Used by:
 
-- openssl 0.10.81
+- openssl 0.10.82
 
 ```text
                                  Apache License
@@ -521,7 +521,7 @@ Used by:
 
 - git2_credentials 0.16.0
 - ring 0.17.14
-- similar 3.2.0
+- similar 3.2.1
 
 ```text
                               Apache License
@@ -732,7 +732,7 @@ limitations under the License.
 
 Used by:
 
-- aws-lc-sys 0.46.0
+- aws-lc-sys 0.47.0
 - dunce 1.0.5
 - ryu 1.0.23
 - sync_wrapper 1.0.2
@@ -857,7 +857,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 Used by:
 
-- aws-lc-sys 0.46.0
+- aws-lc-sys 0.47.0
 
 ```text
 Copyright (c) <year> <owner>. 
@@ -878,8 +878,8 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
 
 Used by:
 
-- webpki-root-certs 1.0.10
-- webpki-roots 1.0.10
+- webpki-root-certs 1.0.11
+- webpki-roots 1.0.11
 
 ```text
 # Community Data License Agreement - Permissive - Version 2.0
@@ -1578,8 +1578,8 @@ third-party/chromium/LICENSE.
 
 Used by:
 
-- aws-lc-rs 1.18.2
-- aws-lc-sys 0.46.0
+- aws-lc-rs 1.19.0
+- aws-lc-sys 0.47.0
 
 ```text
 ISC License:
@@ -1827,29 +1827,29 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- backtrace 0.3.76
-- cc 1.9.0
+- backtrace 0.3.77
+- cc 1.11.0
 - cfg-if 1.0.5
 - cmake 0.1.58
 - find-msvc-tools 0.1.15
 - git2 0.21.0
 - jobserver 0.1.35
-- js-sys 0.3.106
+- js-sys 0.3.107
 - libgit2-sys 0.18.8+1.9.7
 - libssh2-sys 0.3.3
 - openssl-probe 0.1.6
-- openssl-probe 0.2.1
-- openssl-sys 0.9.117
+- openssl-probe 0.2.2
+- openssl-sys 0.9.118
 - pkg-config 0.3.34
 - rustc-demangle 0.1.28
 - socket2 0.6.5
 - stacker 0.1.25
-- wasm-bindgen-futures 0.4.79
-- wasm-bindgen-macro-support 0.2.129
-- wasm-bindgen-macro 0.2.129
-- wasm-bindgen-shared 0.2.129
-- wasm-bindgen 0.2.129
-- web-sys 0.3.106
+- wasm-bindgen-futures 0.4.80
+- wasm-bindgen-macro-support 0.2.130
+- wasm-bindgen-macro 0.2.130
+- wasm-bindgen-shared 0.2.130
+- wasm-bindgen 0.2.130
+- web-sys 0.3.107
 
 ```text
 Copyright (c) 2014 Alex Crichton
@@ -1884,7 +1884,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- libz-sys 1.1.30
+- libz-sys 1.1.31
 
 ```text
 Copyright (c) 2014 Alex Crichton
@@ -1985,7 +1985,7 @@ DEALINGS IN THE SOFTWARE.
 Used by:
 
 - bitflags 2.13.2
-- log 0.4.34
+- log 0.4.35
 - num-bigint 0.4.8
 - num-integer 0.1.47
 - num-traits 0.2.19
@@ -2026,7 +2026,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- uuid 1.28.0
+- uuid 1.29.0
 
 ```text
 Copyright (c) 2014 The Rust Project Developers
@@ -2190,7 +2190,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- object 0.37.3
+- object 0.40.0
 
 ```text
 Copyright (c) 2015 The Gimli Developers
@@ -2225,10 +2225,10 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- gimli 0.32.3
+- gimli 0.34.0
 - heck 0.5.0
 - unicode-segmentation 1.13.3
-- unicode-width 0.2.2
+- unicode-width 0.2.3
 
 ```text
 Copyright (c) 2015 The Rust Project Developers
@@ -2727,7 +2727,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- addr2line 0.25.1
+- addr2line 0.27.1
 
 ```text
 Copyright (c) 2016-2018 The gimli Developers
@@ -3409,7 +3409,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- smallvec 1.16.3
+- smallvec 1.16.4
 
 ```text
 Copyright (c) 2018 The Servo Project Developers
@@ -3840,7 +3840,7 @@ SOFTWARE.
 
 Used by:
 
-- tame-index 0.27.0
+- tame-index 0.27.1
 - toml-span 0.7.2
 
 ```text
@@ -4781,7 +4781,8 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 Used by:
 
-- utf8_iter 1.0.4
+- utf8_iter 1.1.0
+- utf_types 1.0.0
 
 ```text
 Copyright Mozilla Foundation
@@ -4842,7 +4843,7 @@ OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWA
 
 Used by:
 
-- pcu 0.6.39
+- pcu 0.6.40
 
 ```text
 Copyright © 2025 Jeremiah Russell
@@ -4871,7 +4872,7 @@ THE SOFTWARE.
 
 Used by:
 
-- pcu-release-assets 0.1.6
+- pcu-release-assets 0.1.7
 
 ```text
 Copyright © 2026 Jeremiah Russell
@@ -4967,7 +4968,7 @@ SOFTWARE.
 
 Used by:
 
-- crc32fast 1.5.3
+- crc32fast 1.5.4
 
 ```text
 MIT License
@@ -5309,7 +5310,7 @@ SOFTWARE.
 
 Used by:
 
-- link-bridge 0.2.7
+- link-bridge 0.2.8
 
 ```text
 MIT License
@@ -5340,7 +5341,7 @@ SOFTWARE.
 
 Used by:
 
-- gen-circleci-orb 0.2.6
+- gen-circleci-orb 0.2.7
 
 ```text
 MIT License
@@ -5536,7 +5537,6 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 Used by:
 
-- miniz_oxide 0.8.9
 - miniz_oxide 0.9.1
 
 ```text
@@ -5572,7 +5572,6 @@ SOFTWARE.
 
 Used by:
 
-- miniz_oxide 0.8.9
 - miniz_oxide 0.9.1
 
 ```text
@@ -5664,7 +5663,7 @@ SOFTWARE.
 
 Used by:
 
-- octocrab 0.54.5
+- octocrab 0.54.9
 
 ```text
 MIT License (MIT)
@@ -5712,10 +5711,11 @@ Used by:
 - linux-raw-sys 0.12.1
 - once_cell 1.21.4
 - pathdiff 0.2.3
-- pest 2.9.4
-- pest_derive 2.9.4
-- pest_generator 2.9.4
-- pest_meta 2.9.4
+- pest 2.9.5
+- pest_derive 2.9.5
+- pest_generator 2.9.5
+- pest_meta 2.9.5
+- pest_stack_guard 1.0.0
 - pin-project-internal 1.1.13
 - pin-project-lite 0.2.17
 - pin-project 1.1.13
@@ -5724,7 +5724,7 @@ Used by:
 - proc-macro2 1.0.107
 - quote 1.0.47
 - rustc-stable-hash 0.1.2
-- rustix 1.1.5
+- rustix 1.1.6
 - rustversion 1.0.23
 - semver 1.0.28
 - serde 1.0.229
@@ -5955,8 +5955,8 @@ THE SOFTWARE.
 Used by:
 
 - aho-corasick 1.1.5
-- jiff-core 0.1.1
-- jiff 0.2.38
+- jiff-core 0.1.2
+- jiff 0.2.39
 - memchr 2.8.3
 - ucd-trie 0.1.7
 - walkdir 2.5.0
@@ -6148,7 +6148,7 @@ SOFTWARE.
 
 Used by:
 
-- aws-lc-sys 0.46.0
+- aws-lc-sys 0.47.0
 
 ```text
 The MIT License (MIT)
@@ -6373,8 +6373,8 @@ SOFTWARE.
 
 Used by:
 
-- async-compression 0.4.51
-- compression-codecs 0.4.46
+- async-compression 0.4.52
+- compression-codecs 0.4.47
 - compression-core 0.4.34
 
 ```text
@@ -6992,24 +6992,24 @@ authorization of the copyright holder.
 
 Used by:
 
-- icu_collections 2.3.0
-- icu_locale_core 2.3.0
-- icu_normalizer 2.3.0
-- icu_normalizer_data 2.3.0
-- icu_properties 2.3.0
-- icu_properties_data 2.3.0
-- icu_provider 2.3.1
+- icu_collections 2.4.0
+- icu_locale_core 2.4.0
+- icu_normalizer 2.4.0
+- icu_normalizer_data 2.4.0
+- icu_properties 2.4.0
+- icu_properties_data 2.4.0
+- icu_provider 2.4.0
 - litemap 0.8.3
 - potential_utf 0.1.6
-- tinystr 0.8.4
+- tinystr 0.8.5
 - writeable 0.6.4
 - yoke-derive 0.8.4
-- yoke 0.8.3
+- yoke 0.8.4
 - zerofrom-derive 0.1.8
 - zerofrom 0.1.8
 - zerotrie 0.2.5
-- zerovec-derive 0.11.6
-- zerovec 0.11.8
+- zerovec-derive 0.11.7
+- zerovec 0.11.9
 
 ```text
 UNICODE LICENSE V3
