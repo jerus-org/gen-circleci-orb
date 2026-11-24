@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- docs-add CLAUDE.md with commit and PR rules(pr [#555])
+
 ### Fixed
 
 - deps: lock file maintenance(pr [#541])
@@ -1482,6 +1486,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#538]: https://github.com/jerus-org/gen-circleci-orb/pull/538
 [#541]: https://github.com/jerus-org/gen-circleci-orb/pull/541
 [#554]: https://github.com/jerus-org/gen-circleci-orb/pull/554
+[#555]: https://github.com/jerus-org/gen-circleci-orb/pull/555
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.7...HEAD
 [0.2.7]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.5...v0.2.6
