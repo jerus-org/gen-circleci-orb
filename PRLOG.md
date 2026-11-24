@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - docs-add CLAUDE.md with commit and PR rules(pr [#555])
+- chore-allow-list Renovate in pcu.toml(pr [#556])
 
 ### Fixed
 
@@ -1489,6 +1490,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#554]: https://github.com/jerus-org/gen-circleci-orb/pull/554
 [#555]: https://github.com/jerus-org/gen-circleci-orb/pull/555
 [#552]: https://github.com/jerus-org/gen-circleci-orb/pull/552
+[#556]: https://github.com/jerus-org/gen-circleci-orb/pull/556
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.7...HEAD
 [0.2.7]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.5...v0.2.6
