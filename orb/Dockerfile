@@ -1,4 +1,4 @@
-FROM rust:1-slim-trixie@sha256:b8e062b1c3a80183df83d9ba187cadd2b5ab84bc78d453dbfeb2fccd5f982247 AS builder
+FROM rust:1-slim-trixie@sha256:3b199fd6db7d709274df56565b8f4003f9e30d7bfcff9d53148c86053b7855e2 AS builder
 ARG CRATE_VERSION
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -52,7 +52,7 @@ RUN apt-get update \
     && install -m 755 circleci /usr/local/bin/circleci \
     && rm -rf "${TARBALL}" checksums.txt circleci
 
-FROM rust:1-slim-trixie@sha256:b8e062b1c3a80183df83d9ba187cadd2b5ab84bc78d453dbfeb2fccd5f982247
+FROM rust:1-slim-trixie@sha256:3b199fd6db7d709274df56565b8f4003f9e30d7bfcff9d53148c86053b7855e2
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
     ca-certificates \
