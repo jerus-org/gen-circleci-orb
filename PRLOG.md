@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - deps: update dependency gen-circleci-orb to v0.2.7(pr [#543])
 - deps: update rust crate anyhow to 1.0.105(pr [#544])
 - deps: update rust crate clap to 4.6.9(pr [#545])
+- deps: update rust crate pcu to 0.6.42(pr [#546])
 
 ## [0.2.7] - 2026-11-04
 
@@ -1499,6 +1500,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#543]: https://github.com/jerus-org/gen-circleci-orb/pull/543
 [#544]: https://github.com/jerus-org/gen-circleci-orb/pull/544
 [#545]: https://github.com/jerus-org/gen-circleci-orb/pull/545
+[#546]: https://github.com/jerus-org/gen-circleci-orb/pull/546
 [Unreleased]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.7...HEAD
 [0.2.7]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/jerus-org/gen-circleci-orb/compare/v0.2.5...v0.2.6
